@@ -11,7 +11,7 @@ Windows kernel with linux syntax for its commands.
 - [X] Shell session recognition (environment variables)
 - [X] Console title set to "Linuxify Shell"
 
-## Phase 2: Package Management
+## Phase 2: Package Management and Package Registry
 
 - [X] `lin get <package>` - Install packages using winget
 - [X] `lin remove <package>` - Uninstall packages
@@ -23,3 +23,5 @@ Windows kernel with linux syntax for its commands.
 - [X] `lin alias` - Show package aliases
 - [X] `lin add <name> <id>` - Add custom alias
 - [X] Smart package discovery - aliases grow as you search
+- [X] other file system operations: touch, chmod, chown.
+- [X] Make other user downloaded packages work like: git, mysql and more (registry.cpp)

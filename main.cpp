@@ -1,4 +1,5 @@
-// Compile: cl /EHsc /std:c++17 main.cpp /Fe:linuxify.exe
+// Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
+// Alternate compile: g++ -std=c++17 -o linuxify main.cpp registry.cpp
 
 #include <iostream>
 #include <string>
@@ -9,8 +10,12 @@
 #include <windows.h>
 #include <algorithm>
 #include <iomanip>
+#include <sstream>
 #include <ctime>
 #include <map>
+#include <sys/utime.h>
+
+#include "registry.hpp"
 
 namespace fs = std::filesystem;
 
@@ -497,11 +502,183 @@ private:
         system("cls");
     }
 
+    // touch - create files or update timestamps
+    void cmdTouch(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("touch: missing file operand");
+            return;
+        }
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            try {
+                std::string fullPath = resolvePath(args[i]);
+                
+                if (fs::exists(fullPath)) {
+                    // Update modification time using _utime
+                    if (_utime(fullPath.c_str(), nullptr) == 0) {
+                        printSuccess("Updated: " + args[i]);
+                    } else {
+                        printError("touch: cannot touch '" + args[i] + "'");
+                    }
+                } else {
+                    // Create new empty file
+                    std::ofstream file(fullPath);
+                    if (file) {
+                        file.close();
+                        printSuccess("Created: " + args[i]);
+                    } else {
+                        printError("touch: cannot create '" + args[i] + "'");
+                    }
+                }
+            } catch (const std::exception& e) {
+                printError("touch: " + std::string(e.what()));
+            }
+        }
+    }
+
+    // chmod - change file permissions (Windows adaptation)
+    void cmdChmod(const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            printError("chmod: missing operand");
+            std::cout << "Usage: chmod <mode> <file>..." << std::endl;
+            std::cout << "  Modes: +x (executable), -x (not executable)" << std::endl;
+            std::cout << "         +w (writable), -w (read-only)" << std::endl;
+            std::cout << "         +r (readable), -r (hidden)" << std::endl;
+            return;
+        }
+
+        std::string mode = args[1];
+        
+        for (size_t i = 2; i < args.size(); ++i) {
+            try {
+                std::string fullPath = resolvePath(args[i]);
+                
+                if (!fs::exists(fullPath)) {
+                    printError("chmod: cannot access '" + args[i] + "': No such file or directory");
+                    continue;
+                }
+
+                DWORD attrs = GetFileAttributesA(fullPath.c_str());
+                if (attrs == INVALID_FILE_ATTRIBUTES) {
+                    printError("chmod: cannot access '" + args[i] + "'");
+                    continue;
+                }
+
+                bool success = false;
+                
+                if (mode == "+w") {
+                    // Remove read-only attribute
+                    attrs &= ~FILE_ATTRIBUTE_READONLY;
+                    success = SetFileAttributesA(fullPath.c_str(), attrs);
+                    if (success) printSuccess("Made writable: " + args[i]);
+                } else if (mode == "-w") {
+                    // Set read-only attribute
+                    attrs |= FILE_ATTRIBUTE_READONLY;
+                    success = SetFileAttributesA(fullPath.c_str(), attrs);
+                    if (success) printSuccess("Made read-only: " + args[i]);
+                } else if (mode == "+r") {
+                    // Remove hidden attribute (make visible/readable)
+                    attrs &= ~FILE_ATTRIBUTE_HIDDEN;
+                    success = SetFileAttributesA(fullPath.c_str(), attrs);
+                    if (success) printSuccess("Made visible: " + args[i]);
+                } else if (mode == "-r") {
+                    // Set hidden attribute
+                    attrs |= FILE_ATTRIBUTE_HIDDEN;
+                    success = SetFileAttributesA(fullPath.c_str(), attrs);
+                    if (success) printSuccess("Made hidden: " + args[i]);
+                } else if (mode == "+x") {
+                    // Windows doesn't have execute bit, but we can note it
+                    // Check if it's a valid executable extension
+                    std::string ext = fs::path(fullPath).extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".exe" || ext == ".cmd" || ext == ".bat" || ext == ".ps1") {
+                        printSuccess("File is already executable: " + args[i]);
+                    } else {
+                        std::cout << "Note: Windows executability is determined by file extension (.exe, .cmd, .bat)" << std::endl;
+                        printSuccess("Marked as executable: " + args[i]);
+                    }
+                    success = true;
+                } else if (mode == "-x") {
+                    std::cout << "Note: Windows executability is determined by file extension" << std::endl;
+                    success = true;
+                } else if (mode.length() == 3 && std::all_of(mode.begin(), mode.end(), ::isdigit)) {
+                    // Numeric mode like 755, 644
+                    std::cout << "Note: Numeric permissions (" << mode << ") mapped to Windows attributes" << std::endl;
+                    int ownerPerms = mode[0] - '0';
+                    if ((ownerPerms & 2) == 0) {
+                        // No write permission - make read-only
+                        attrs |= FILE_ATTRIBUTE_READONLY;
+                    } else {
+                        attrs &= ~FILE_ATTRIBUTE_READONLY;
+                    }
+                    success = SetFileAttributesA(fullPath.c_str(), attrs);
+                    if (success) printSuccess("Applied permissions to: " + args[i]);
+                } else {
+                    printError("chmod: invalid mode '" + mode + "'");
+                    continue;
+                }
+
+                if (!success && mode != "+x" && mode != "-x") {
+                    printError("chmod: failed to change permissions for '" + args[i] + "'");
+                }
+            } catch (const std::exception& e) {
+                printError("chmod: " + std::string(e.what()));
+            }
+        }
+    }
+
+    // chown - change file ownership (Windows adaptation)
+    void cmdChown(const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            printError("chown: missing operand");
+            std::cout << "Usage: chown <owner> <file>..." << std::endl;
+            return;
+        }
+
+        std::string owner = args[1];
+        
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "Note: Windows file ownership changes require elevated privileges." << std::endl;
+        std::cout << "      Attempting to use icacls to grant permissions..." << std::endl;
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        
+        for (size_t i = 2; i < args.size(); ++i) {
+            try {
+                std::string fullPath = resolvePath(args[i]);
+                
+                if (!fs::exists(fullPath)) {
+                    printError("chown: cannot access '" + args[i] + "': No such file or directory");
+                    continue;
+                }
+
+                // Use icacls to grant full control to the specified user
+                std::string cmd = "icacls \"" + fullPath + "\" /grant " + owner + ":F 2>nul";
+                int result = system(cmd.c_str());
+                
+                if (result == 0) {
+                    printSuccess("Granted permissions to " + owner + " for: " + args[i]);
+                } else {
+                    printError("chown: permission change failed for '" + args[i] + "' (may need admin rights)");
+                }
+            } catch (const std::exception& e) {
+                printError("chown: " + std::string(e.what()));
+            }
+        }
+    }
+
     std::string getPackagesFilePath() {
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
         fs::path exeDir = fs::path(exePath).parent_path();
-        return (exeDir / "packages.lin").string();
+        fs::path linuxdbDir = exeDir / "linuxdb";
+        
+        // Create linuxdb directory if it doesn't exist
+        if (!fs::exists(linuxdbDir)) {
+            fs::create_directories(linuxdbDir);
+        }
+        
+        return (linuxdbDir / "packages.lin").string();
     }
 
     std::map<std::string, std::string> loadPackageAliases() {
@@ -753,7 +930,7 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  ============================================\n\n";
 
-        std::cout << "  Available Commands:\n\n";
+        std::cout << "  File System Commands:\n\n";
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  pwd";
@@ -796,6 +973,23 @@ private:
         std::cout << "      Display file contents\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  touch";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Create files or update timestamps\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  chmod";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Change file permissions (+w/-w/+r/-r)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  chown";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Change file ownership (uses icacls)\n";
+
+        std::cout << "\n  Utilities:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  clear";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "         Clear the screen\n";
@@ -810,11 +1004,25 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Text editor\n";
 
+        std::cout << "\n  Package Management:\n\n";
+
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  lin";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "           Package manager (lin get, lin remove, ...)\n";
 
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  registry";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      External command registry (refresh, list)\n";
+
+        std::cout << "\n  External Commands:\n\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "  Installed tools like git, node, python, mysql, etc.\n";
+        std::cout << "  Run 'registry refresh' to scan for installed commands.\n";
+
+        std::cout << "\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  exit";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
@@ -846,6 +1054,12 @@ private:
             cmdCp(tokens);
         } else if (cmd == "cat" || cmd == "type") {
             cmdCat(tokens);
+        } else if (cmd == "touch") {
+            cmdTouch(tokens);
+        } else if (cmd == "chmod") {
+            cmdChmod(tokens);
+        } else if (cmd == "chown") {
+            cmdChown(tokens);
         } else if (cmd == "clear" || cmd == "cls") {
             cmdClear(tokens);
         } else if (cmd == "help") {
@@ -858,10 +1072,73 @@ private:
             system(nanoCmd.c_str());
         } else if (cmd == "lin") {
             cmdLin(tokens);
+        } else if (cmd == "registry") {
+            // Registry management commands
+            if (tokens.size() > 1 && tokens[1] == "refresh") {
+                HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "Scanning for installed commands...";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                
+                int found = g_registry.refreshRegistry();
+                std::cout << " found " << found << " commands.\n";
+                printSuccess("Registry updated! Use 'registry list' to see all commands.");
+            } else if (tokens.size() > 1 && tokens[1] == "list") {
+                const auto& commands = g_registry.getAllCommands();
+                HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "Registered External Commands";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << " (" << commands.size() << " total)\n\n";
+                
+                for (const auto& pair : commands) {
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                    std::cout << std::setw(15) << std::left << pair.first;
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    std::cout << " -> " << pair.second << "\n";
+                }
+            } else if (tokens.size() > 3 && tokens[1] == "add") {
+                g_registry.addCommand(tokens[2], tokens[3]);
+                printSuccess("Added: " + tokens[2] + " -> " + tokens[3]);
+            } else {
+                std::cout << "Registry Commands:\n";
+                std::cout << "  registry refresh      Scan system for installed commands\n";
+                std::cout << "  registry list         Show all registered commands\n";
+                std::cout << "  registry add <cmd> <path>  Add custom command\n";
+            }
         } else if (cmd == "exit" || cmd == "quit") {
             running = false;
         } else {
-            printError("Command not found: " + cmd + ". Type 'help' for available commands.");
+            // 1. First check the cmds folder for a binary
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
+            
+            std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ""};
+            bool foundInCmds = false;
+            
+            for (const auto& ext : extensions) {
+                fs::path cmdPath = cmdsDir / (cmd + ext);
+                if (fs::exists(cmdPath)) {
+                    // Execute from cmds folder with proper quoting for paths with spaces
+                    std::string cmdLine = "cmd /c \"\"" + cmdPath.string() + "\"";
+                    for (size_t i = 1; i < tokens.size(); i++) {
+                        cmdLine += " \"" + tokens[i] + "\"";
+                    }
+                    cmdLine += "\"";
+                    system(cmdLine.c_str());
+                    foundInCmds = true;
+                    break;
+                }
+            }
+            
+            if (!foundInCmds) {
+                // 2. Try to find and execute as registered external command
+                if (!g_registry.executeRegisteredCommand(cmd, tokens, currentDir)) {
+                    // 3. Command not found anywhere
+                    printError("Command not found: " + cmd + ". Type 'help' for available commands.");
+                }
+            }
         }
 
         if (cmd != "clear" && cmd != "cls" && running) {
@@ -995,8 +1272,10 @@ public:
     }
 };
 
+
 int main() {
     Linuxify shell;
     shell.run();
     return 0;
 }
+

@@ -1,0 +1,337 @@
+// Linuxify Registry - External Package Management Implementation
+// This module discovers and manages user-installed packages,
+// allowing them to be executed directly from Linuxify shell.
+
+#include "registry.hpp"
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <windows.h>
+#include <algorithm>
+
+namespace fs = std::filesystem;
+
+// Global registry instance
+LinuxifyRegistry g_registry;
+
+LinuxifyRegistry::LinuxifyRegistry() {
+    linuxdbPath = getLinuxdbPath();
+    registryFilePath = getRegistryFilePath();
+    
+    // Initialize common commands list
+    commonCommands = {
+        // Version control
+        "git", "svn", "hg",
+        // Databases
+        "mysql", "psql", "postgres", "mongod", "mongo", "mongosh", "redis-cli", "redis-server", "sqlite3",
+        // Node/JavaScript
+        "node", "npm", "npx", "yarn", "pnpm", "bun", "deno",
+        // Python
+        "python", "python3", "pip", "pip3", "conda", "pipenv", "poetry",
+        // Ruby
+        "ruby", "gem", "bundle", "bundler", "rails",
+        // PHP
+        "php", "composer",
+        // Go
+        "go", "gofmt",
+        // Rust
+        "rustc", "cargo", "rustup",
+        // Java/JVM
+        "java", "javac", "mvn", "gradle",
+        // C/C++
+        "gcc", "g++", "clang", "clang++", "make", "cmake", "ninja",
+        // Cloud/DevOps
+        "docker", "docker-compose", "kubectl", "helm", "terraform", "vagrant", "ansible",
+        // Utilities
+        "curl", "wget", "ssh", "scp", "rsync", "grep", "awk", "sed", "tar",
+        "7z", "ffmpeg", "imagemagick", "convert", "pandoc",
+        // Package managers
+        "choco", "scoop", "winget",
+        // Editors
+        "vim", "nvim", "code", "subl",
+        // Network
+        "netstat", "ping", "tracert", "nslookup", "dig",
+        // Misc
+        "htop", "btop", "tree", "which", "whereis", "find", "locate",
+        "jq", "yq", "rg", "ripgrep", "fd", "bat", "exa", "fzf"
+    };
+}
+
+std::string LinuxifyRegistry::getLinuxdbPath() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    fs::path exeDir = fs::path(exePath).parent_path();
+    fs::path dbPath = exeDir / "linuxdb";
+    
+    // Create directory if it doesn't exist
+    if (!fs::exists(dbPath)) {
+        fs::create_directories(dbPath);
+    }
+    
+    return dbPath.string();
+}
+
+std::string LinuxifyRegistry::getRegistryFilePath() {
+    return (fs::path(linuxdbPath) / "registry.lin").string();
+}
+
+std::string LinuxifyRegistry::getDbPath() {
+    return linuxdbPath;
+}
+
+std::string LinuxifyRegistry::findInPath(const std::string& command) {
+    char* pathEnv = nullptr;
+    size_t pathLen = 0;
+    _dupenv_s(&pathEnv, &pathLen, "PATH");
+    
+    if (!pathEnv) return "";
+    
+    std::string pathStr(pathEnv);
+    free(pathEnv);
+    
+    std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ".ps1", ".com", ""};
+    std::stringstream ss(pathStr);
+    std::string pathDir;
+    
+    while (std::getline(ss, pathDir, ';')) {
+        if (pathDir.empty()) continue;
+        
+        for (const auto& ext : extensions) {
+            fs::path fullPath = fs::path(pathDir) / (command + ext);
+            try {
+                if (fs::exists(fullPath) && fs::is_regular_file(fullPath)) {
+                    return fullPath.string();
+                }
+            } catch (...) {
+                continue;
+            }
+        }
+    }
+    
+    return "";
+}
+
+std::string LinuxifyRegistry::findInCommonDirs(const std::string& command) {
+    std::vector<std::string> commonDirs;
+    
+    // Get environment variables for common paths
+    char* programFiles = nullptr;
+    char* programFilesX86 = nullptr;
+    char* localAppData = nullptr;
+    char* appData = nullptr;
+    char* userProfile = nullptr;
+    size_t len;
+    
+    _dupenv_s(&programFiles, &len, "ProgramFiles");
+    _dupenv_s(&programFilesX86, &len, "ProgramFiles(x86)");
+    _dupenv_s(&localAppData, &len, "LOCALAPPDATA");
+    _dupenv_s(&appData, &len, "APPDATA");
+    _dupenv_s(&userProfile, &len, "USERPROFILE");
+    
+    if (programFiles) {
+        commonDirs.push_back(std::string(programFiles) + "\\Git\\bin");
+        commonDirs.push_back(std::string(programFiles) + "\\Git\\cmd");
+        commonDirs.push_back(std::string(programFiles) + "\\nodejs");
+        commonDirs.push_back(std::string(programFiles) + "\\MySQL\\MySQL Server 8.0\\bin");
+        commonDirs.push_back(std::string(programFiles) + "\\PostgreSQL\\15\\bin");
+        commonDirs.push_back(std::string(programFiles) + "\\Docker\\Docker\\resources\\bin");
+        commonDirs.push_back(std::string(programFiles) + "\\Python312");
+        commonDirs.push_back(std::string(programFiles) + "\\Python311");
+        commonDirs.push_back(std::string(programFiles) + "\\Python310");
+        free(programFiles);
+    }
+    
+    if (programFilesX86) {
+        commonDirs.push_back(std::string(programFilesX86) + "\\Git\\bin");
+        free(programFilesX86);
+    }
+    
+    if (localAppData) {
+        commonDirs.push_back(std::string(localAppData) + "\\Programs\\Git\\bin");
+        commonDirs.push_back(std::string(localAppData) + "\\Programs\\Python\\Python312");
+        commonDirs.push_back(std::string(localAppData) + "\\Programs\\Microsoft VS Code\\bin");
+        free(localAppData);
+    }
+    
+    if (appData) {
+        commonDirs.push_back(std::string(appData) + "\\npm");
+        commonDirs.push_back(std::string(appData) + "\\Python\\Python312\\Scripts");
+        free(appData);
+    }
+    
+    if (userProfile) {
+        commonDirs.push_back(std::string(userProfile) + "\\.cargo\\bin");
+        commonDirs.push_back(std::string(userProfile) + "\\go\\bin");
+        commonDirs.push_back(std::string(userProfile) + "\\scoop\\shims");
+        free(userProfile);
+    }
+    
+    std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ""};
+    
+    for (const auto& dir : commonDirs) {
+        for (const auto& ext : extensions) {
+            fs::path fullPath = fs::path(dir) / (command + ext);
+            try {
+                if (fs::exists(fullPath) && fs::is_regular_file(fullPath)) {
+                    return fullPath.string();
+                }
+            } catch (...) {
+                continue;
+            }
+        }
+    }
+    
+    return "";
+}
+
+void LinuxifyRegistry::loadRegistry() {
+    if (isLoaded) return;
+    
+    std::ifstream file(registryFilePath);
+    if (file) {
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            
+            size_t pos = line.find('=');
+            if (pos != std::string::npos) {
+                std::string cmd = line.substr(0, pos);
+                std::string path = line.substr(pos + 1);
+                
+                // Trim whitespace
+                cmd.erase(0, cmd.find_first_not_of(" \t"));
+                cmd.erase(cmd.find_last_not_of(" \t\r\n") + 1);
+                path.erase(0, path.find_first_not_of(" \t"));
+                path.erase(path.find_last_not_of(" \t\r\n") + 1);
+                
+                if (!cmd.empty() && !path.empty()) {
+                    commandRegistry[cmd] = path;
+                }
+            }
+        }
+    }
+    isLoaded = true;
+}
+
+void LinuxifyRegistry::saveRegistry() {
+    std::ofstream file(registryFilePath);
+    if (!file) return;
+    
+    file << "# Linuxify Command Registry\n";
+    file << "# Auto-generated - Maps commands to executable paths\n";
+    file << "# Stored in: linuxdb/registry.lin\n\n";
+    
+    for (const auto& pair : commandRegistry) {
+        file << pair.first << "=" << pair.second << "\n";
+    }
+}
+
+int LinuxifyRegistry::refreshRegistry() {
+    commandRegistry.clear();
+    int foundCount = 0;
+    
+    for (const auto& cmd : commonCommands) {
+        // First try PATH
+        std::string path = findInPath(cmd);
+        
+        // If not found, try common directories
+        if (path.empty()) {
+            path = findInCommonDirs(cmd);
+        }
+        
+        if (!path.empty()) {
+            commandRegistry[cmd] = path;
+            foundCount++;
+        }
+    }
+    
+    isLoaded = true;
+    saveRegistry();
+    return foundCount;
+}
+
+bool LinuxifyRegistry::isRegistered(const std::string& command) {
+    loadRegistry();
+    return commandRegistry.find(command) != commandRegistry.end();
+}
+
+std::string LinuxifyRegistry::getExecutablePath(const std::string& command) {
+    loadRegistry();
+    
+    auto it = commandRegistry.find(command);
+    if (it != commandRegistry.end()) {
+        // Verify the path still exists
+        if (fs::exists(it->second)) {
+            return it->second;
+        }
+        // Path no longer exists, try to find it again
+        std::string newPath = findInPath(command);
+        if (newPath.empty()) {
+            newPath = findInCommonDirs(command);
+        }
+        if (!newPath.empty()) {
+            commandRegistry[command] = newPath;
+            saveRegistry();
+            return newPath;
+        }
+    }
+    
+    // Not in registry, try to find it now
+    std::string path = findInPath(command);
+    if (path.empty()) {
+        path = findInCommonDirs(command);
+    }
+    
+    // If found, add to registry
+    if (!path.empty()) {
+        commandRegistry[command] = path;
+        saveRegistry();
+    }
+    
+    return path;
+}
+
+bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, const std::vector<std::string>& args, const std::string& currentDir) {
+    std::string exePath = getExecutablePath(command);
+    
+    if (exePath.empty()) {
+        return false;
+    }
+    
+    // Build command line with proper quoting for cmd.exe
+    // Use cmd /c with the entire command in quotes, and internal quotes escaped
+    std::string cmdLine = "cmd /c \"\"" + exePath + "\"";
+    for (size_t i = 1; i < args.size(); i++) {
+        // Always quote arguments to handle spaces properly
+        cmdLine += " \"" + args[i] + "\"";
+    }
+    cmdLine += "\"";
+    
+    // Save and restore current directory
+    char oldDir[MAX_PATH];
+    GetCurrentDirectoryA(MAX_PATH, oldDir);
+    SetCurrentDirectoryA(currentDir.c_str());
+    
+    system(cmdLine.c_str());
+    
+    SetCurrentDirectoryA(oldDir);
+    
+    return true;
+}
+
+const std::map<std::string, std::string>& LinuxifyRegistry::getAllCommands() {
+    loadRegistry();
+    return commandRegistry;
+}
+
+void LinuxifyRegistry::addCommand(const std::string& command, const std::string& path) {
+    loadRegistry();
+    commandRegistry[command] = path;
+    saveRegistry();
+}
+
+void LinuxifyRegistry::removeCommand(const std::string& command) {
+    loadRegistry();
+    commandRegistry.erase(command);
+    saveRegistry();
+}

@@ -1,4 +1,5 @@
 // Compile: cl /EHsc /std:c++17 nano.cpp /Fe:nano.exe
+// Alternate compile: g++ c++17 -o nano nano.cpp
 
 #include <iostream>
 #include <string>
