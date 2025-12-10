@@ -1,4 +1,4 @@
-# C-Shell
+# Linuxify
 
 A custom written shell called **Linuxify** in C++ for Users to directly interact with the
 Windows kernel with linux syntax for its commands.
@@ -22,4 +22,4 @@ Windows kernel with linux syntax for its commands.
 - [X] `lin info <package>` - Show package info
 - [X] `lin alias` - Show package aliases
 - [X] `lin add <name> <id>` - Add custom alias
-- [X] Smart package discovery - aliases grow as you search!
+- [X] Smart package discovery - aliases grow as you search
