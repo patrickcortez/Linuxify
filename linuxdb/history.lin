@@ -1,0 +1,74 @@
+ls
+g++
+cd
+cd Test
+ls
+touch main.cpp
+nano main.cpp
+cat main.cpp
+g++ main.cpp -o main
+ls
+./main.exe
+help
+echo "I am gay T_T/"
+export home="Iloilo"
+echo $home
+echo $time
+env
+echo $PATHEXT
+echo $TMP
+cls
+help
+whoami
+git status
+linuxify
+exit
+help
+which
+rhell
+export
+echo $HOME
+echo $TMP
+echo "Hello params"
+exit
+exit
+help
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+./test_bg &
+./test_bg.exe &
+exit
+ls
+help
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+./test_bg.exe &
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+./test_bg.exe &
+jobs
+help
+jobs
+kill
+./test_bg
+ls
+./test_bg.exe
+help
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+./test_bg.exe
+./test_bg.exe &
+jobs
+kill 27132
+jobs
+help
+exit
+help
+grep
+exit
+export home="C:\Users\patri"
+echo "My Home is $home"
+help
+echo $home > test.txt
+cat test.txt
+grep
+ls | grep -i "Test"

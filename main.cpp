@@ -1,5 +1,5 @@
 // Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
-// Alternate compile: g++ -std=c++17 -o linuxify main.cpp registry.cpp
+// Alternate compile: g++ -std=c++17 -static -o linuxify main.cpp registry.cpp
 
 #include <iostream>
 #include <string>
@@ -8,6 +8,9 @@
 #include <filesystem>
 #include <fstream>
 #include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <conio.h>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -16,6 +19,10 @@
 #include <sys/utime.h>
 
 #include "registry.hpp"
+#include "process_manager.hpp"
+
+// Global process manager instance
+ProcessManager g_procMgr;
 
 namespace fs = std::filesystem;
 
@@ -23,6 +30,8 @@ class Linuxify {
 private:
     bool running;
     std::string currentDir;
+    std::vector<std::string> commandHistory;
+    std::map<std::string, std::string> sessionEnv;  // Session-specific environment variables
 
     std::vector<std::string> tokenize(const std::string& input) {
         std::vector<std::string> tokens;
@@ -667,6 +676,835 @@ private:
         }
     }
 
+    // Get history file path
+    std::string getHistoryFilePath() {
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path exeDir = fs::path(exePath).parent_path();
+        fs::path linuxdbDir = exeDir / "linuxdb";
+        
+        if (!fs::exists(linuxdbDir)) {
+            fs::create_directories(linuxdbDir);
+        }
+        
+        return (linuxdbDir / "history.lin").string();
+    }
+
+    // Load history from file
+    void loadHistory() {
+        std::ifstream file(getHistoryFilePath());
+        if (file) {
+            std::string line;
+            while (std::getline(file, line)) {
+                if (!line.empty()) {
+                    commandHistory.push_back(line);
+                }
+            }
+        }
+    }
+
+    // Save command to history
+    void saveToHistory(const std::string& cmd) {
+        commandHistory.push_back(cmd);
+        
+        std::ofstream file(getHistoryFilePath(), std::ios::app);
+        if (file) {
+            file << cmd << "\n";
+        }
+    }
+
+    // history - show command history
+    void cmdHistory(const std::vector<std::string>& args) {
+        bool showNumbers = true;
+        int limit = -1;  // -1 means show all
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-c" || args[i] == "--clear") {
+                // Clear history
+                commandHistory.clear();
+                std::ofstream file(getHistoryFilePath(), std::ios::trunc);
+                printSuccess("History cleared.");
+                return;
+            } else {
+                try {
+                    limit = std::stoi(args[i]);
+                } catch (...) {}
+            }
+        }
+        
+        size_t start = 0;
+        if (limit > 0 && limit < (int)commandHistory.size()) {
+            start = commandHistory.size() - limit;
+        }
+        
+        for (size_t i = start; i < commandHistory.size(); ++i) {
+            if (showNumbers) {
+                std::cout << std::setw(5) << (i + 1) << "  ";
+            }
+            std::cout << commandHistory[i] << std::endl;
+        }
+    }
+
+    // whoami - show current user
+    void cmdWhoami(const std::vector<std::string>& args) {
+        char username[256];
+        DWORD size = sizeof(username);
+        
+        if (GetUserNameA(username, &size)) {
+            std::cout << username << std::endl;
+        } else {
+            // Fallback to environment variable
+            char* user = nullptr;
+            size_t len;
+            _dupenv_s(&user, &len, "USERNAME");
+            if (user) {
+                std::cout << user << std::endl;
+                free(user);
+            } else {
+                printError("whoami: cannot determine username");
+            }
+        }
+    }
+
+    // echo - print text
+    void cmdEcho(const std::vector<std::string>& args) {
+        bool newline = true;
+        size_t start = 1;
+        
+        if (args.size() > 1 && args[1] == "-n") {
+            newline = false;
+            start = 2;
+        }
+        
+        for (size_t i = start; i < args.size(); ++i) {
+            std::string text = args[i];
+            
+            // Expand environment variables ($VAR or ${VAR})
+            size_t pos = 0;
+            while ((pos = text.find('$', pos)) != std::string::npos) {
+                size_t end = pos + 1;
+                bool braced = false;
+                
+                if (end < text.length() && text[end] == '{') {
+                    braced = true;
+                    end++;
+                    size_t close = text.find('}', end);
+                    if (close != std::string::npos) {
+                        std::string varName = text.substr(end, close - end);
+                        
+                        // Check session env first, then system
+                        std::string value;
+                        auto it = sessionEnv.find(varName);
+                        if (it != sessionEnv.end()) {
+                            value = it->second;
+                        } else {
+                            char* envVal = nullptr;
+                            size_t len;
+                            _dupenv_s(&envVal, &len, varName.c_str());
+                            if (envVal) {
+                                value = envVal;
+                                free(envVal);
+                            }
+                        }
+                        
+                        text = text.substr(0, pos) + value + text.substr(close + 1);
+                    }
+                } else {
+                    while (end < text.length() && (isalnum(text[end]) || text[end] == '_')) {
+                        end++;
+                    }
+                    std::string varName = text.substr(pos + 1, end - pos - 1);
+                    
+                    std::string value;
+                    auto it = sessionEnv.find(varName);
+                    if (it != sessionEnv.end()) {
+                        value = it->second;
+                    } else {
+                        char* envVal = nullptr;
+                        size_t len;
+                        _dupenv_s(&envVal, &len, varName.c_str());
+                        if (envVal) {
+                            value = envVal;
+                            free(envVal);
+                        }
+                    }
+                    
+                    text = text.substr(0, pos) + value + text.substr(end);
+                }
+                pos++;
+            }
+            
+            if (i > start) std::cout << " ";
+            std::cout << text;
+        }
+        
+        if (newline) std::cout << std::endl;
+    }
+
+    // env/printenv - show environment variables
+    void cmdEnv(const std::vector<std::string>& args) {
+        // If specific variable requested
+        if (args.size() > 1) {
+            std::string varName = args[1];
+            
+            // Check session env first
+            auto it = sessionEnv.find(varName);
+            if (it != sessionEnv.end()) {
+                std::cout << it->second << std::endl;
+                return;
+            }
+            
+            char* value = nullptr;
+            size_t len;
+            _dupenv_s(&value, &len, varName.c_str());
+            if (value) {
+                std::cout << value << std::endl;
+                free(value);
+            }
+            return;
+        }
+        
+        // Show all environment variables
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        // First show session variables
+        if (!sessionEnv.empty()) {
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "# Session Variables:\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            for (const auto& pair : sessionEnv) {
+                std::cout << pair.first << "=" << pair.second << std::endl;
+            }
+            std::cout << std::endl;
+        }
+        
+        // Then system variables
+        char* envStrings = GetEnvironmentStringsA();
+        if (envStrings) {
+            char* current = envStrings;
+            while (*current) {
+                std::cout << current << std::endl;
+                current += strlen(current) + 1;
+            }
+            FreeEnvironmentStringsA(envStrings);
+        }
+    }
+
+    // export - set environment variable
+    void cmdExport(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            // Show exported session variables
+            for (const auto& pair : sessionEnv) {
+                std::cout << "export " << pair.first << "=\"" << pair.second << "\"" << std::endl;
+            }
+            return;
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string arg = args[i];
+            size_t eqPos = arg.find('=');
+            
+            if (eqPos != std::string::npos) {
+                std::string name = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                // Remove quotes if present
+                if (value.length() >= 2 && 
+                    ((value.front() == '"' && value.back() == '"') ||
+                     (value.front() == '\'' && value.back() == '\''))) {
+                    value = value.substr(1, value.length() - 2);
+                }
+                
+                // Set in session and system environment
+                sessionEnv[name] = value;
+                SetEnvironmentVariableA(name.c_str(), value.c_str());
+                printSuccess("Exported: " + name + "=" + value);
+            } else {
+                printError("export: invalid format. Use: export NAME=value");
+            }
+        }
+    }
+
+    // which - find command location
+    void cmdWhich(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("which: missing argument");
+            std::cout << "Usage: which <command>" << std::endl;
+            return;
+        }
+        
+        std::string cmd = args[1];
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        // Check built-in commands first
+        std::vector<std::string> builtins = {
+            "pwd", "cd", "ls", "mkdir", "rm", "mv", "cp", "cat", "touch", 
+            "chmod", "chown", "clear", "help", "nano", "lin", "registry",
+            "history", "whoami", "echo", "env", "printenv", "export", "which", "exit"
+        };
+        
+        for (const auto& builtin : builtins) {
+            if (cmd == builtin) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << cmd << ": shell built-in command" << std::endl;
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                return;
+            }
+        }
+        
+        // Check cmds folder
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
+        
+        std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ""};
+        for (const auto& ext : extensions) {
+            fs::path cmdPath = cmdsDir / (cmd + ext);
+            if (fs::exists(cmdPath)) {
+                std::cout << cmdPath.string() << std::endl;
+                return;
+            }
+        }
+        
+        // Check registry
+        std::string regPath = g_registry.getExecutablePath(cmd);
+        if (!regPath.empty()) {
+            std::cout << regPath << std::endl;
+            return;
+        }
+        
+        printError("which: " + cmd + " not found");
+    }
+
+    // ps - list processes
+    void cmdPs(const std::vector<std::string>& args) {
+        bool detailed = false;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-l" || args[i] == "--long" || args[i] == "-aux") {
+                detailed = true;
+            }
+        }
+        
+        if (detailed) {
+            ProcessManager::listProcessesDetailed();
+        } else {
+            ProcessManager::listProcesses();
+        }
+    }
+
+    // kill - terminate a process
+    void cmdKill(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("kill: missing PID or job ID");
+            std::cout << "Usage: kill <PID> or kill %<job_id>" << std::endl;
+            return;
+        }
+        
+        std::string target = args[1];
+        
+        // Check if it's a job ID (%n)
+        if (target[0] == '%') {
+            try {
+                int jobId = std::stoi(target.substr(1));
+                if (g_procMgr.killJob(jobId)) {
+                    printSuccess("Job " + std::to_string(jobId) + " terminated.");
+                } else {
+                    printError("kill: no such job: " + target);
+                }
+            } catch (...) {
+                printError("kill: invalid job ID: " + target);
+            }
+        } else {
+            // It's a PID
+            try {
+                DWORD pid = std::stoul(target);
+                if (g_procMgr.killByPid(pid)) {
+                    printSuccess("Process " + target + " terminated.");
+                } else {
+                    printError("kill: failed to terminate process " + target);
+                }
+            } catch (...) {
+                printError("kill: invalid PID: " + target);
+            }
+        }
+    }
+
+    // top - live process monitor
+    void cmdTop(const std::vector<std::string>& args) {
+        ProcessManager::topView();
+    }
+
+    // jobs - list background jobs
+    void cmdJobs(const std::vector<std::string>& args) {
+        g_procMgr.listJobs();
+    }
+
+    // fg - bring job to foreground
+    void cmdFg(const std::vector<std::string>& args) {
+        int jobId = 1;  // Default to job 1
+        
+        if (args.size() > 1) {
+            std::string target = args[1];
+            if (target[0] == '%') {
+                target = target.substr(1);
+            }
+            try {
+                jobId = std::stoi(target);
+            } catch (...) {
+                printError("fg: invalid job ID");
+                return;
+            }
+        }
+        
+        BackgroundJob* job = g_procMgr.getJob(jobId);
+        if (job && job->running) {
+            std::cout << job->command << std::endl;
+            g_procMgr.waitForJob(jobId);
+        } else {
+            printError("fg: no such job");
+        }
+    }
+
+    // Run a command in background
+    bool runInBackground(const std::string& cmdLine, const std::string& displayCmd) {
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;  // Hide the window
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[4096];
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
+        
+        // CREATE_NEW_CONSOLE creates a separate console for the process
+        // DETACHED_PROCESS would have no console at all
+        DWORD creationFlags = CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE;
+        
+        if (CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            FALSE,
+            creationFlags,
+            NULL,
+            currentDir.c_str(),
+            &si,
+            &pi
+        )) {
+            int jobId = g_procMgr.addJob(pi.hProcess, pi.dwProcessId, displayCmd);
+            CloseHandle(pi.hThread);
+            
+            std::cout << "[" << jobId << "] " << pi.dwProcessId << std::endl;
+            return true;
+        }
+        
+        return false;
+    }
+
+    // grep - search for pattern in file or input
+    void cmdGrep(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        if (args.size() < 2) {
+            printError("grep: missing pattern");
+            std::cout << "Usage: grep <pattern> [file]" << std::endl;
+            return;
+        }
+        
+        std::string pattern = args[1];
+        bool ignoreCase = false;
+        bool lineNumbers = false;
+        bool invertMatch = false;
+        size_t argStart = 2;
+        
+        // Parse flags
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-i") { ignoreCase = true; argStart++; }
+            else if (args[i] == "-n") { lineNumbers = true; argStart++; }
+            else if (args[i] == "-v") { invertMatch = true; argStart++; }
+            else if (args[i][0] != '-') { pattern = args[i]; argStart = i + 1; break; }
+        }
+        
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            // Use piped input
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (argStart < args.size()) {
+            // Read from file
+            std::string filePath = resolvePath(args[argStart]);
+            std::ifstream file(filePath);
+            if (!file) {
+                printError("grep: cannot open '" + args[argStart] + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("grep: missing file operand");
+            return;
+        }
+        
+        std::string searchPattern = ignoreCase ? pattern : pattern;
+        
+        for (size_t i = 0; i < lines.size(); ++i) {
+            std::string line = lines[i];
+            std::string searchLine = ignoreCase ? line : line;
+            
+            if (ignoreCase) {
+                std::transform(searchLine.begin(), searchLine.end(), searchLine.begin(), ::tolower);
+                std::transform(searchPattern.begin(), searchPattern.end(), searchPattern.begin(), ::tolower);
+            }
+            
+            bool found = searchLine.find(searchPattern) != std::string::npos;
+            if (invertMatch) found = !found;
+            
+            if (found) {
+                if (lineNumbers) {
+                    std::cout << (i + 1) << ":";
+                }
+                // Highlight the match
+                size_t pos = 0;
+                std::string output = line;
+                HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                
+                while ((pos = searchLine.find(searchPattern, pos)) != std::string::npos) {
+                    std::cout << line.substr(0, pos);
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                    std::cout << line.substr(pos, pattern.length());
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    line = line.substr(pos + pattern.length());
+                    searchLine = searchLine.substr(pos + searchPattern.length());
+                    pos = 0;
+                }
+                std::cout << line << std::endl;
+            }
+        }
+    }
+
+    // head - show first N lines
+    void cmdHead(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        int numLines = 10;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-n" && i + 1 < args.size()) {
+                numLines = std::stoi(args[++i]);
+            } else if (args[i][0] == '-' && isdigit(args[i][1])) {
+                numLines = std::stoi(args[i].substr(1));
+            } else if (args[i][0] != '-') {
+                filePath = args[i];
+            }
+        }
+        
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("head: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("head: missing file operand");
+            return;
+        }
+        
+        for (int i = 0; i < numLines && i < (int)lines.size(); ++i) {
+            std::cout << lines[i] << std::endl;
+        }
+    }
+
+    // tail - show last N lines
+    void cmdTail(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        int numLines = 10;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-n" && i + 1 < args.size()) {
+                numLines = std::stoi(args[++i]);
+            } else if (args[i][0] == '-' && isdigit(args[i][1])) {
+                numLines = std::stoi(args[i].substr(1));
+            } else if (args[i][0] != '-') {
+                filePath = args[i];
+            }
+        }
+        
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("tail: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("tail: missing file operand");
+            return;
+        }
+        
+        int start = std::max(0, (int)lines.size() - numLines);
+        for (int i = start; i < (int)lines.size(); ++i) {
+            std::cout << lines[i] << std::endl;
+        }
+    }
+
+    // wc - word/line/char count
+    void cmdWc(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        bool countLines = false, countWords = false, countChars = false;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-l") countLines = true;
+            else if (args[i] == "-w") countWords = true;
+            else if (args[i] == "-c" || args[i] == "-m") countChars = true;
+            else if (args[i][0] != '-') filePath = args[i];
+        }
+        
+        // Default: show all
+        if (!countLines && !countWords && !countChars) {
+            countLines = countWords = countChars = true;
+        }
+        
+        std::string content;
+        
+        if (!pipedInput.empty()) {
+            content = pipedInput;
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("wc: cannot open '" + filePath + "'");
+                return;
+            }
+            std::ostringstream oss;
+            oss << file.rdbuf();
+            content = oss.str();
+        } else {
+            printError("wc: missing file operand");
+            return;
+        }
+        
+        int lines = 0, words = 0, chars = (int)content.length();
+        bool inWord = false;
+        
+        for (char c : content) {
+            if (c == '\n') lines++;
+            if (isspace(c)) {
+                inWord = false;
+            } else if (!inWord) {
+                inWord = true;
+                words++;
+            }
+        }
+        
+        if (countLines) std::cout << std::setw(8) << lines;
+        if (countWords) std::cout << std::setw(8) << words;
+        if (countChars) std::cout << std::setw(8) << chars;
+        if (!filePath.empty()) std::cout << " " << filePath;
+        std::cout << std::endl;
+    }
+
+    // sort - sort lines
+    void cmdSort(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        bool reverse = false;
+        bool numeric = false;
+        bool unique = false;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-r") reverse = true;
+            else if (args[i] == "-n") numeric = true;
+            else if (args[i] == "-u") unique = true;
+            else if (args[i][0] != '-') filePath = args[i];
+        }
+        
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("sort: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("sort: missing file operand");
+            return;
+        }
+        
+        if (numeric) {
+            std::sort(lines.begin(), lines.end(), [](const std::string& a, const std::string& b) {
+                try { return std::stod(a) < std::stod(b); }
+                catch (...) { return a < b; }
+            });
+        } else {
+            std::sort(lines.begin(), lines.end());
+        }
+        
+        if (reverse) {
+            std::reverse(lines.begin(), lines.end());
+        }
+        
+        std::string prev;
+        for (const auto& line : lines) {
+            if (!unique || line != prev) {
+                std::cout << line << std::endl;
+                prev = line;
+            }
+        }
+    }
+
+    // uniq - remove duplicate consecutive lines
+    void cmdUniq(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        bool countDupes = false;
+        bool onlyDupes = false;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-c") countDupes = true;
+            else if (args[i] == "-d") onlyDupes = true;
+            else if (args[i][0] != '-') filePath = args[i];
+        }
+        
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("uniq: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("uniq: missing file operand");
+            return;
+        }
+        
+        std::string prev;
+        int count = 0;
+        
+        for (size_t i = 0; i <= lines.size(); ++i) {
+            if (i < lines.size() && lines[i] == prev) {
+                count++;
+            } else {
+                if (!prev.empty()) {
+                    if (!onlyDupes || count > 1) {
+                        if (countDupes) {
+                            std::cout << std::setw(7) << count << " ";
+                        }
+                        std::cout << prev << std::endl;
+                    }
+                }
+                if (i < lines.size()) {
+                    prev = lines[i];
+                    count = 1;
+                }
+            }
+        }
+    }
+
+    // find - search for files
+    void cmdFind(const std::vector<std::string>& args) {
+        std::string searchPath = ".";
+        std::string namePattern;
+        std::string typeFilter;  // "f" for file, "d" for directory
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-name" && i + 1 < args.size()) {
+                namePattern = args[++i];
+            } else if (args[i] == "-type" && i + 1 < args.size()) {
+                typeFilter = args[++i];
+            } else if (args[i][0] != '-') {
+                searchPath = args[i];
+            }
+        }
+        
+        std::string fullPath = resolvePath(searchPath);
+        
+        if (!fs::exists(fullPath)) {
+            printError("find: '" + searchPath + "': No such file or directory");
+            return;
+        }
+        
+        try {
+            for (const auto& entry : fs::recursive_directory_iterator(fullPath, fs::directory_options::skip_permission_denied)) {
+                std::string filename = entry.path().filename().string();
+                
+                // Type filter
+                if (typeFilter == "f" && !entry.is_regular_file()) continue;
+                if (typeFilter == "d" && !entry.is_directory()) continue;
+                
+                // Name pattern matching (simple wildcard support)
+                if (!namePattern.empty()) {
+                    bool match = false;
+                    if (namePattern[0] == '*') {
+                        // Suffix match
+                        std::string suffix = namePattern.substr(1);
+                        match = filename.length() >= suffix.length() &&
+                                filename.substr(filename.length() - suffix.length()) == suffix;
+                    } else if (namePattern.back() == '*') {
+                        // Prefix match
+                        std::string prefix = namePattern.substr(0, namePattern.length() - 1);
+                        match = filename.substr(0, prefix.length()) == prefix;
+                    } else {
+                        match = filename == namePattern;
+                    }
+                    if (!match) continue;
+                }
+                
+                std::cout << entry.path().string() << std::endl;
+            }
+        } catch (const std::exception& e) {
+            printError("find: " + std::string(e.what()));
+        }
+    }
+
     std::string getPackagesFilePath() {
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -995,6 +1833,36 @@ private:
         std::cout << "         Clear the screen\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  echo";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Print text (supports $VAR expansion)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  history";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Show command history (-c to clear)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  whoami";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Show current username\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  env/printenv";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "  Show environment variables\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  export";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Set environment variable (NAME=value)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  which";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Find command location\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  help";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Show this help message\n";
@@ -1020,6 +1888,96 @@ private:
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  Installed tools like git, node, python, mysql, etc.\n";
+        std::cout << "  Run 'registry refresh' to scan for installed commands.\n";
+
+        std::cout << "\n  Process Management:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  ps";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            List running processes (-aux for details)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  kill";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Terminate process (kill <PID> or kill %<job>)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  top";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Live process monitor (press 'q' to quit)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  jobs";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          List background jobs\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  fg";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            Bring job to foreground (fg %<job>)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  <cmd> &";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Run command in background\n";
+
+        std::cout << "\n  Text Processing:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  grep";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Search for pattern (-i -n -v)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  head";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Show first N lines (head -n 10)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  tail";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Show last N lines (tail -n 10)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  wc";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            Count lines/words/chars (-l -w -c)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  sort";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Sort lines (-r reverse, -n numeric)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  uniq";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Remove duplicate lines (-c count)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  find";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Find files (find . -name \"*.txt\")\n";
+
+        std::cout << "\n  Redirection & Piping:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd > file";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "    Write output to file\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd >> file";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Append output to file\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd | cmd";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "     Pipe output to next command\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "\n  External tools: git, node, python, mysql, etc.\n";
         std::cout << "  Run 'registry refresh' to scan for installed commands.\n";
 
         std::cout << "\n";
@@ -1106,6 +2064,42 @@ private:
                 std::cout << "  registry list         Show all registered commands\n";
                 std::cout << "  registry add <cmd> <path>  Add custom command\n";
             }
+        } else if (cmd == "history") {
+            cmdHistory(tokens);
+        } else if (cmd == "whoami") {
+            cmdWhoami(tokens);
+        } else if (cmd == "echo") {
+            cmdEcho(tokens);
+        } else if (cmd == "env" || cmd == "printenv") {
+            cmdEnv(tokens);
+        } else if (cmd == "export") {
+            cmdExport(tokens);
+        } else if (cmd == "which" || cmd == "where") {
+            cmdWhich(tokens);
+        } else if (cmd == "ps") {
+            cmdPs(tokens);
+        } else if (cmd == "kill") {
+            cmdKill(tokens);
+        } else if (cmd == "top" || cmd == "htop") {
+            cmdTop(tokens);
+        } else if (cmd == "jobs") {
+            cmdJobs(tokens);
+        } else if (cmd == "fg") {
+            cmdFg(tokens);
+        } else if (cmd == "grep") {
+            cmdGrep(tokens);
+        } else if (cmd == "head") {
+            cmdHead(tokens);
+        } else if (cmd == "tail") {
+            cmdTail(tokens);
+        } else if (cmd == "wc") {
+            cmdWc(tokens);
+        } else if (cmd == "sort") {
+            cmdSort(tokens);
+        } else if (cmd == "uniq") {
+            cmdUniq(tokens);
+        } else if (cmd == "find") {
+            cmdFind(tokens);
         } else if (cmd == "exit" || cmd == "quit") {
             running = false;
         } else {
@@ -1204,12 +2198,132 @@ public:
         SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
     }
 
+    // Parse and handle output redirection (>, >>) and pipes (|)
+    bool handleRedirection(const std::string& input) {
+        // Check for output redirection first (> or >>)
+        size_t appendPos = input.find(">>");
+        size_t writePos = input.find(">");
+        size_t pipePos = input.find("|");
+        
+        // Handle output redirection
+        if (appendPos != std::string::npos || (writePos != std::string::npos && (appendPos == std::string::npos || writePos < appendPos))) {
+            bool append = (appendPos != std::string::npos && (writePos == std::string::npos || appendPos <= writePos));
+            size_t pos = append ? appendPos : writePos;
+            size_t skip = append ? 2 : 1;
+            
+            std::string cmdPart = input.substr(0, pos);
+            std::string filePart = input.substr(pos + skip);
+            
+            // Trim
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            filePart.erase(0, filePart.find_first_not_of(" \t"));
+            filePart.erase(filePart.find_last_not_of(" \t") + 1);
+            
+            if (filePart.empty()) {
+                printError("Syntax error: missing filename after redirect");
+                return true;
+            }
+            
+            std::string outputFile = resolvePath(filePart);
+            
+            // Redirect stdout to file
+            std::ofstream file;
+            if (append) {
+                file.open(outputFile, std::ios::app);
+            } else {
+                file.open(outputFile, std::ios::out);
+            }
+            
+            if (!file) {
+                printError("Cannot open file: " + filePart);
+                return true;
+            }
+            
+            // Capture stdout
+            std::streambuf* oldCout = std::cout.rdbuf();
+            std::cout.rdbuf(file.rdbuf());
+            
+            // Execute the command
+            std::vector<std::string> tokens = tokenize(cmdPart);
+            if (!tokens.empty()) {
+                executeCommand(tokens);
+            }
+            
+            // Restore stdout
+            std::cout.rdbuf(oldCout);
+            file.close();
+            
+            return true;
+        }
+        
+        // Handle pipes
+        if (pipePos != std::string::npos) {
+            std::vector<std::string> commands;
+            std::string remaining = input;
+            
+            while ((pipePos = remaining.find("|")) != std::string::npos) {
+                std::string cmd = remaining.substr(0, pipePos);
+                cmd.erase(0, cmd.find_first_not_of(" \t"));
+                cmd.erase(cmd.find_last_not_of(" \t") + 1);
+                commands.push_back(cmd);
+                remaining = remaining.substr(pipePos + 1);
+            }
+            remaining.erase(0, remaining.find_first_not_of(" \t"));
+            remaining.erase(remaining.find_last_not_of(" \t") + 1);
+            commands.push_back(remaining);
+            
+            // Execute pipeline
+            std::string pipedOutput;
+            
+            for (size_t i = 0; i < commands.size(); ++i) {
+                std::vector<std::string> tokens = tokenize(commands[i]);
+                if (tokens.empty()) continue;
+                
+                std::string& cmd = tokens[0];
+                
+                // Capture output
+                std::ostringstream capturedOutput;
+                std::streambuf* oldCout = std::cout.rdbuf();
+                std::cout.rdbuf(capturedOutput.rdbuf());
+                
+                // Execute with piped input for text commands
+                if (cmd == "grep") {
+                    cmdGrep(tokens, pipedOutput);
+                } else if (cmd == "head") {
+                    cmdHead(tokens, pipedOutput);
+                } else if (cmd == "tail") {
+                    cmdTail(tokens, pipedOutput);
+                } else if (cmd == "wc") {
+                    cmdWc(tokens, pipedOutput);
+                } else if (cmd == "sort") {
+                    cmdSort(tokens, pipedOutput);
+                } else if (cmd == "uniq") {
+                    cmdUniq(tokens, pipedOutput);
+                } else {
+                    executeCommand(tokens);
+                }
+                
+                std::cout.rdbuf(oldCout);
+                pipedOutput = capturedOutput.str();
+            }
+            
+            // Output final result
+            std::cout << pipedOutput;
+            return true;
+        }
+        
+        return false;
+    }
+
     void run() {
         SetConsoleOutputCP(CP_UTF8);
         SetConsoleCP(CP_UTF8);
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         
         SetConsoleTitleA("Linuxify Shell");
+        
+        // Load command history
+        loadHistory();
         
         system("cls");
         
@@ -1235,7 +2349,13 @@ public:
             printPrompt();
             
             if (!std::getline(std::cin, input)) {
-                break;
+                // Check if this was Ctrl+C (cin would be in fail state)
+                if (std::cin.fail()) {
+                    std::cin.clear();  // Clear error state
+                    std::cin.ignore(10000, '\n');  // Clear input buffer
+                    continue;  // Continue the loop instead of breaking
+                }
+                break;  // Only break on actual EOF
             }
 
             input.erase(0, input.find_first_not_of(" \t"));
@@ -1245,9 +2365,27 @@ public:
                 continue;
             }
 
+            // Save command to history (except for history command itself to avoid clutter)
+            if (input.substr(0, 7) != "history") {
+                saveToHistory(input);
+            }
+
+            // Check for redirection or pipes first
+            if (handleRedirection(input)) {
+                continue;  // Redirection handled the command
+            }
+
             std::vector<std::string> tokens = tokenize(input);
             
             if (!tokens.empty()) {
+                // Check for background execution (&)
+                bool runBackground = false;
+                if (!tokens.empty() && tokens.back() == "&") {
+                    runBackground = true;
+                    tokens.pop_back();
+                    if (tokens.empty()) continue;
+                }
+                
                 std::string& cmd = tokens[0];
                 
                 if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\" ||
@@ -1260,8 +2398,33 @@ public:
                     }
                     
                     std::cout << std::endl;
-                    runExecutable(execPath, tokens);
+                    
+                    if (runBackground) {
+                        // Build full command line for background execution
+                        std::string fullPath = resolvePath(execPath);
+                        std::string cmdLine = "\"" + fullPath + "\"";
+                        for (size_t i = 1; i < tokens.size(); i++) {
+                            cmdLine += " \"" + tokens[i] + "\"";
+                        }
+                        runInBackground(cmdLine, input);
+                    } else {
+                        runExecutable(execPath, tokens);
+                    }
                     std::cout << std::endl;
+                } else if (runBackground) {
+                    // Try to run built-in or registry command in background
+                    std::string exePath = g_registry.getExecutablePath(cmd);
+                    if (!exePath.empty()) {
+                        std::string cmdLine = "\"" + exePath + "\"";
+                        for (size_t i = 1; i < tokens.size(); i++) {
+                            cmdLine += " \"" + tokens[i] + "\"";
+                        }
+                        std::cout << std::endl;
+                        runInBackground(cmdLine, input);
+                        std::cout << std::endl;
+                    } else {
+                        printError("Cannot run in background: " + cmd);
+                    }
                 } else {
                     executeCommand(tokens);
                 }
@@ -1272,8 +2435,25 @@ public:
     }
 };
 
+// Ctrl+C handler - prevents shell from exiting
+BOOL WINAPI CtrlHandler(DWORD ctrlType) {
+    switch (ctrlType) {
+        case CTRL_C_EVENT:
+            // Just print a new line and return TRUE to indicate we handled it
+            // This prevents the shell from exiting
+            std::cout << "^C" << std::endl;
+            return TRUE;
+        case CTRL_BREAK_EVENT:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
 
 int main() {
+    // Set up Ctrl+C handler to prevent shell from exiting
+    SetConsoleCtrlHandler(CtrlHandler, TRUE);
+    
     Linuxify shell;
     shell.run();
     return 0;

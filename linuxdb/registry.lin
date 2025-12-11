@@ -28,3 +28,6 @@ tar=C:\WINDOWS\system32\tar.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
+
+# Linuxify Shell
+linuxify=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe
