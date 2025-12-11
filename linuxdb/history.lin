@@ -72,3 +72,162 @@ echo $home > test.txt
 cat test.txt
 grep
 ls | grep -i "Test"
+exit
+help
+lsmem
+lscpu
+lsnet
+lshw
+exit
+help
+net
+net status
+net show
+net show
+net show
+help
+ping 8.8.8.8
+ping -n 9 8.8.8.8
+ping -n9 8.8.8.8
+ping -n=9 8.8.8.8
+ping -n
+ping -n 9
+ping -9 8.8.8.8
+ping -n9 8.8.8.8
+ping -n 9 8.8.8.8
+ping -n -9 8.8.8.8
+ping -n = 9 8.8.8.8
+ping 9 -n 8.8.8.8
+ping google.com
+ping 192.168.254.183
+clear
+help
+git status | grep -n "modified"
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+git status | grep -n "modified"
+git status > git.txt
+ls
+cat git.txt
+exit
+ls
+cat NTUSER.DAT
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+rm git.txt
+ls
+git status | grep -n "modified"
+git status
+git status | grep -n "On"
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+git status | grep -n "modified"
+git status | grep -n "On"
+git status | tail -n 2
+git status | tail -n 9
+git status | tail -n 10
+git status > git.txt
+cat git.txt
+exit
+help
+git status | grep -n "modified"
+git status
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+git status | grep -n "modified"
+wget https://google.com/robots.txt
+ls
+exit
+ls > note.txt
+cat note.txt
+ipconfig
+ifconfig
+ip addr
+clear
+ip
+ip neighbour
+ip route
+clear
+ipconfig
+ifconfig
+clear
+ip addr
+cd Test
+ls
+wget https://google.com/robots.txt
+ls
+dig
+exit
+ls > list.txt
+cat list.txt
+clear
+cd Test
+wget https://google.com/robots.txt
+ls
+registry add test "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.exe"
+test
+exit
+test
+test
+like fuck you ok
+exit
+cd Test
+test
+wget
+wget https://google.com/robots.txt
+ls
+wget https://google.com/robots.txt botro.bin
+ls
+wget
+wget https://google.com/robots.txt -O botro.bin
+ls
+cat botro.bin
+clear
+cd
+lvc
+lvc
+cd Test
+lvc status
+lvc init
+ls
+ls -la
+lvc status
+cd ..
+lvc status
+ls -la
+cd Test
+exit
+cd Test
+lvc init
+lvc status
+ls
+exit
+test
+lvc
+cd Test
+lvc status
+lvc init
+lvc status
+ls -la
+lvc status
+lvc add -A
+mkdir folder
+mkdir folder/git
+touch folder/news.txt
+touch folder/git/paper.pap
+ls
+lvc status
+lvc add -A
+lvc commit -v 1.0
+lvc
+lvc show
+lvc show 1.0
+lvc
+lvc versions
+ls
+nano folder/news.txt
+lvc status
+lvc add -A
+lvc commit -v 1.1
+lvc versions
+lvc diff 1.0 1.1

@@ -1,6 +1,6 @@
 # Linuxify Command Registry
 # Auto-generated - Maps commands to executable paths
-# Format: command=path/to/executable
+# Stored in: linuxdb/registry.lin
 
 cmake=C:\Program Files\CMake\bin\cmake.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
@@ -12,6 +12,7 @@ gcc=C:\mingw64\mingw64\bin\gcc.exe
 git=C:\Program Files\Git\cmd\git.exe
 java=C:\Program Files (x86)\Common Files\Oracle\Java\javapath\java.exe
 javac=C:\Users\patri\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\javac.exe
+linuxify=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe
 mysql=C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe
@@ -25,9 +26,7 @@ scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
 tar=C:\WINDOWS\system32\tar.exe
+test=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
-
-# Linuxify Shell
-linuxify=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe

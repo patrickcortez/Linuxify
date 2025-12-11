@@ -46,6 +46,9 @@ Source: "{#SourcePath}\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion 
 ; Database files - all .lin files
 Source: "{#SourcePath}\linuxdb\*"; DestDir: "{app}\linuxdb"; Flags: ignoreversion
 
+; Custom commands (lvc, etc.)
+Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recursesubdirs createallsubdirs
+
 [Dirs]
 Name: "{app}\cmds"
 Name: "{app}\linuxdb"

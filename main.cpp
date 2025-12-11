@@ -20,6 +20,8 @@
 
 #include "registry.hpp"
 #include "process_manager.hpp"
+#include "system_info.hpp"
+#include "networking.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -974,6 +976,89 @@ private:
         }
         
         printError("which: " + cmd + " not found");
+    }
+
+    // uninstall - Remove Linuxify from system
+    void cmdUninstall(const std::vector<std::string>& args) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "    LINUXIFY UNINSTALLER" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        
+        std::cout << "This will remove Linuxify from your system." << std::endl;
+        std::cout << "The following will be removed:" << std::endl;
+        std::cout << "  - Linuxify executable and related files" << std::endl;
+        std::cout << "  - Linuxify from your system PATH" << std::endl;
+        std::cout << "  - Windows Terminal integration (if installed)" << std::endl;
+        std::cout << std::endl;
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "Are you sure you want to uninstall Linuxify? (yes/no): ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        
+        std::string response;
+        std::getline(std::cin, response);
+        
+        // Normalize response
+        std::transform(response.begin(), response.end(), response.begin(), ::tolower);
+        response.erase(0, response.find_first_not_of(" \t"));
+        response.erase(response.find_last_not_of(" \t") + 1);
+        
+        if (response != "yes" && response != "y") {
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "\nUninstall cancelled." << std::endl;
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            return;
+        }
+        
+        std::cout << std::endl;
+        
+        // Get the installation directory
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path installDir = fs::path(exePath).parent_path();
+        
+        std::cout << "Removing Linuxify from: " << installDir.string() << std::endl;
+        
+        // Try to remove from PATH using PowerShell
+        std::cout << "Removing from system PATH..." << std::endl;
+        std::string removePathCmd = "powershell -Command \"$path = [Environment]::GetEnvironmentVariable('PATH', 'User'); $newPath = ($path -split ';' | Where-Object { $_ -notlike '*Linuxify*' }) -join ';'; [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')\" 2>nul";
+        system(removePathCmd.c_str());
+        
+        // Create a batch script to delete the folder after we exit
+        std::string tempPath = std::getenv("TEMP") ? std::string(std::getenv("TEMP")) : "C:\\Windows\\Temp";
+        std::string batchFile = tempPath + "\\linuxify_uninstall.bat";
+        
+        std::ofstream batch(batchFile);
+        if (batch) {
+            batch << "@echo off\n";
+            batch << "echo Completing Linuxify uninstallation...\n";
+            batch << "timeout /t 2 /nobreak > nul\n";  // Wait for the exe to close
+            batch << "rd /s /q \"" << installDir.string() << "\" 2>nul\n";
+            batch << "echo Linuxify has been completely removed.\n";
+            batch << "echo.\n";
+            batch << "del \"%~f0\"\n";  // Delete the batch file itself
+            batch.close();
+            
+            // Start the batch file in a new window
+            std::string startCmd = "start \"\" cmd /c \"" + batchFile + "\"";
+            system(startCmd.c_str());
+        }
+        
+        std::cout << std::endl;
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "========================================" << std::endl;
+        std::cout << "  Thank you for using Linuxify!" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << std::endl;
+        std::cout << "Goodbye! :)" << std::endl;
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << std::endl;
+        
+        running = false;
     }
 
     // ps - list processes
@@ -1975,6 +2060,70 @@ private:
         std::cout << "  cmd | cmd";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "     Pipe output to next command\n";
+
+        std::cout << "\n  System Information:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lsmem";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Memory information\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lscpu";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         CPU information\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lshw";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Hardware overview (sysinfo)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  df/lsblk";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Disk usage and mounts\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lsusb";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         USB devices\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lsnet";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Network interfaces\n";
+
+        std::cout << "\n  Networking:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  ping";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Ping a host\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  traceroute";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "    Trace route to host\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  curl/wget";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "     HTTP requests / download\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  nslookup";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      DNS lookup\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  net show";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Show WiFi networks\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  net connect";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Connect to WiFi (-p password)\n";
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "\n  External tools: git, node, python, mysql, etc.\n";
@@ -1996,6 +2145,7 @@ private:
 
         std::cout << std::endl;
 
+        try {
         if (cmd == "pwd") {
             cmdPwd(tokens);
         } else if (cmd == "cd") {
@@ -2058,6 +2208,7 @@ private:
             } else if (tokens.size() > 3 && tokens[1] == "add") {
                 g_registry.addCommand(tokens[2], tokens[3]);
                 printSuccess("Added: " + tokens[2] + " -> " + tokens[3]);
+                std::cout << "Saved to: " << g_registry.getDbPath() << std::endl;
             } else {
                 std::cout << "Registry Commands:\n";
                 std::cout << "  registry refresh      Scan system for installed commands\n";
@@ -2100,6 +2251,42 @@ private:
             cmdUniq(tokens);
         } else if (cmd == "find") {
             cmdFind(tokens);
+        } else if (cmd == "lsmem" || cmd == "free") {
+            SystemInfo::listMemory();
+        } else if (cmd == "lscpu") {
+            SystemInfo::listCPU();
+        } else if (cmd == "lshw" || cmd == "sysinfo") {
+            SystemInfo::listHardware();
+        } else if (cmd == "lsmount" || cmd == "lsblk" || cmd == "df") {
+            SystemInfo::listMounts();
+        } else if (cmd == "lsusb") {
+            SystemInfo::listUSB();
+        } else if (cmd == "lsnet") {
+            SystemInfo::listNetwork();
+        } else if (cmd == "lsof") {
+            SystemInfo::listOpenFiles();
+        } else if (cmd == "ip") {
+            Networking::showIP(tokens);
+        } else if (cmd == "ping") {
+            Networking::ping(tokens);
+        } else if (cmd == "traceroute" || cmd == "tracert") {
+            Networking::traceroute(tokens);
+        } else if (cmd == "nslookup") {
+            Networking::nslookup(tokens);
+        } else if (cmd == "dig" || cmd == "host") {
+            Networking::dig(tokens);
+        } else if (cmd == "curl") {
+            Networking::curl(tokens);
+        } else if (cmd == "wget") {
+            Networking::wget(tokens, currentDir);
+        } else if (cmd == "net") {
+            Networking::netCommand(tokens);
+        } else if (cmd == "netstat") {
+            Networking::netstat(tokens);
+        } else if (cmd == "ifconfig" || cmd == "ipconfig") {
+            Networking::showIP(tokens);
+        } else if (cmd == "uninstall") {
+            cmdUninstall(tokens);
         } else if (cmd == "exit" || cmd == "quit") {
             running = false;
         } else {
@@ -2114,13 +2301,38 @@ private:
             for (const auto& ext : extensions) {
                 fs::path cmdPath = cmdsDir / (cmd + ext);
                 if (fs::exists(cmdPath)) {
-                    // Execute from cmds folder with proper quoting for paths with spaces
-                    std::string cmdLine = "cmd /c \"\"" + cmdPath.string() + "\"";
+                    // Execute from cmds folder using CreateProcessA with proper working directory
+                    std::string cmdLine = "\"" + cmdPath.string() + "\"";
                     for (size_t i = 1; i < tokens.size(); i++) {
                         cmdLine += " \"" + tokens[i] + "\"";
                     }
-                    cmdLine += "\"";
-                    system(cmdLine.c_str());
+                    
+                    STARTUPINFOA si;
+                    PROCESS_INFORMATION pi;
+                    ZeroMemory(&si, sizeof(si));
+                    si.cb = sizeof(si);
+                    ZeroMemory(&pi, sizeof(pi));
+                    
+                    char cmdBuffer[4096];
+                    strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
+                    
+                    if (CreateProcessA(
+                        NULL,
+                        cmdBuffer,
+                        NULL,
+                        NULL,
+                        TRUE,
+                        0,
+                        NULL,
+                        currentDir.c_str(),  // Execute in shell's current directory
+                        &si,
+                        &pi
+                    )) {
+                        WaitForSingleObject(pi.hProcess, INFINITE);
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+                    }
+                    
                     foundInCmds = true;
                     break;
                 }
@@ -2133,6 +2345,32 @@ private:
                     printError("Command not found: " + cmd + ". Type 'help' for available commands.");
                 }
             }
+        }
+
+        } catch (const std::filesystem::filesystem_error& e) {
+            // Handle file system errors
+            std::string msg = e.what();
+            if (msg.find("permission denied") != std::string::npos || 
+                msg.find("Access is denied") != std::string::npos) {
+                printError("Permission denied: " + e.path1().string());
+            } else if (msg.find("no such file") != std::string::npos || 
+                       msg.find("cannot find") != std::string::npos) {
+                printError("No such file or directory: " + e.path1().string());
+            } else if (msg.find("directory not empty") != std::string::npos) {
+                printError("Directory not empty: " + e.path1().string() + " (use rm -r for recursive delete)");
+            } else {
+                printError("File system error: " + std::string(e.what()));
+            }
+        } catch (const std::invalid_argument& e) {
+            printError("Invalid argument: " + std::string(e.what()));
+        } catch (const std::out_of_range& e) {
+            printError("Value out of range: " + std::string(e.what()));
+        } catch (const std::runtime_error& e) {
+            printError("Runtime error: " + std::string(e.what()));
+        } catch (const std::exception& e) {
+            printError("Error: " + std::string(e.what()));
+        } catch (...) {
+            printError("An unexpected error occurred.");
         }
 
         if (cmd != "clear" && cmd != "cls" && running) {
@@ -2198,6 +2436,64 @@ public:
         SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
     }
 
+    // Check if a command is a built-in Linuxify command
+    bool isBuiltinCommand(const std::string& cmd) {
+        static std::vector<std::string> builtins = {
+            "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy", 
+            "cat", "type", "touch", "chmod", "chown", "clear", "cls", "help", 
+            "nano", "lin", "registry", "history", "whoami", "echo", "env", 
+            "printenv", "export", "which", "ps", "kill", "top", "htop", "jobs", "fg",
+            "grep", "head", "tail", "wc", "sort", "uniq", "find",
+            "lsmem", "free", "lscpu", "lshw", "sysinfo", "lsmount", "lsblk", "df",
+            "lsusb", "lsnet", "lsof", "ip", "ping", "traceroute", "tracert",
+            "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig"
+        };
+        for (const auto& builtin : builtins) {
+            if (cmd == builtin) return true;
+        }
+        return false;
+    }
+
+    // Execute a command and capture its output
+    std::string executeAndCapture(const std::string& cmdStr) {
+        std::string output;
+        
+        // Tokenize to get the command name
+        std::vector<std::string> tokens = tokenize(cmdStr);
+        if (tokens.empty()) return "";
+        
+        std::string cmd = tokens[0];
+        
+        // Check if it's a built-in command
+        if (isBuiltinCommand(cmd)) {
+            // Capture stdout for built-in commands
+            std::ostringstream capturedOutput;
+            std::streambuf* oldCout = std::cout.rdbuf();
+            std::cout.rdbuf(capturedOutput.rdbuf());
+            
+            // Execute the built-in command
+            executeCommand(tokens);
+            
+            // Restore stdout
+            std::cout.rdbuf(oldCout);
+            output = capturedOutput.str();
+        } else {
+            // External command - use _popen
+            std::string fullCmd = "cd /d \"" + currentDir + "\" && " + cmdStr + " 2>&1";
+            
+            FILE* pipe = _popen(fullCmd.c_str(), "r");
+            if (pipe) {
+                char buffer[256];
+                while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                    output += buffer;
+                }
+                _pclose(pipe);
+            }
+        }
+        
+        return output;
+    }
+
     // Parse and handle output redirection (>, >>) and pipes (|)
     bool handleRedirection(const std::string& input) {
         // Check for output redirection first (> or >>)
@@ -2226,7 +2522,10 @@ public:
             
             std::string outputFile = resolvePath(filePart);
             
-            // Redirect stdout to file
+            // Use executeAndCapture to get output from any command
+            std::string output = executeAndCapture(cmdPart);
+            
+            // Write to file
             std::ofstream file;
             if (append) {
                 file.open(outputFile, std::ios::app);
@@ -2239,18 +2538,7 @@ public:
                 return true;
             }
             
-            // Capture stdout
-            std::streambuf* oldCout = std::cout.rdbuf();
-            std::cout.rdbuf(file.rdbuf());
-            
-            // Execute the command
-            std::vector<std::string> tokens = tokenize(cmdPart);
-            if (!tokens.empty()) {
-                executeCommand(tokens);
-            }
-            
-            // Restore stdout
-            std::cout.rdbuf(oldCout);
+            file << output;
             file.close();
             
             return true;
@@ -2281,34 +2569,41 @@ public:
                 
                 std::string& cmd = tokens[0];
                 
-                // Capture output
-                std::ostringstream capturedOutput;
-                std::streambuf* oldCout = std::cout.rdbuf();
-                std::cout.rdbuf(capturedOutput.rdbuf());
-                
-                // Execute with piped input for text commands
-                if (cmd == "grep") {
-                    cmdGrep(tokens, pipedOutput);
-                } else if (cmd == "head") {
-                    cmdHead(tokens, pipedOutput);
-                } else if (cmd == "tail") {
-                    cmdTail(tokens, pipedOutput);
-                } else if (cmd == "wc") {
-                    cmdWc(tokens, pipedOutput);
-                } else if (cmd == "sort") {
-                    cmdSort(tokens, pipedOutput);
-                } else if (cmd == "uniq") {
-                    cmdUniq(tokens, pipedOutput);
+                // For the first command or external commands, use executeAndCapture
+                // For subsequent commands, use built-in text processing with piped input
+                if (i == 0) {
+                    // First command - capture output using _popen
+                    pipedOutput = executeAndCapture(commands[i]);
                 } else {
-                    executeCommand(tokens);
+                    // Subsequent commands - use built-in text processing with piped input
+                    std::ostringstream capturedOutput;
+                    std::streambuf* oldCout = std::cout.rdbuf();
+                    std::cout.rdbuf(capturedOutput.rdbuf());
+                    
+                    if (cmd == "grep") {
+                        cmdGrep(tokens, pipedOutput);
+                    } else if (cmd == "head") {
+                        cmdHead(tokens, pipedOutput);
+                    } else if (cmd == "tail") {
+                        cmdTail(tokens, pipedOutput);
+                    } else if (cmd == "wc") {
+                        cmdWc(tokens, pipedOutput);
+                    } else if (cmd == "sort") {
+                        cmdSort(tokens, pipedOutput);
+                    } else if (cmd == "uniq") {
+                        cmdUniq(tokens, pipedOutput);
+                    } else {
+                        // For other commands, just print the piped input
+                        std::cout << pipedOutput;
+                    }
+                    
+                    std::cout.rdbuf(oldCout);
+                    pipedOutput = capturedOutput.str();
                 }
-                
-                std::cout.rdbuf(oldCout);
-                pipedOutput = capturedOutput.str();
             }
             
-            // Output final result
-            std::cout << pipedOutput;
+            // Output final result with spacing
+            std::cout << std::endl << pipedOutput << std::endl;
             return true;
         }
         

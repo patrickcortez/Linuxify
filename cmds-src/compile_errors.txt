@@ -1,0 +1,459 @@
+﻿g++ : In file included from C:/mingw
+64/mingw64/x86_64-w64-mingw32/includ
+e/minwindef.h:163,
+At line:1 char:1
++ g++ -std=c++17 -static 
+-static-libgcc -static-libstdc++ -o 
+../cmds/lv ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSp 
+   ecified: (In file include...inw  
+  indef.h:163,:String) [], Remote   
+ Exception
+    + FullyQualifiedErrorId : Nativ 
+   eCommandError
+ 
+                 from C:/mingw64/min
+gw64/x86_64-w64-mingw32/include/wind
+ef.h:9,
+                 from C:/mingw64/min
+gw64/x86_64-w64-mingw32/include/wind
+ows.h:69,
+                 from lvc.hpp:22,
+                 from lvc.cpp:5:
+lvc.hpp:209:35: error: expected 
+identifier before '(' token
+  209 |         enum Type { 
+CONTEXT, ADD, DELETE };
+      |                             
+      ^~~~~~
+lvc.hpp:209:35: error: expected '}' 
+before '(' token
+lvc.hpp:209:19: note: to match this 
+'{'
+  209 |         enum Type { 
+CONTEXT, ADD, DELETE };
+      |                   ^
+In file included from C:/mingw64/min
+gw64/x86_64-w64-mingw32/include/_min
+gw.h:10,
+                 from C:/mingw64/min
+gw64/x86_64-w64-mingw32/include/core
+crt.h:10,
+                 from C:/mingw64/min
+gw64/x86_64-w64-mingw32/include/wcha
+r.h:9,
+                 from C:/mingw64/min
+gw64/include/c++/15.2.0/cwchar:49,
+                 from C:/mingw64/min
+gw64/include/c++/15.2.0/bits/postype
+s.h:42,
+                 from C:/mingw64/min
+gw64/include/c++/15.2.0/bits/char_tr
+aits.h:44,
+                 from C:/mingw64/min
+gw64/include/c++/15.2.0/string:44,
+                 from lvc.hpp:8:
+lvc.hpp:209:35: error: expected 
+unqualified-id before numeric 
+constant
+  209 |         enum Type { 
+CONTEXT, ADD, DELETE };
+      |                             
+      ^~~~~~
+lvc.hpp:209:35: error: expected ')' 
+before numeric constant
+lvc.hpp:209:35: note: to match this 
+'('
+  209 |         enum Type { 
+CONTEXT, ADD, DELETE };
+      |                             
+      ^~~~~~
+lvc.hpp:210:9: error: 'Type' does 
+not name a type
+  210 |         Type type;
+      |         ^~~~
+lvc.hpp:227:24: error: 'DiffLine' 
+was not declared in this scope
+  227 |     static 
+std::vector<DiffLine> 
+computeDiff(const std::string& 
+oldContent, const std::string& 
+newContent) {
+      |                        
+^~~~~~~~
+lvc.hpp:227:32: error: template 
+argument 1 is invalid
+  227 |     static 
+std::vector<DiffLine> 
+computeDiff(const std::string& 
+oldContent, const std::string& 
+newContent) {
+      |                             
+   ^
+lvc.hpp:227:32: error: template 
+argument 2 is invalid
+lvc.hpp: In function 'int 
+computeDiff(const std::string&, 
+const std::string&)':
+lvc.hpp:248:21: error: 'DiffLine' 
+was not declared in this scope
+  248 |         
+std::vector<DiffLine> result;
+      |                     ^~~~~~~~
+lvc.hpp:248:29: error: template 
+argument 1 is invalid
+  248 |         
+std::vector<DiffLine> result;
+      |                             
+^
+lvc.hpp:248:29: error: template 
+argument 2 is invalid
+lvc.hpp:250:29: error: template 
+argument 2 is invalid
+  250 |         
+std::vector<DiffLine> temp;
+      |                             
+^
+lvc.hpp:253:21: error: expected ';' 
+before 'dl'
+  253 |             DiffLine dl;
+      |                     ^~~
+      |                     ;
+lvc.hpp:255:17: error: 'dl' was not 
+declared in this scope; did you 
+mean 'dp'?
+  255 |                 dl.type = 
+DiffLine::CONTEXT;
+      |                 ^~
+      |                 dp
+lvc.hpp:255:27: error: 'DiffLine' 
+is not a class, namespace, or 
+enumeration
+  255 |                 dl.type = 
+DiffLine::CONTEXT;
+      |                           
+^~~~~~~~
+lvc.hpp:259:22: error: request for 
+member 'push_back' in 'temp', which 
+is of non-class type 'int'
+  259 |                 
+temp.push_back(dl);
+      |                      
+^~~~~~~~~
+lvc.hpp:262:17: error: 'dl' was not 
+declared in this scope; did you 
+mean 'dp'?
+  262 |                 dl.type = 
+DiffLine::ADD;
+      |                 ^~
+      |                 dp
+lvc.hpp:262:27: error: 'DiffLine' 
+is not a class, namespace, or 
+enumeration
+  262 |                 dl.type = 
+DiffLine::ADD;
+      |                           
+^~~~~~~~
+lvc.hpp:266:22: error: request for 
+member 'push_back' in 'temp', which 
+is of non-class type 'int'
+  266 |                 
+temp.push_back(dl);
+      |                      
+^~~~~~~~~
+lvc.hpp:269:17: error: 'dl' was not 
+declared in this scope; did you 
+mean 'dp'?
+  269 |                 dl.type = 
+DiffLine::DELETE;
+      |                 ^~
+      |                 dp
+lvc.hpp:269:27: error: 'DiffLine' 
+is not a class, namespace, or 
+enumeration
+  269 |                 dl.type = 
+DiffLine::DELETE;
+      |                           
+^~~~~~~~
+lvc.hpp:269:37: error: expected 
+unqualified-id before '(' token
+  269 |                 dl.type = 
+DiffLine::DELETE;
+      |                             
+        ^~~~~~
+lvc.hpp:273:22: error: request for 
+member 'push_back' in 'temp', which 
+is of non-class type 'int'
+  273 |                 
+temp.push_back(dl);
+      |                      
+^~~~~~~~~
+lvc.hpp:279:27: error: request for 
+member 'size' in 'temp', which is 
+of non-class type 'int'
+  279 |         for (int k = 
+temp.size() - 1; k >= 0; k--) {
+      |                           
+^~~~
+lvc.hpp:280:20: error: request for 
+member 'push_back' in 'result', 
+which is of non-class type 'int'
+  280 |             
+result.push_back(temp[k]);
+      |                    ^~~~~~~~~
+lvc.hpp:280:34: error: invalid 
+types 'int[int]' for array subscript
+  280 |             
+result.push_back(temp[k]);
+      |                             
+     ^
+lvc.hpp: At global scope:
+lvc.hpp:287:45: error: 'DiffLine' 
+was not declared in this scope
+  287 |     static void 
+printDiff(const 
+std::vector<DiffLine>& diffLines, 
+const std::string& filename = "") {
+      |                             
+                ^~~~~~~~
+lvc.hpp:287:53: error: template 
+argument 1 is invalid
+  287 |     static void 
+printDiff(const 
+std::vector<DiffLine>& diffLines, 
+const std::string& filename = "") {
+      |                             
+                        ^
+lvc.hpp:287:53: error: template 
+argument 2 is invalid
+lvc.hpp: In function 'void 
+printDiff(const int&, const 
+std::string&)':
+lvc.hpp:300:42: error: request for 
+member 'size' in 'diffLines', which 
+is of non-class type 'const int'
+  300 |         for (size_t i = 0; 
+i < diffLines.size(); i++) {
+      |                             
+             ^~~~
+lvc.hpp:301:41: error: invalid 
+types 'const int[size_t {aka long 
+long unsigned int}]' for array 
+subscript
+  301 |             const auto& 
+line = diffLines[i];
+      |                             
+            ^
+lvc.hpp:304:43: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  304 |             bool isChange = 
+(line.type != DiffLine::CONTEXT);
+      |                             
+              ^~~~~~~~
+      |                             
+              DiffEngine
+lvc.hpp:309:54: error: request for 
+member 'size' in 'diffLines', which 
+is of non-class type 'const int'
+  309 |                 if (idx >= 
+0 && idx < (int)diffLines.size() && 
+diffLines[idx].type != 
+DiffLine::CONTEXT) {
+      |                             
+                         ^~~~
+lvc.hpp:309:73: error: invalid 
+types 'const int[int]' for array 
+subscript
+  309 |                 if (idx >= 
+0 && idx < (int)diffLines.size() && 
+diffLines[idx].type != 
+DiffLine::CONTEXT) {
+      |                             
+                                    
+        ^
+lvc.hpp:309:87: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  309 |                 if (idx >= 
+0 && idx < (int)diffLines.size() && 
+diffLines[idx].type != 
+DiffLine::CONTEXT) {
+      |                             
+                                    
+                      ^~~~~~~~
+      |                             
+                                    
+                      DiffEngine
+lvc.hpp:318:22: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  318 |                 case 
+DiffLine::ADD:
+      |                      
+^~~~~~~~
+      |                      
+DiffEngine
+lvc.hpp:322:22: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  322 |                 case 
+DiffLine::DELETE:
+      |                      
+^~~~~~~~
+      |                      
+DiffEngine
+lvc.hpp:322:32: error: expected 
+unqualified-id before '(' token
+  322 |                 case 
+DiffLine::DELETE:
+      |                             
+   ^~~~~~
+lvc.hpp:326:22: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  326 |                 case 
+DiffLine::CONTEXT:
+      |                      
+^~~~~~~~
+      |                      
+DiffEngine
+lvc.hpp: At global scope:
+lvc.hpp:337:46: error: 'DiffLine' 
+was not declared in this scope
+  337 |     static void 
+printStats(const 
+std::vector<DiffLine>& diffLines) {
+      |                             
+                 ^~~~~~~~
+lvc.hpp:337:54: error: template 
+argument 1 is invalid
+  337 |     static void 
+printStats(const 
+std::vector<DiffLine>& diffLines) {
+      |                             
+                         ^
+lvc.hpp:337:54: error: template 
+argument 2 is invalid
+lvc.hpp: In function 'void 
+printStats(const int&)':
+lvc.hpp:339:33: error: 'begin' was 
+not declared in this scope
+  339 |         for (const auto& 
+line : diffLines) {
+      |                             
+    ^~~~~~~~~
+lvc.hpp:339:33: note: suggested 
+alternatives:
+In file included from C:/mingw64/min
+gw64/include/c++/15.2.0/string:55:
+C:/mingw64/mingw64/include/c++/15.2.
+0/bits/range_access.h:120:37: note: 
+  'std::begin'
+  120 |   template<typename _Tp> 
+const _Tp* begin(const 
+valarray<_Tp>&) noexcept;
+      |                             
+        ^~~~~
+In file included from C:/mingw64/min
+gw64/include/c++/15.2.0/filesystem:5
+5,
+                 from lvc.hpp:13:
+C:/mingw64/mingw64/include/c++/15.2.
+0/bits/fs_dir.h:608:3: note:   
+'std::filesystem::__cxx11::begin'
+  608 |   
+begin(recursive_directory_iterator 
+__iter) noexcept
+      |   ^~~~~
+lvc.hpp:339:33: error: 'end' was 
+not declared in this scope
+  339 |         for (const auto& 
+line : diffLines) {
+      |                             
+    ^~~~~~~~~
+lvc.hpp:339:33: note: suggested 
+alternatives:
+C:/mingw64/mingw64/include/c++/15.2.
+0/bits/range_access.h:122:37: note: 
+  'std::end'
+  122 |   template<typename _Tp> 
+const _Tp* end(const 
+valarray<_Tp>&) noexcept;
+      |                             
+        ^~~
+C:/mingw64/mingw64/include/c++/15.2.
+0/bits/fs_dir.h:613:3: note:   
+'std::filesystem::__cxx11::end'
+  613 |   
+end(recursive_directory_iterator) 
+noexcept
+      |   ^~~
+lvc.hpp:340:30: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  340 |             if (line.type 
+== DiffLine::ADD) added++;
+      |                             
+ ^~~~~~~~
+      |                             
+ DiffEngine
+lvc.hpp:341:35: error: 'DiffLine' 
+has not been declared; did you mean 
+'DiffEngine'?
+  341 |             else if 
+(line.type == DiffLine::DELETE) 
+deleted++;
+      |                             
+      ^~~~~~~~
+      |                             
+      DiffEngine
+lvc.hpp:341:45: error: expected 
+unqualified-id before '(' token
+  341 |             else if 
+(line.type == DiffLine::DELETE) 
+deleted++;
+      |                             
+                ^~~~~~
+lvc.hpp: At global scope:
+lvc.hpp:353:1: error: expected 
+declaration before '}' token
+  353 | };
+      | ^
+lvc.hpp: In member function 'void 
+LVC::diff(const std::string&, const 
+std::string&)':
+lvc.hpp:938:54: error: 
+'computeDiff' is not a member of 
+'DiffEngine'
+  938 |                         
+auto diffLines = 
+DiffEngine::computeDiff(oldContent, 
+newContent);
+      |                             
+                         ^~~~~~~~~~~
+lvc.hpp:939:37: error: 'printDiff' 
+is not a member of 'DiffEngine'
+  939 |                         
+DiffEngine::printDiff(diffLines, 
+path);
+      |                             
+        ^~~~~~~~~
+lvc.hpp:1001:50: error: 
+'computeDiff' is not a member of 
+'DiffEngine'
+ 1001 |                     auto 
+diffLines = 
+DiffEngine::computeDiff(content1, 
+content2);
+      |                             
+                     ^~~~~~~~~~~
+lvc.hpp:1002:33: error: 'printDiff' 
+is not a member of 'DiffEngine'
+ 1002 |                     
+DiffEngine::printDiff(diffLines, 
+path);
+      |                             
+    ^~~~~~~~~

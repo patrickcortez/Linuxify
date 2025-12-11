@@ -50,7 +50,8 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "SUCCESS! Installer created at:" -ForegroundColor Green
     Write-Host "installer\output\LinuxifySetup.exe" -ForegroundColor Cyan
-} else {
+}
+else {
     Write-Host ""
     Write-Host "Build failed with exit code: $LASTEXITCODE" -ForegroundColor Red
 }

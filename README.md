@@ -36,3 +36,15 @@ Windows kernel with linux syntax for its commands.
 - [X] Piping: command | command
 
 
+## Phase 4: System Information, Networking and Error handling
+
+- [X] System Info: lsmem, lscpu, lshw, lsmount, lsof, lsblk, lsusb, lsnet
+- [X] Networking: ip, ping, traceroute, nslookup, dig, curl, wget, netstat
+- [X] Custom Networking: net show, net connect, net disconnect, net status
+- [X] Error handling: Comprehensive try-catch with graceful error messages
+
+# Phase 5: Interpreter and Shell Scripting
+
+- [ ] Interpreter: basically it will be called bash and it will run sh(shell) scripts
+- [ ] Shell Scripting: implement all shell syntaxes and features,
+- [ ] Implement source,test, function and alias.
