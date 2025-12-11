@@ -2460,10 +2460,50 @@ private:
         
         std::string action = args[1];
         
-        // Get path to lish.exe
+        // Get path to lish.exe and current exe
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
         fs::path lishPath = fs::path(exePath).parent_path() / "cmds" / "lish.exe";
+        
+        // Check if running as admin for install/uninstall
+        if (action == "install" || action == "uninstall") {
+            BOOL isAdmin = FALSE;
+            PSID adminGroup = NULL;
+            SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+            
+            if (AllocateAndInitializeSid(&ntAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+                CheckTokenMembership(NULL, adminGroup, &isAdmin);
+                FreeSid(adminGroup);
+            }
+            
+            if (!isAdmin) {
+                std::cout << "Administrator privileges required. Requesting elevation...\n";
+                
+                // Build command line for elevated process
+                std::string params = "-c \"setup " + action + "\"";
+                
+                SHELLEXECUTEINFOA sei = { sizeof(sei) };
+                sei.lpVerb = "runas";
+                sei.lpFile = exePath;
+                sei.lpParameters = params.c_str();
+                sei.hwnd = NULL;
+                sei.nShow = SW_SHOWNORMAL;
+                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+                
+                if (ShellExecuteExA(&sei)) {
+                    // Wait for elevated process to complete
+                    if (sei.hProcess) {
+                        WaitForSingleObject(sei.hProcess, INFINITE);
+                        CloseHandle(sei.hProcess);
+                    }
+                    std::cout << "\nSetup completed. You may need to restart your terminal.\n";
+                } else {
+                    printError("Failed to get administrator privileges.");
+                }
+                return;
+            }
+        }
         
         if (action == "install") {
             if (!fs::exists(lishPath)) {
@@ -2512,9 +2552,11 @@ private:
                 SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
                 std::cout << "\nSuccess! .sh files are now associated with lish.exe\n";
                 SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                std::cout << "You can now:\n";
-                std::cout << "  - Double-click .sh files to run them\n";
-                std::cout << "  - Run 'script.sh' from cmd or PowerShell\n";
+                std::cout << "\nHow to run .sh scripts:\n";
+                std::cout << "  From cmd:         script.sh  or  .\\script.sh\n";
+                std::cout << "  From PowerShell:  lish script.sh  or  cmd /c .\\script.sh\n";
+                std::cout << "  Double-click:     Works in Explorer\n";
+                std::cout << "  From Linuxify:    ./script.sh\n";
                 std::cout << "\nNote: Scripts must have a shebang (e.g., #!lish)\n";
                 if (needsPathext && result3 == 0) {
                     std::cout << "\nRestart your terminal for PATHEXT changes to take effect.\n";
