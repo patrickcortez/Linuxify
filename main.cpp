@@ -97,6 +97,200 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
     }
 
+    // Syntax highlighting colors
+    static const WORD COLOR_COMMAND = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;  // Bright Yellow
+    static const WORD COLOR_ARG = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;  // Cyan (arguments)
+    static const WORD COLOR_STRING = FOREGROUND_RED | FOREGROUND_INTENSITY;  // Red (strings in quotes)
+    static const WORD COLOR_FLAG = FOREGROUND_INTENSITY;  // Dark grey (flags like -la)
+    static const WORD COLOR_DEFAULT = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;  // White
+
+    // Re-render input line with syntax highlighting
+    void renderInputWithHighlight(const std::string& input, int cursorPos) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        
+        // Move cursor to start of input (after prompt)
+        // We need to track where input starts
+        COORD startPos = csbi.dwCursorPosition;
+        startPos.X = 0;
+        
+        // Clear the line from start of input
+        DWORD written;
+        FillConsoleOutputCharacterA(hConsole, ' ', csbi.dwSize.X, startPos, &written);
+        SetConsoleCursorPosition(hConsole, startPos);
+        
+        // Reprint prompt
+        printPrompt();
+        
+        if (input.empty()) return;
+        
+        // Parse and colorize
+        bool inQuotes = false;
+        char quoteChar = '\0';
+        bool isFirstToken = true;
+        size_t tokenStart = 0;
+        
+        for (size_t i = 0; i < input.length(); i++) {
+            char c = input[i];
+            
+            // Handle quotes
+            if ((c == '"' || c == '\'') && !inQuotes) {
+                inQuotes = true;
+                quoteChar = c;
+                SetConsoleTextAttribute(hConsole, COLOR_STRING);
+                std::cout << c;
+                continue;
+            }
+            if (c == quoteChar && inQuotes) {
+                std::cout << c;
+                inQuotes = false;
+                quoteChar = '\0';
+                SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
+                continue;
+            }
+            
+            if (inQuotes) {
+                std::cout << c;
+                continue;
+            }
+            
+            // Handle spaces (token separator)
+            if (c == ' ') {
+                SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
+                std::cout << c;
+                isFirstToken = false;
+                tokenStart = i + 1;
+                continue;
+            }
+            
+            // Determine color based on context
+            if (isFirstToken) {
+                // Command (first token)
+                SetConsoleTextAttribute(hConsole, COLOR_COMMAND);
+            } else if (c == '-' && (i == tokenStart || (i > 0 && input[i-1] == ' '))) {
+                // Flag starting with -
+                SetConsoleTextAttribute(hConsole, COLOR_FLAG);
+            } else if (i > 0 && input[i-1] == '-') {
+                // Continue flag
+                SetConsoleTextAttribute(hConsole, COLOR_FLAG);
+            } else {
+                // Check if we're in a flag token
+                bool isInFlag = false;
+                for (size_t j = tokenStart; j < i; j++) {
+                    if (input[j] == '-') {
+                        isInFlag = true;
+                        break;
+                    }
+                }
+                if (isInFlag) {
+                    SetConsoleTextAttribute(hConsole, COLOR_FLAG);
+                } else {
+                    SetConsoleTextAttribute(hConsole, COLOR_ARG);
+                }
+            }
+            
+            std::cout << c;
+        }
+        
+        SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
+    }
+
+    // Read input with syntax highlighting
+    std::string readInputWithHighlight() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
+        
+        std::string input;
+        int cursorPos = 0;
+        int historyIndex = -1;
+        
+        // Save original console mode
+        DWORD originalMode;
+        GetConsoleMode(hInput, &originalMode);
+        
+        // Enable raw input mode
+        SetConsoleMode(hInput, ENABLE_PROCESSED_INPUT);
+        
+        while (true) {
+            INPUT_RECORD ir;
+            DWORD read;
+            
+            if (!ReadConsoleInputA(hInput, &ir, 1, &read) || read == 0) continue;
+            
+            if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
+            
+            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
+            char ch = ir.Event.KeyEvent.uChar.AsciiChar;
+            
+            if (vk == VK_RETURN) {
+                // Enter - submit
+                std::cout << std::endl;
+                break;
+            } else if (vk == VK_BACK) {
+                // Backspace
+                if (cursorPos > 0) {
+                    input.erase(cursorPos - 1, 1);
+                    cursorPos--;
+                    renderInputWithHighlight(input, cursorPos);
+                }
+            } else if (vk == VK_DELETE) {
+                // Delete
+                if (cursorPos < (int)input.length()) {
+                    input.erase(cursorPos, 1);
+                    renderInputWithHighlight(input, cursorPos);
+                }
+            } else if (vk == VK_LEFT) {
+                // Left arrow
+                if (cursorPos > 0) cursorPos--;
+            } else if (vk == VK_RIGHT) {
+                // Right arrow
+                if (cursorPos < (int)input.length()) cursorPos++;
+            } else if (vk == VK_UP) {
+                // History up
+                if (!commandHistory.empty() && historyIndex < (int)commandHistory.size() - 1) {
+                    historyIndex++;
+                    input = commandHistory[commandHistory.size() - 1 - historyIndex];
+                    cursorPos = (int)input.length();
+                    renderInputWithHighlight(input, cursorPos);
+                }
+            } else if (vk == VK_DOWN) {
+                // History down
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    input = commandHistory[commandHistory.size() - 1 - historyIndex];
+                    cursorPos = (int)input.length();
+                    renderInputWithHighlight(input, cursorPos);
+                } else if (historyIndex == 0) {
+                    historyIndex = -1;
+                    input.clear();
+                    cursorPos = 0;
+                    renderInputWithHighlight(input, cursorPos);
+                }
+            } else if (vk == VK_HOME) {
+                cursorPos = 0;
+            } else if (vk == VK_END) {
+                cursorPos = (int)input.length();
+            } else if (vk == 'C' && (ir.Event.KeyEvent.dwControlKeyState & LEFT_CTRL_PRESSED)) {
+                // Ctrl+C
+                std::cout << "^C" << std::endl;
+                input.clear();
+                cursorPos = 0;
+                break;
+            } else if (ch >= 32 && ch < 127) {
+                // Printable character
+                input.insert(cursorPos, 1, ch);
+                cursorPos++;
+                renderInputWithHighlight(input, cursorPos);
+            }
+        }
+        
+        // Restore console mode
+        SetConsoleMode(hInput, originalMode);
+        
+        return input;
+    }
+
     std::string resolvePath(const std::string& path) {
         if (path.empty()) {
             return currentDir;
@@ -992,7 +1186,7 @@ private:
         std::cout << "The following will be removed:" << std::endl;
         std::cout << "  - Linuxify executable and related files" << std::endl;
         std::cout << "  - Linuxify from your system PATH" << std::endl;
-        std::cout << "  - Windows Terminal integration (if installed)" << std::endl;
+        std::cout << "  - Windows Terminal integration" << std::endl;
         std::cout << std::endl;
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
@@ -2209,11 +2403,15 @@ private:
                 g_registry.addCommand(tokens[2], tokens[3]);
                 printSuccess("Added: " + tokens[2] + " -> " + tokens[3]);
                 std::cout << "Saved to: " << g_registry.getDbPath() << std::endl;
+            } else if (tokens.size() > 2 && (tokens[1] == "delete" || tokens[1] == "remove" || tokens[1] == "rm")) {
+                g_registry.removeCommand(tokens[2]);
+                printSuccess("Removed: " + tokens[2]);
             } else {
                 std::cout << "Registry Commands:\n";
-                std::cout << "  registry refresh      Scan system for installed commands\n";
-                std::cout << "  registry list         Show all registered commands\n";
-                std::cout << "  registry add <cmd> <path>  Add custom command\n";
+                std::cout << "  registry refresh          Scan system for installed commands\n";
+                std::cout << "  registry list             Show all registered commands\n";
+                std::cout << "  registry add <cmd> <path> Add custom command\n";
+                std::cout << "  registry delete <cmd>     Remove a command\n";
             }
         } else if (cmd == "history") {
             cmdHistory(tokens);
@@ -2622,18 +2820,47 @@ public:
         
         system("cls");
         
+        // Print Tux penguin with colors (yellow body, white eyes)
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "         .---.         ";
         SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << R"(
-  _     _                  _  __       
- | |   (_)_ __  _   ___  _(_)/ _|_   _ 
- | |   | | '_ \| | | \ \/ / | |_| | | |
- | |___| | | | | |_| |>  <| |  _| |_| |
- |_____|_|_| |_|\__,_/_/\_\_|_|  \__, |
-                                 |___/ 
-)" << std::endl;
+        std::cout << "  _     _                  _  __\n";
         
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        /     \\        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |   (_)_ __  _   ___  _(_)/ _|_   _\n";
+        
+        // Eyes line - split for white eyes
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        \\.";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY); // White
+        std::cout << "@-@";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "./        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |   | | '_ \\| | | \\ \\/ / | |_| | | |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        /`\\_/`\\        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |___| | | | | |_| |>  <| |  _| |_| |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "       //  _  \\\\       ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " |_____|_|_| |_|\\__,_/_/\\_\\_|_|  \\__, |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "      | \\     )|_      ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "                                 |___/\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "     /`\\_`>  <_/ \\     \n";
+        std::cout << "     \\__/'---'\\__/     ";
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "                              By Cortez\n" << std::endl;
+        std::cout << "                             By Cortez\n" << std::endl;
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  Linux Commands for Windows - Type 'help' for commands\n" << std::endl;
@@ -2643,18 +2870,13 @@ public:
         while (running) {
             printPrompt();
             
-            if (!std::getline(std::cin, input)) {
-                // Check if this was Ctrl+C (cin would be in fail state)
-                if (std::cin.fail()) {
-                    std::cin.clear();  // Clear error state
-                    std::cin.ignore(10000, '\n');  // Clear input buffer
-                    continue;  // Continue the loop instead of breaking
-                }
-                break;  // Only break on actual EOF
-            }
+            // Use syntax-highlighted input
+            input = readInputWithHighlight();
 
             input.erase(0, input.find_first_not_of(" \t"));
-            input.erase(input.find_last_not_of(" \t") + 1);
+            if (!input.empty()) {
+                input.erase(input.find_last_not_of(" \t") + 1);
+            }
 
             if (input.empty()) {
                 continue;

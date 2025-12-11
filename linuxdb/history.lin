@@ -231,3 +231,26 @@ lvc add -A
 lvc commit -v 1.1
 lvc versions
 lvc diff 1.0 1.1
+help
+uninstall
+exit
+sl
+help
+ps
+ps | grep -n "chrome"
+exit
+help
+g++
+test
+lvc
+exit
+registry
+registry delete test
+test
+exit
+exit
+exit
+help
+lvc show
+exit
+clear

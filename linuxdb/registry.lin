@@ -26,7 +26,6 @@ scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
 tar=C:\WINDOWS\system32\tar.exe
-test=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
