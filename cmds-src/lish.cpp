@@ -2,7 +2,7 @@
 // A shell script interpreter with bash-like syntax for Linuxify
 // Compile: g++ -std=c++17 -static -o lish.exe lish.cpp
 
-#include "bash.hpp"
+#include "lish.hpp"
 #include <iostream>
 #include <string>
 

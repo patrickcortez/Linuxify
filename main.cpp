@@ -97,6 +97,66 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
     }
 
+    // Execute a command using CreateProcessA (faster, more control than system())
+    // Returns exit code, -1 on failure
+    int runProcess(const std::string& cmdLine, const std::string& workDir = "", bool wait = true) {
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[8192];
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+        
+        const char* dir = workDir.empty() ? currentDir.c_str() : workDir.c_str();
+        
+        if (!CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            TRUE,   // Inherit handles for stdin/stdout
+            0,
+            NULL,
+            dir,
+            &si,
+            &pi
+        )) {
+            return -1;
+        }
+        
+        int exitCode = 0;
+        if (wait) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            DWORD code;
+            GetExitCodeProcess(pi.hProcess, &code);
+            exitCode = (int)code;
+        }
+        
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        
+        return exitCode;
+    }
+    
+    // Clear console screen (faster than system("cls"))
+    void clearScreen() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        DWORD count;
+        DWORD cellCount = csbi.dwSize.X * csbi.dwSize.Y;
+        COORD homeCoords = {0, 0};
+        FillConsoleOutputCharacterA(hConsole, ' ', cellCount, homeCoords, &count);
+        FillConsoleOutputAttribute(hConsole, csbi.wAttributes, cellCount, homeCoords, &count);
+        SetConsoleCursorPosition(hConsole, homeCoords);
+    }
+
     // Syntax highlighting colors
     static const WORD COLOR_COMMAND = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;  // Bright Yellow
     static const WORD COLOR_ARG = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;  // Cyan (arguments)
@@ -482,8 +542,14 @@ private:
 
                     if (fs::is_directory(entry)) {
                         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-                    } else if ((p & fs::perms::owner_exec) != fs::perms::none) {
-                        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                    } else {
+                        // Check for executable extensions
+                        std::string ext = entry.path().extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || 
+                            ext == ".com" || ext == ".sh" || ext == ".ps1") {
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                        }
                     }
 
                     std::cout << entry.path().filename().string();
@@ -511,9 +577,11 @@ private:
                     if (fs::is_directory(entry)) {
                         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
                     } else {
-                        auto status = fs::status(entry);
-                        auto p = status.permissions();
-                        if ((p & fs::perms::owner_exec) != fs::perms::none) {
+                        // Check for executable extensions
+                        std::string ext = entry.path().extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || 
+                            ext == ".com" || ext == ".sh" || ext == ".ps1") {
                             SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
                         }
                     }
@@ -747,7 +815,7 @@ private:
     }
 
     void cmdClear(const std::vector<std::string>& args) {
-        system("cls");
+        clearScreen();
     }
 
     // touch - create files or update timestamps
@@ -2371,6 +2439,113 @@ private:
         std::cout << "  exit";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Exit the shell\n\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "Setup:\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "  Run 'setup install' to register .sh files with Windows.\n\n";
+    }
+
+    // Setup command - register file associations
+    void cmdSetup(const std::vector<std::string>& args) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        if (args.size() < 2) {
+            std::cout << "Setup Commands:\n";
+            std::cout << "  setup install      Register .sh files with Windows (requires admin)\n";
+            std::cout << "  setup uninstall    Remove .sh file association\n";
+            std::cout << "  setup status       Check current file association\n";
+            return;
+        }
+        
+        std::string action = args[1];
+        
+        // Get path to lish.exe
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path lishPath = fs::path(exePath).parent_path() / "cmds" / "lish.exe";
+        
+        if (action == "install") {
+            if (!fs::exists(lishPath)) {
+                printError("lish.exe not found at: " + lishPath.string());
+                return;
+            }
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Registering .sh files with Linuxify Shell...\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            // Create file type using ftype and assoc commands
+            std::string ftypeCmd = "ftype LishScript=\"" + lishPath.string() + "\" \"%1\" %*";
+            std::string assocCmd = "assoc .sh=LishScript";
+            
+            // Run as admin commands
+            int result1 = runProcess("cmd /c " + ftypeCmd);
+            int result2 = runProcess("cmd /c " + assocCmd);
+            
+            // Add .SH to PATHEXT for PowerShell compatibility
+            std::cout << "Adding .SH to PATHEXT for PowerShell...\n";
+            
+            // Check if .SH is already in PATHEXT
+            char* pathext = nullptr;
+            size_t pathextLen = 0;
+            _dupenv_s(&pathext, &pathextLen, "PATHEXT");
+            
+            bool needsPathext = true;
+            if (pathext) {
+                std::string pathextStr = pathext;
+                std::transform(pathextStr.begin(), pathextStr.end(), pathextStr.begin(), ::toupper);
+                if (pathextStr.find(".SH") != std::string::npos) {
+                    needsPathext = false;
+                    std::cout << ".SH already in PATHEXT\n";
+                }
+                free(pathext);
+            }
+            
+            int result3 = 0;
+            if (needsPathext) {
+                // Add .SH to system PATHEXT (requires admin)
+                result3 = runProcess("cmd /c setx PATHEXT \"%PATHEXT%;.SH\" /M");
+            }
+            
+            if (result1 == 0 && result2 == 0) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "\nSuccess! .sh files are now associated with lish.exe\n";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << "You can now:\n";
+                std::cout << "  - Double-click .sh files to run them\n";
+                std::cout << "  - Run 'script.sh' from cmd or PowerShell\n";
+                std::cout << "\nNote: Scripts must have a shebang (e.g., #!lish)\n";
+                if (needsPathext && result3 == 0) {
+                    std::cout << "\nRestart your terminal for PATHEXT changes to take effect.\n";
+                }
+            } else {
+                printError("Failed to register. Try running as Administrator.");
+            }
+            
+        } else if (action == "uninstall") {
+            std::cout << "Removing .sh file association...\n";
+            
+            runProcess("cmd /c assoc .sh=");
+            runProcess("cmd /c ftype LishScript=");
+            
+            printSuccess("File association removed.");
+            std::cout << "\nNote: .SH was added to PATHEXT. To remove it:\n";
+            std::cout << "  1. Open System Properties > Environment Variables\n";
+            std::cout << "  2. Edit PATHEXT and remove ;.SH\n";
+            
+        } else if (action == "status") {
+            std::cout << "Checking .sh file association...\n\n";
+            
+            // Check current association
+            runProcess("cmd /c assoc .sh 2>nul");
+            runProcess("cmd /c ftype LishScript 2>nul");
+            
+            std::cout << "\nlish.exe location: " << lishPath.string() << "\n";
+            std::cout << "Exists: " << (fs::exists(lishPath) ? "Yes" : "No") << "\n";
+        } else {
+            printError("Unknown setup action: " + action);
+        }
     }
 
     void executeCommand(const std::vector<std::string>& tokens) {
@@ -2414,9 +2589,11 @@ private:
             if (tokens.size() > 1) {
                 nanoCmd += " \"" + resolvePath(tokens[1]) + "\"";
             }
-            system(nanoCmd.c_str());
+            runProcess(nanoCmd);
         } else if (cmd == "lin") {
             cmdLin(tokens);
+        } else if (cmd == "setup") {
+            cmdSetup(tokens);
         } else if (cmd == "registry") {
             // Registry management commands
             if (tokens.size() > 1 && tokens[1] == "refresh") {
@@ -2636,6 +2813,7 @@ private:
         if (ext == ".sh") {
             // Parse shebang to determine interpreter - REQUIRED
             std::string interpreterPath;
+            std::string interpreterSpec;  // Could be registry name or absolute path
             bool hasShebang = false;
             
             std::ifstream scriptFile(fullPath);
@@ -2652,29 +2830,44 @@ private:
                     shebang.erase(0, shebang.find_first_not_of(" \t\r\n"));
                     shebang.erase(shebang.find_last_not_of(" \t\r\n") + 1);
                     
-                    // Get the interpreter path (first word, rest are args)
+                    // Get the interpreter spec (first word, rest are args)
                     size_t spacePos = shebang.find(' ');
-                    interpreterPath = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
+                    interpreterSpec = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
                 }
             }
             
             // Shebang is required
             if (!hasShebang) {
                 printError("Script missing shebang line: " + path);
-                printError("Add a shebang at the start of the file, e.g.: #!/path/to/lish.exe");
+                printError("Add a shebang: #!<interpreter> (registry name or absolute path)");
+                printError("Example: #!lish  or  #!C:\\path\\to\\interpreter.exe");
                 return;
             }
             
-            // Interpreter path must exist (must be a valid Windows path)
-            if (interpreterPath.empty()) {
-                printError("Invalid shebang - no interpreter path specified");
+            if (interpreterSpec.empty()) {
+                printError("Invalid shebang - no interpreter specified");
                 return;
             }
             
-            if (!fs::exists(interpreterPath)) {
-                printError("Interpreter not found: " + interpreterPath);
-                printError("Shebang must specify an absolute Windows path to an existing interpreter");
-                return;
+            // Check if it's an absolute path or a registry name
+            fs::path specPath(interpreterSpec);
+            if (specPath.is_absolute() && fs::exists(interpreterSpec)) {
+                // Direct absolute path
+                interpreterPath = interpreterSpec;
+            } else {
+                // Try to look up in registry
+                std::string regPath = g_registry.getExecutablePath(interpreterSpec);
+                if (!regPath.empty() && fs::exists(regPath)) {
+                    interpreterPath = regPath;
+                } else if (fs::exists(interpreterSpec)) {
+                    // Relative path that exists
+                    interpreterPath = fs::absolute(interpreterSpec).string();
+                } else {
+                    printError("Interpreter not found: " + interpreterSpec);
+                    printError("Either add it to registry: registry add " + interpreterSpec + " <path>");
+                    printError("Or use an absolute path in the shebang");
+                    return;
+                }
             }
             
             cmdLine = "\"" + interpreterPath + "\" \"" + fullPath + "\"";
@@ -2919,7 +3112,7 @@ public:
         // Load command history
         loadHistory();
         
-        system("cls");
+        clearScreen();
         
         // Print Tux penguin with colors (yellow body, white eyes)
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow

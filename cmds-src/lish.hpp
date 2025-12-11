@@ -879,6 +879,56 @@ private:
         builtins["test"] = [this](const std::vector<std::string>& args) {
             return executeTest(args);
         };
+        
+        builtins["pwd"] = [this](const std::vector<std::string>&) {
+            std::cout << currentDir << "\n";
+            return 0;
+        };
+        
+        builtins["help"] = [](const std::vector<std::string>&) {
+            HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Linuxify Shell (lish) Built-in Commands:\n\n";
+            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            std::cout << "  echo <args>       Print arguments to stdout\n";
+            std::cout << "  cd <dir>          Change current directory\n";
+            std::cout << "  pwd               Print working directory\n";
+            std::cout << "  export VAR=val    Set environment variable\n";
+            std::cout << "  set               Display all variables\n";
+            std::cout << "  exit [code]       Exit the shell\n";
+            std::cout << "  test / [ ... ]    Evaluate conditional expressions\n";
+            std::cout << "  true              Return exit code 0\n";
+            std::cout << "  false             Return exit code 1\n";
+            std::cout << "\n";
+            
+            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Script Features:\n";
+            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            std::cout << "  Variables         NAME=\"value\", $NAME, ${NAME}\n";
+            std::cout << "  If/Else           if [ cond ]; then ... fi\n";
+            std::cout << "  For Loop          for i in 1 2 3; do ... done\n";
+            std::cout << "  While Loop        while [ cond ]; do ... done\n";
+            std::cout << "  Pipes             cmd1 | cmd2\n";
+            std::cout << "  Comments          # comment\n";
+            std::cout << "\n";
+            
+            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Test Operators:\n";
+            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            std::cout << "  -f FILE           File exists\n";
+            std::cout << "  -d FILE           Directory exists\n";
+            std::cout << "  -e FILE           Path exists\n";
+            std::cout << "  -z STRING         String is empty\n";
+            std::cout << "  -n STRING         String is not empty\n";
+            std::cout << "  a = b             Strings equal\n";
+            std::cout << "  a -eq b           Numbers equal\n";
+            std::cout << "  a -lt/-gt b       Less/Greater than\n";
+            
+            return 0;
+        };
     }
     
     // Expand variables in a string
@@ -968,7 +1018,7 @@ private:
         return 1;
     }
     
-    // Execute external command
+    // Execute external command using CreateProcessA
     int executeExternal(const std::vector<std::string>& args) {
         if (args.empty()) return 0;
         
@@ -983,9 +1033,43 @@ private:
             }
         }
         
-        // Use system() for simplicity - can be improved with CreateProcess
-        int result = system(cmdLine.c_str());
-        return result;
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[8192];
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+        
+        if (!CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            TRUE,   // Inherit handles
+            0,
+            NULL,
+            currentDir.c_str(),
+            &si,
+            &pi
+        )) {
+            std::cerr << "lish: command not found: " << args[0] << "\n";
+            return 127;
+        }
+        
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        
+        return (int)exitCode;
     }
 
 public:
@@ -1139,10 +1223,93 @@ public:
     int runScript(const std::string& filename) {
         std::ifstream file(filename);
         if (!file) {
-            std::cerr << "bash: " << filename << ": No such file\n";
+            std::cerr << "lish: " << filename << ": No such file\n";
             return 1;
         }
         
+        // Read first line to check shebang
+        std::string firstLine;
+        std::getline(file, firstLine);
+        
+        // Check for shebang
+        if (firstLine.size() > 2 && firstLine[0] == '#' && firstLine[1] == '!') {
+            std::string shebang = firstLine.substr(2);
+            // Trim whitespace
+            shebang.erase(0, shebang.find_first_not_of(" \t\r\n"));
+            shebang.erase(shebang.find_last_not_of(" \t\r\n") + 1);
+            
+            // Get interpreter name
+            size_t spacePos = shebang.find(' ');
+            std::string interpreterSpec = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
+            
+            // Get just the filename for comparison
+            std::string interpreterName = interpreterSpec;
+            size_t lastSlash = interpreterSpec.find_last_of("/\\");
+            if (lastSlash != std::string::npos) {
+                interpreterName = interpreterSpec.substr(lastSlash + 1);
+            }
+            std::transform(interpreterName.begin(), interpreterName.end(), interpreterName.begin(), ::tolower);
+            
+            // Remove .exe if present
+            if (interpreterName.size() > 4 && interpreterName.substr(interpreterName.size() - 4) == ".exe") {
+                interpreterName = interpreterName.substr(0, interpreterName.size() - 4);
+            }
+            
+            // If it's not lish/bash/sh, hand off to the other interpreter
+            if (interpreterName != "lish" && interpreterName != "bash" && interpreterName != "sh") {
+                // Find the interpreter
+                std::string interpreterPath;
+                
+                // Check if absolute path exists
+                if (GetFileAttributesA(interpreterSpec.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    interpreterPath = interpreterSpec;
+                } else {
+                    // Try to find in PATH
+                    char pathBuf[MAX_PATH];
+                    DWORD result = SearchPathA(NULL, interpreterName.c_str(), ".exe", MAX_PATH, pathBuf, NULL);
+                    if (result > 0) {
+                        interpreterPath = pathBuf;
+                    }
+                }
+                
+                if (!interpreterPath.empty()) {
+                    // Execute with the other interpreter
+                    std::string cmdLine = "\"" + interpreterPath + "\" \"" + filename + "\"";
+                    
+                    STARTUPINFOA si;
+                    PROCESS_INFORMATION pi;
+                    ZeroMemory(&si, sizeof(si));
+                    si.cb = sizeof(si);
+                    si.dwFlags = STARTF_USESTDHANDLES;
+                    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+                    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+                    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+                    ZeroMemory(&pi, sizeof(pi));
+                    
+                    char cmdBuffer[4096];
+                    strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+                    
+                    if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+                        WaitForSingleObject(pi.hProcess, INFINITE);
+                        DWORD exitCode;
+                        GetExitCodeProcess(pi.hProcess, &exitCode);
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+                        return (int)exitCode;
+                    } else {
+                        std::cerr << "lish: cannot execute interpreter: " << interpreterSpec << "\n";
+                        return 127;
+                    }
+                } else {
+                    std::cerr << "lish: interpreter not found: " << interpreterSpec << "\n";
+                    return 127;
+                }
+            }
+        }
+        
+        // Reset file and read all content
+        file.clear();
+        file.seekg(0);
         std::stringstream buffer;
         buffer << file.rdbuf();
         return runCode(buffer.str());
@@ -1169,20 +1336,48 @@ public:
             
             return executor.run(program);
         } catch (const std::exception& e) {
-            std::cerr << "bash: error: " << e.what() << "\n";
+            std::cerr << "lish: error: " << e.what() << "\n";
             return 1;
         }
     }
     
     void interactive() {
-        std::cout << "bash: entering interactive mode. Type 'exit' to quit.\n";
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        // Print header
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "Linuxify Shell (lish) - Interactive Mode\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "Type 'exit' to quit, 'help' for commands.\n\n";
+        
         std::string line;
         
         while (true) {
+            // Get current directory
+            char cwd[MAX_PATH];
+            GetCurrentDirectoryA(MAX_PATH, cwd);
+            
+            // Print colored prompt
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "lish";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            std::cout << ":";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            std::cout << cwd;
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
             std::cout << "$ ";
+            
             if (!std::getline(std::cin, line)) break;
+            
+            // Trim whitespace
+            line.erase(0, line.find_first_not_of(" \t\r\n"));
+            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            
+            if (line.empty()) continue;
             if (line == "exit") break;
+            
             runCode(line);
+            std::cout << std::endl;
         }
     }
 };

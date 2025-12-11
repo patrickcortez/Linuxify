@@ -12,6 +12,7 @@ gcc=C:\mingw64\mingw64\bin\gcc.exe
 git=C:\Program Files\Git\cmd\git.exe
 java=C:\Program Files (x86)\Common Files\Oracle\Java\javapath\java.exe
 javac=C:\Users\patri\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\javac.exe
+lish=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\cmds\lish.exe
 mysql=C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe

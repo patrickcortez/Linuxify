@@ -356,3 +356,36 @@ nano pythonic.sh
 which python
 ./pythonic.sh
 nano pythonic.sh
+exit
+exit
+which lish
+lish
+clear
+cd test
+ls
+nano pythonic.sh
+./pythonic.sh
+nano pythonic.sh
+./pythonic.sh
+registry show
+registry list
+which lish
+registry add lish "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\cmds\lish.exe"
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test"
+./test.sh
+ls
+./simple.sh
+lish
+exit
+cd test
+ls
+nano pythonic.sh
+./pythonic.sh
+lish
+lish
+exit
+help
+setup install
+setup install
+exit
+setup install

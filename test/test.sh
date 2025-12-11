@@ -1,4 +1,4 @@
-#!C:\Users\patri\OneDrive\Documents\Projects\Linuxify\cmds\lish.exe
+#!lish
 # Test script for Linuxify Shell (lish) Interpreter
 
 # Test 1: Variables

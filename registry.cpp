@@ -308,6 +308,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
     if (ext == ".sh") {
         // Parse shebang to determine interpreter - REQUIRED
         std::string interpreterPath;
+        std::string interpreterSpec;  // Could be registry name or absolute path
         bool hasShebang = false;
         
         std::ifstream scriptFile(exePath);
@@ -324,29 +325,44 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
                 shebang.erase(0, shebang.find_first_not_of(" \t\r\n"));
                 shebang.erase(shebang.find_last_not_of(" \t\r\n") + 1);
                 
-                // Get the interpreter path (first word, rest are args)
+                // Get the interpreter spec (first word, rest are args)
                 size_t spacePos = shebang.find(' ');
-                interpreterPath = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
+                interpreterSpec = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
             }
         }
         
         // Shebang is required
         if (!hasShebang) {
             std::cerr << "Script missing shebang line: " << exePath << std::endl;
-            std::cerr << "Add a shebang at the start of the file, e.g.: #!/path/to/lish.exe" << std::endl;
+            std::cerr << "Add a shebang: #!<interpreter> (registry name or absolute path)" << std::endl;
+            std::cerr << "Example: #!lish  or  #!C:\\path\\to\\interpreter.exe" << std::endl;
             return false;
         }
         
-        // Interpreter path must exist (must be a valid Windows path)
-        if (interpreterPath.empty()) {
-            std::cerr << "Invalid shebang - no interpreter path specified" << std::endl;
+        if (interpreterSpec.empty()) {
+            std::cerr << "Invalid shebang - no interpreter specified" << std::endl;
             return false;
         }
         
-        if (!fs::exists(interpreterPath)) {
-            std::cerr << "Interpreter not found: " << interpreterPath << std::endl;
-            std::cerr << "Shebang must specify an absolute Windows path to an existing interpreter" << std::endl;
-            return false;
+        // Check if it's an absolute path or a registry name
+        fs::path specPath(interpreterSpec);
+        if (specPath.is_absolute() && fs::exists(interpreterSpec)) {
+            // Direct absolute path
+            interpreterPath = interpreterSpec;
+        } else {
+            // Try to look up in registry
+            std::string regPath = getExecutablePath(interpreterSpec);
+            if (!regPath.empty() && fs::exists(regPath)) {
+                interpreterPath = regPath;
+            } else if (fs::exists(interpreterSpec)) {
+                // Relative path that exists
+                interpreterPath = fs::absolute(interpreterSpec).string();
+            } else {
+                std::cerr << "Interpreter not found: " << interpreterSpec << std::endl;
+                std::cerr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << std::endl;
+                std::cerr << "Or use an absolute path in the shebang" << std::endl;
+                return false;
+            }
         }
         
         // Build command line with interpreter
@@ -386,23 +402,45 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             return false;
         }
     } else {
-        // Regular executable - Build command line with proper quoting for cmd.exe
-        // Use cmd /c with the entire command in quotes, and internal quotes escaped
-        cmdLine = "cmd /c \"\"" + exePath + "\"";
+        // Regular executable - use CreateProcessA for better performance
+        cmdLine = "\"" + exePath + "\"";
         for (size_t i = 1; i < args.size(); i++) {
-            // Always quote arguments to handle spaces properly
             cmdLine += " \"" + args[i] + "\"";
         }
-        cmdLine += "\"";
         
-        // Save and restore current directory
-        char oldDir[MAX_PATH];
-        GetCurrentDirectoryA(MAX_PATH, oldDir);
-        SetCurrentDirectoryA(currentDir.c_str());
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        ZeroMemory(&pi, sizeof(pi));
         
-        system(cmdLine.c_str());
+        char cmdBuffer[4096];
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
         
-        SetCurrentDirectoryA(oldDir);
+        if (CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            TRUE,   // Inherit handles for stdin/stdout
+            0,
+            NULL,
+            currentDir.c_str(),
+            &si,
+            &pi
+        )) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        } else {
+            DWORD err = GetLastError();
+            std::cerr << "Failed to execute command (error " << err << ")" << std::endl;
+            return false;
+        }
     }
     
     return true;
