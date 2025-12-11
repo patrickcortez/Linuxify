@@ -254,3 +254,105 @@ help
 lvc show
 exit
 clear
+help
+ping google.com
+ip addr
+ipconf
+ipconfig
+clear
+netstat
+clear
+exit
+help
+ls
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+cd test
+ls
+cd ./test.sh
+./test.sh
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd test
+ls
+./test.sh
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd test
+ls
+clear
+clear
+clear
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+ls
+cd test
+ls
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd test
+ls
+test
+registry add test "C:\Users\patri\Onedrive\Documents\test\test.sh"
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd test
+ls
+clear
+clear
+exit
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd "test"
+mkdir parsnip and co
+ls
+register add test "C:\Users\patri\OneDrive\Projects\linuxify\forloop.sh"
+register
+ls
+help
+registry add test "C:\Users\patri\OneDrive\Projects\linuxify\forloop.sh"
+test
+test
+test
+which test
+clear
+which test
+test
+registry add t1 test.sh
+ls
+test
+t1
+registry refresh
+mkdir git
+cd git
+git clone "https://github.com/activescott/lessmsi.git"
+ls
+git clone "https://github.com/activescott/lessmsi.git"
+exit
+ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddsa "     dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+clear
+exit
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd test
+register add test "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.sh"
+registry add test "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.sh"
+test
+test
+exit
+clear
+registry delete test
+registry add test "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\test\test.sh"
+test
+registry remove test
+exit
+ls
+exit
+cd test
+./test.sh
+cd test
+ls
+touch pythonic.sh
+nano pythonic.sh
+which python
+./pythonic.sh
+nano pythonic.sh

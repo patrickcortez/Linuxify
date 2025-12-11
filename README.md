@@ -45,6 +45,6 @@ Windows kernel with linux syntax for its commands.
 
 # Phase 5: Interpreter and Shell Scripting
 
-- [ ] Interpreter: basically it will be called bash and it will run sh(shell) scripts
+- [ ] Interpreter: basically it will be called bash and it will run sh(shell) scripts natively
 - [ ] Shell Scripting: implement all shell syntaxes and features,
 - [ ] Implement source,test, function and alias.

@@ -105,25 +105,47 @@ private:
     static const WORD COLOR_DEFAULT = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;  // White
 
     // Re-render input line with syntax highlighting
-    void renderInputWithHighlight(const std::string& input, int cursorPos) {
+    // promptStartRow: the console row where the prompt started (tracked by caller)
+    void renderInputWithHighlight(const std::string& input, int cursorPos, int promptStartRow) {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         GetConsoleScreenBufferInfo(hConsole, &csbi);
         
-        // Move cursor to start of input (after prompt)
-        // We need to track where input starts
-        COORD startPos = csbi.dwCursorPosition;
-        startPos.X = 0;
+        int consoleWidth = csbi.dwSize.X;
+        int promptLen = 9 + (int)currentDir.length() + 2;  // "linuxify:" + currentDir + "$ "
         
-        // Clear the line from start of input
+        // Calculate how many lines the current content spans
+        int totalLen = promptLen + (int)input.length();
+        int numLines = (totalLen + consoleWidth - 1) / consoleWidth;
+        if (numLines < 1) numLines = 1;
+        
+        // Use the provided start row (don't recalculate - avoids drift)
+        int startRow = promptStartRow;
+        if (startRow < 0) startRow = 0;
+        
+        // Clear all lines that could contain our input (clear a few extra to be safe)
+        COORD clearPos;
         DWORD written;
-        FillConsoleOutputCharacterA(hConsole, ' ', csbi.dwSize.X, startPos, &written);
+        for (int i = 0; i < numLines + 2; i++) {
+            clearPos.X = 0;
+            clearPos.Y = (SHORT)(startRow + i);
+            if (clearPos.Y < csbi.dwSize.Y) {  // Don't clear beyond buffer
+                FillConsoleOutputCharacterA(hConsole, ' ', consoleWidth, clearPos, &written);
+            }
+        }
+        
+        // Move cursor to start of first line
+        COORD startPos;
+        startPos.X = 0;
+        startPos.Y = (SHORT)startRow;
         SetConsoleCursorPosition(hConsole, startPos);
         
         // Reprint prompt
         printPrompt();
         
-        if (input.empty()) return;
+        if (input.empty()) {
+            return;
+        }
         
         // Parse and colorize
         bool inQuotes = false;
@@ -194,6 +216,14 @@ private:
         }
         
         SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
+        std::cout.flush();
+        
+        // Position cursor at the correct location (accounting for wrapping)
+        int totalCursorPos = promptLen + cursorPos;
+        COORD cursorCoord;
+        cursorCoord.Y = (SHORT)(startRow + totalCursorPos / consoleWidth);
+        cursorCoord.X = (SHORT)(totalCursorPos % consoleWidth);
+        SetConsoleCursorPosition(hConsole, cursorCoord);
     }
 
     // Read input with syntax highlighting
@@ -204,6 +234,11 @@ private:
         std::string input;
         int cursorPos = 0;
         int historyIndex = -1;
+        
+        // Track the row where the prompt started (for consistent rendering)
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        int promptStartRow = csbi.dwCursorPosition.Y;
         
         // Save original console mode
         DWORD originalMode;
@@ -232,27 +267,33 @@ private:
                 if (cursorPos > 0) {
                     input.erase(cursorPos - 1, 1);
                     cursorPos--;
-                    renderInputWithHighlight(input, cursorPos);
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
                 }
             } else if (vk == VK_DELETE) {
                 // Delete
                 if (cursorPos < (int)input.length()) {
                     input.erase(cursorPos, 1);
-                    renderInputWithHighlight(input, cursorPos);
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
                 }
             } else if (vk == VK_LEFT) {
                 // Left arrow
-                if (cursorPos > 0) cursorPos--;
+                if (cursorPos > 0) {
+                    cursorPos--;
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
+                }
             } else if (vk == VK_RIGHT) {
                 // Right arrow
-                if (cursorPos < (int)input.length()) cursorPos++;
+                if (cursorPos < (int)input.length()) {
+                    cursorPos++;
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
+                }
             } else if (vk == VK_UP) {
                 // History up
                 if (!commandHistory.empty() && historyIndex < (int)commandHistory.size() - 1) {
                     historyIndex++;
                     input = commandHistory[commandHistory.size() - 1 - historyIndex];
                     cursorPos = (int)input.length();
-                    renderInputWithHighlight(input, cursorPos);
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
                 }
             } else if (vk == VK_DOWN) {
                 // History down
@@ -260,17 +301,19 @@ private:
                     historyIndex--;
                     input = commandHistory[commandHistory.size() - 1 - historyIndex];
                     cursorPos = (int)input.length();
-                    renderInputWithHighlight(input, cursorPos);
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
                 } else if (historyIndex == 0) {
                     historyIndex = -1;
                     input.clear();
                     cursorPos = 0;
-                    renderInputWithHighlight(input, cursorPos);
+                    renderInputWithHighlight(input, cursorPos, promptStartRow);
                 }
             } else if (vk == VK_HOME) {
                 cursorPos = 0;
+                renderInputWithHighlight(input, cursorPos, promptStartRow);
             } else if (vk == VK_END) {
                 cursorPos = (int)input.length();
+                renderInputWithHighlight(input, cursorPos, promptStartRow);
             } else if (vk == 'C' && (ir.Event.KeyEvent.dwControlKeyState & LEFT_CTRL_PRESSED)) {
                 // Ctrl+C
                 std::cout << "^C" << std::endl;
@@ -281,7 +324,7 @@ private:
                 // Printable character
                 input.insert(cursorPos, 1, ch);
                 cursorPos++;
-                renderInputWithHighlight(input, cursorPos);
+                renderInputWithHighlight(input, cursorPos, promptStartRow);
             }
         }
         
@@ -2584,9 +2627,67 @@ private:
             return;
         }
         
-        std::string cmdLine = "\"" + fullPath + "\"";
-        for (size_t i = 1; i < args.size(); i++) {
-            cmdLine += " \"" + args[i] + "\"";
+        std::string cmdLine;
+        
+        // Check if it's a shell script (.sh file)
+        std::string ext = fs::path(fullPath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        
+        if (ext == ".sh") {
+            // Parse shebang to determine interpreter - REQUIRED
+            std::string interpreterPath;
+            bool hasShebang = false;
+            
+            std::ifstream scriptFile(fullPath);
+            if (scriptFile) {
+                std::string firstLine;
+                std::getline(scriptFile, firstLine);
+                scriptFile.close();
+                
+                // Check for shebang #!
+                if (firstLine.size() > 2 && firstLine[0] == '#' && firstLine[1] == '!') {
+                    hasShebang = true;
+                    std::string shebang = firstLine.substr(2);
+                    // Trim whitespace
+                    shebang.erase(0, shebang.find_first_not_of(" \t\r\n"));
+                    shebang.erase(shebang.find_last_not_of(" \t\r\n") + 1);
+                    
+                    // Get the interpreter path (first word, rest are args)
+                    size_t spacePos = shebang.find(' ');
+                    interpreterPath = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
+                }
+            }
+            
+            // Shebang is required
+            if (!hasShebang) {
+                printError("Script missing shebang line: " + path);
+                printError("Add a shebang at the start of the file, e.g.: #!/path/to/lish.exe");
+                return;
+            }
+            
+            // Interpreter path must exist (must be a valid Windows path)
+            if (interpreterPath.empty()) {
+                printError("Invalid shebang - no interpreter path specified");
+                return;
+            }
+            
+            if (!fs::exists(interpreterPath)) {
+                printError("Interpreter not found: " + interpreterPath);
+                printError("Shebang must specify an absolute Windows path to an existing interpreter");
+                return;
+            }
+            
+            cmdLine = "\"" + interpreterPath + "\" \"" + fullPath + "\"";
+            // Add any additional arguments after the script name
+            for (size_t i = 1; i < args.size(); i++) {
+                cmdLine += " \"" + args[i] + "\"";
+            }
+        } else {
+            // Regular executable
+            cmdLine = "\"" + fullPath + "\"";
+            for (size_t i = 1; i < args.size(); i++) {
+                cmdLine += " \"" + args[i] + "\"";
+            }
         }
         
         STARTUPINFOA si;

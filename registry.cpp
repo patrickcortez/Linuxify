@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <windows.h>
 #include <algorithm>
+#include <iostream>
 
 namespace fs = std::filesystem;
 
@@ -298,23 +299,111 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
         return false;
     }
     
-    // Build command line with proper quoting for cmd.exe
-    // Use cmd /c with the entire command in quotes, and internal quotes escaped
-    std::string cmdLine = "cmd /c \"\"" + exePath + "\"";
-    for (size_t i = 1; i < args.size(); i++) {
-        // Always quote arguments to handle spaces properly
-        cmdLine += " \"" + args[i] + "\"";
+    // Check if it's a shell script (.sh file)
+    std::string ext = fs::path(exePath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    
+    std::string cmdLine;
+    
+    if (ext == ".sh") {
+        // Parse shebang to determine interpreter - REQUIRED
+        std::string interpreterPath;
+        bool hasShebang = false;
+        
+        std::ifstream scriptFile(exePath);
+        if (scriptFile) {
+            std::string firstLine;
+            std::getline(scriptFile, firstLine);
+            scriptFile.close();
+            
+            // Check for shebang #!
+            if (firstLine.size() > 2 && firstLine[0] == '#' && firstLine[1] == '!') {
+                hasShebang = true;
+                std::string shebang = firstLine.substr(2);
+                // Trim whitespace
+                shebang.erase(0, shebang.find_first_not_of(" \t\r\n"));
+                shebang.erase(shebang.find_last_not_of(" \t\r\n") + 1);
+                
+                // Get the interpreter path (first word, rest are args)
+                size_t spacePos = shebang.find(' ');
+                interpreterPath = (spacePos != std::string::npos) ? shebang.substr(0, spacePos) : shebang;
+            }
+        }
+        
+        // Shebang is required
+        if (!hasShebang) {
+            std::cerr << "Script missing shebang line: " << exePath << std::endl;
+            std::cerr << "Add a shebang at the start of the file, e.g.: #!/path/to/lish.exe" << std::endl;
+            return false;
+        }
+        
+        // Interpreter path must exist (must be a valid Windows path)
+        if (interpreterPath.empty()) {
+            std::cerr << "Invalid shebang - no interpreter path specified" << std::endl;
+            return false;
+        }
+        
+        if (!fs::exists(interpreterPath)) {
+            std::cerr << "Interpreter not found: " << interpreterPath << std::endl;
+            std::cerr << "Shebang must specify an absolute Windows path to an existing interpreter" << std::endl;
+            return false;
+        }
+        
+        // Build command line with interpreter
+        cmdLine = "\"" + interpreterPath + "\" \"" + exePath + "\"";
+        for (size_t i = 1; i < args.size(); i++) {
+            cmdLine += " \"" + args[i] + "\"";
+        }
+        
+        // Use CreateProcessA for proper path handling
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[4096];
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
+        
+        if (CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            TRUE,
+            0,
+            NULL,
+            currentDir.c_str(),
+            &si,
+            &pi
+        )) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        } else {
+            DWORD err = GetLastError();
+            std::cerr << "Failed to execute script (error " << err << ")" << std::endl;
+            return false;
+        }
+    } else {
+        // Regular executable - Build command line with proper quoting for cmd.exe
+        // Use cmd /c with the entire command in quotes, and internal quotes escaped
+        cmdLine = "cmd /c \"\"" + exePath + "\"";
+        for (size_t i = 1; i < args.size(); i++) {
+            // Always quote arguments to handle spaces properly
+            cmdLine += " \"" + args[i] + "\"";
+        }
+        cmdLine += "\"";
+        
+        // Save and restore current directory
+        char oldDir[MAX_PATH];
+        GetCurrentDirectoryA(MAX_PATH, oldDir);
+        SetCurrentDirectoryA(currentDir.c_str());
+        
+        system(cmdLine.c_str());
+        
+        SetCurrentDirectoryA(oldDir);
     }
-    cmdLine += "\"";
-    
-    // Save and restore current directory
-    char oldDir[MAX_PATH];
-    GetCurrentDirectoryA(MAX_PATH, oldDir);
-    SetCurrentDirectoryA(currentDir.c_str());
-    
-    system(cmdLine.c_str());
-    
-    SetCurrentDirectoryA(oldDir);
     
     return true;
 }
