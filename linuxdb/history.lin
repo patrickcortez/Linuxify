@@ -394,3 +394,31 @@ setup install
 setup install
 setup install
 exit
+ls
+help
+exit
+help
+cd test
+ls
+nano pythonic
+nano pythonic.sh
+./pythonic.sh
+nano pythonic.sh
+./pythonic.sh
+nano pythonic.sh
+./pythonic.sh
+./pythonic.sh
+nano pythonic.sh
+./pythonic.sh
+nano pythonic.sh
+lish
+clear
+help
+help
+net show
+net show
+exit
+exit
+gcc --version
+gcc
+g++

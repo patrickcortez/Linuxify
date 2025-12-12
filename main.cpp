@@ -2745,6 +2745,60 @@ private:
             Networking::netstat(tokens);
         } else if (cmd == "ifconfig" || cmd == "ipconfig") {
             Networking::showIP(tokens);
+        } else if (cmd == "gcc" || cmd == "g++" || cmd == "cc" || cmd == "c++" || 
+                   cmd == "make" || cmd == "gdb" || cmd == "ar" || cmd == "ld" ||
+                   cmd == "objdump" || cmd == "objcopy" || cmd == "strip" || cmd == "windres" ||
+                   cmd == "as" || cmd == "nm" || cmd == "ranlib" || cmd == "size" ||
+                   cmd == "strings" || cmd == "addr2line" || cmd == "c++filt") {
+            // Handle bundled toolchain commands
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            fs::path toolchainBin = fs::path(exePath).parent_path() / "toolchain" / "compiler" / "mingw64" / "bin";
+            
+            // Map cc -> gcc, c++ -> g++
+            std::string actualCmd = cmd;
+            if (cmd == "cc") actualCmd = "gcc";
+            else if (cmd == "c++") actualCmd = "g++";
+            
+            fs::path cmdPath = toolchainBin / (actualCmd + ".exe");
+            
+            if (fs::exists(cmdPath)) {
+                std::string cmdLine = "\"" + cmdPath.string() + "\"";
+                for (size_t i = 1; i < tokens.size(); i++) {
+                    cmdLine += " \"" + tokens[i] + "\"";
+                }
+                
+                STARTUPINFOA si;
+                PROCESS_INFORMATION pi;
+                ZeroMemory(&si, sizeof(si));
+                si.cb = sizeof(si);
+                ZeroMemory(&pi, sizeof(pi));
+                
+                char cmdBuffer[8192];
+                strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
+                
+                if (CreateProcessA(
+                    NULL,
+                    cmdBuffer,
+                    NULL,
+                    NULL,
+                    TRUE,
+                    0,
+                    NULL,
+                    currentDir.c_str(),
+                    &si,
+                    &pi
+                )) {
+                    WaitForSingleObject(pi.hProcess, INFINITE);
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                } else {
+                    printError("Failed to execute: " + cmd);
+                }
+            } else {
+                printError("Toolchain not found. Expected at: " + toolchainBin.string());
+                printError("Please reinstall Linuxify or check toolchain installation.");
+            }
         } else if (cmd == "uninstall") {
             cmdUninstall(tokens);
         } else if (cmd == "exit" || cmd == "quit") {
@@ -2980,7 +3034,10 @@ public:
             "grep", "head", "tail", "wc", "sort", "uniq", "find",
             "lsmem", "free", "lscpu", "lshw", "sysinfo", "lsmount", "lsblk", "df",
             "lsusb", "lsnet", "lsof", "ip", "ping", "traceroute", "tracert",
-            "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig"
+            "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig",
+            // Toolchain commands
+            "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
+            "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt"
         };
         for (const auto& builtin : builtins) {
             if (cmd == builtin) return true;

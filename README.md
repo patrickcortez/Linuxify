@@ -48,3 +48,13 @@ Windows kernel with linux syntax for its commands.
 - [X] Interpreter: basically it will be called bash and it will run sh(shell) scripts natively
 - [X] Shell Scripting: implement all shell syntaxes and features,
 - [X] Implement source,test, function and alias.
+
+## Phase 6: Bundled C++ Toolchain
+
+- [X] Bundle MinGW-w64 GCC 15.x (UCRT, POSIX threads)
+- [X] Compiler commands: gcc, g++, cc, c++
+- [X] Build tools: make, ar, ld, as, ranlib
+- [X] Debug tools: gdb, objdump, addr2line
+- [X] Utility tools: strip, size, strings, nm, c++filt
+- [X] Auto-configure PATH on install
+- [X] Set CC/CXX environment variables for IDE auto-detection
