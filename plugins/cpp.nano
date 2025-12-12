@@ -1,0 +1,212 @@
+# C/C++ Syntax Highlighting Plugin for Nano
+# Place this file in the plugins/ folder
+
+# Special character colors
+set `{}` = blue;
+set `()` = yellow;
+set `[]` = cyan;
+set `<>` = magenta;
+
+# C++ file extension
+Section [.cpp]{
+    # Keywords
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: bool, blue;
+    keyword: void, blue;
+    keyword: long, blue;
+    keyword: short, blue;
+    keyword: unsigned, blue;
+    keyword: signed, blue;
+    keyword: auto, blue;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: extern, blue;
+    keyword: volatile, blue;
+    keyword: register, blue;
+    keyword: mutable, blue;
+    keyword: constexpr, blue;
+    
+    # Control flow
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: do, magenta;
+    keyword: switch, magenta;
+    keyword: case, magenta;
+    keyword: default, magenta;
+    keyword: break, magenta;
+    keyword: continue, magenta;
+    keyword: return, magenta;
+    keyword: goto, magenta;
+    
+    # Classes and OOP
+    keyword: class, cyan;
+    keyword: struct, cyan;
+    keyword: enum, cyan;
+    keyword: union, cyan;
+    keyword: namespace, cyan;
+    keyword: template, cyan;
+    keyword: typename, cyan;
+    keyword: public, cyan;
+    keyword: private, cyan;
+    keyword: protected, cyan;
+    keyword: virtual, cyan;
+    keyword: override, cyan;
+    keyword: final, cyan;
+    keyword: friend, cyan;
+    keyword: operator, cyan;
+    keyword: this, cyan;
+    
+    # Memory and pointers
+    keyword: new, red;
+    keyword: delete, red;
+    keyword: nullptr, red;
+    keyword: NULL, red;
+    keyword: sizeof, red;
+    keyword: alignof, red;
+    keyword: typeid, red;
+    
+    # Exception handling
+    keyword: try, yellow;
+    keyword: catch, yellow;
+    keyword: throw, yellow;
+    keyword: noexcept, yellow;
+    
+    # Standard library
+    keyword: std, green;
+    keyword: cout, green;
+    keyword: cin, green;
+    keyword: cerr, green;
+    keyword: endl, green;
+    keyword: string, green;
+    keyword: vector, green;
+    keyword: map, green;
+    keyword: set, green;
+    keyword: pair, green;
+    keyword: make_pair, green;
+    keyword: unique_ptr, green;
+    keyword: shared_ptr, green;
+    keyword: move, green;
+    keyword: forward, green;
+    
+    # Boolean
+    keyword: true, orange;
+    keyword: false, orange;
+    
+    # Preprocessor (handled specially but list common ones)
+    preprocessor: include, magenta;
+    preprocessor: define, magenta;
+    preprocessor: ifdef, magenta;
+    preprocessor: ifndef, magenta;
+    preprocessor: endif, magenta;
+    preprocessor: pragma, magenta;
+}
+
+# C header files
+Section [.h]{
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: void, blue;
+    keyword: struct, cyan;
+    keyword: typedef, cyan;
+    keyword: enum, cyan;
+    keyword: union, cyan;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: extern, blue;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: return, magenta;
+    keyword: NULL, red;
+    keyword: sizeof, red;
+}
+
+# C source files
+Section [.c]{
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: void, blue;
+    keyword: long, blue;
+    keyword: short, blue;
+    keyword: unsigned, blue;
+    keyword: signed, blue;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: extern, blue;
+    keyword: volatile, blue;
+    keyword: register, blue;
+    keyword: struct, cyan;
+    keyword: typedef, cyan;
+    keyword: enum, cyan;
+    keyword: union, cyan;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: do, magenta;
+    keyword: switch, magenta;
+    keyword: case, magenta;
+    keyword: default, magenta;
+    keyword: break, magenta;
+    keyword: continue, magenta;
+    keyword: return, magenta;
+    keyword: goto, magenta;
+    keyword: NULL, red;
+    keyword: sizeof, red;
+    keyword: malloc, red;
+    keyword: free, red;
+    keyword: realloc, red;
+    keyword: calloc, red;
+    keyword: printf, green;
+    keyword: scanf, green;
+    keyword: fprintf, green;
+    keyword: fscanf, green;
+    keyword: sprintf, green;
+    keyword: sscanf, green;
+    keyword: fopen, green;
+    keyword: fclose, green;
+    keyword: fread, green;
+    keyword: fwrite, green;
+}
+
+# C++ header files
+Section [.hpp]{
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: bool, blue;
+    keyword: void, blue;
+    keyword: auto, blue;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: class, cyan;
+    keyword: struct, cyan;
+    keyword: enum, cyan;
+    keyword: namespace, cyan;
+    keyword: template, cyan;
+    keyword: typename, cyan;
+    keyword: public, cyan;
+    keyword: private, cyan;
+    keyword: protected, cyan;
+    keyword: virtual, cyan;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: return, magenta;
+    keyword: std, green;
+    keyword: string, green;
+    keyword: vector, green;
+    keyword: map, green;
+}

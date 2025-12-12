@@ -1,20 +1,44 @@
 // Compile: cl /EHsc /std:c++17 nano.cpp /Fe:nano.exe
-// Alternate compile: g++ c++17 -o nano nano.cpp
+// Alternate compile: g++ -std=c++17 -o nano nano.cpp
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <fstream>
+#include <map>
+#include <set>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <windows.h>
 #include <conio.h>
+
+namespace fs = std::filesystem;
+
+// Syntax highlighting rule types
+enum class RuleType { KEYWORD, PREPROCESSOR, SPECIAL_CHAR };
+
+struct SyntaxRule {
+    RuleType type;
+    std::string pattern;
+    WORD color;
+};
+
+struct LanguageSyntax {
+    std::string extension;
+    std::vector<SyntaxRule> rules;
+    std::map<std::string, WORD> specialChars;  // e.g., "" -> yellow, {} -> blue
+};
 
 class NanoEditor {
 private:
     std::vector<std::string> lines;
     std::string filename;
+    std::string fileExtension;
     int cursorX;
     int cursorY;
     int scrollOffsetY;
+    int scrollOffsetX;  // Horizontal scroll offset
     int screenWidth;
     int screenHeight;
     bool modified;
@@ -22,7 +46,210 @@ private:
     HANDLE hConsole;
     std::string statusMessage;
     std::string cutBuffer;
-
+    bool needsFullRedraw;
+    
+    // Screen buffer for efficient rendering
+    std::vector<CHAR_INFO> screenBuffer;
+    
+    // Syntax highlighting
+    std::map<std::string, LanguageSyntax> syntaxPlugins;  // extension -> syntax
+    LanguageSyntax* currentSyntax = nullptr;
+    std::set<std::string> keywords;  // Fast keyword lookup
+    std::set<std::string> preprocessors;
+    
+    // Color name to Windows attribute mapping
+    WORD parseColor(const std::string& colorName) {
+        std::string lower = colorName;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        // Trim whitespace
+        while (!lower.empty() && (lower.front() == ' ' || lower.front() == '\t')) lower.erase(0, 1);
+        while (!lower.empty() && (lower.back() == ' ' || lower.back() == '\t' || lower.back() == ';')) lower.pop_back();
+        
+        if (lower == "red") return FOREGROUND_RED | FOREGROUND_INTENSITY;
+        if (lower == "green") return FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+        if (lower == "blue") return FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+        if (lower == "yellow") return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+        if (lower == "magenta" || lower == "purple") return FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+        if (lower == "cyan") return FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+        if (lower == "white") return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+        if (lower == "gray" || lower == "grey") return FOREGROUND_INTENSITY;
+        if (lower == "orange") return FOREGROUND_RED | FOREGROUND_GREEN;
+        return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;  // Default white
+    }
+    
+    // Trim whitespace from string
+    std::string trim(const std::string& s) {
+        size_t start = s.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return "";
+        size_t end = s.find_last_not_of(" \t\r\n;");
+        return s.substr(start, end - start + 1);
+    }
+    
+    // Parse a single .nano plugin file
+    void parsePlugin(const std::string& path) {
+        std::ifstream file(path);
+        if (!file) return;
+        
+        std::string currentExtension;
+        LanguageSyntax currentLang;
+        bool inSection = false;
+        std::map<std::string, WORD> globalSpecialChars;
+        
+        std::string line;
+        while (std::getline(file, line)) {
+            // Remove carriage return if present
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            
+            std::string trimmed = trim(line);
+            if (trimmed.empty() || trimmed[0] == '#') continue;  // Skip empty/comments
+            
+            // Handle global "set `chars` = color;" statements
+            if (trimmed.substr(0, 3) == "set" || trimmed.substr(0, 3) == "SET") {
+                size_t tick1 = trimmed.find('`');
+                size_t tick2 = trimmed.find('`', tick1 + 1);
+                size_t eq = trimmed.find('=');
+                if (tick1 != std::string::npos && tick2 != std::string::npos && eq != std::string::npos) {
+                    std::string chars = trimmed.substr(tick1 + 1, tick2 - tick1 - 1);
+                    std::string colorStr = trim(trimmed.substr(eq + 1));
+                    WORD color = parseColor(colorStr);
+                    globalSpecialChars[chars] = color;
+                }
+                continue;
+            }
+            
+            // Handle Section [.ext]{ or section [.ext]{
+            std::string lowerLine = trimmed;
+            std::transform(lowerLine.begin(), lowerLine.end(), lowerLine.begin(), ::tolower);
+            if (lowerLine.substr(0, 7) == "section") {
+                size_t bracket1 = trimmed.find('[');
+                size_t bracket2 = trimmed.find(']');
+                if (bracket1 != std::string::npos && bracket2 != std::string::npos) {
+                    currentExtension = trimmed.substr(bracket1 + 1, bracket2 - bracket1 - 1);
+                    currentLang = LanguageSyntax();
+                    currentLang.extension = currentExtension;
+                    currentLang.specialChars = globalSpecialChars;
+                    inSection = true;
+                }
+                continue;
+            }
+            
+            // Handle closing brace
+            if (trimmed[0] == '}') {
+                if (inSection && !currentExtension.empty()) {
+                    syntaxPlugins[currentExtension] = currentLang;
+                }
+                inSection = false;
+                currentExtension.clear();
+                continue;
+            }
+            
+            // Inside section - parse rules
+            if (inSection) {
+                size_t colonPos = trimmed.find(':');
+                if (colonPos != std::string::npos) {
+                    std::string ruleType = trim(trimmed.substr(0, colonPos));
+                    std::string rest = trim(trimmed.substr(colonPos + 1));
+                    
+                    std::transform(ruleType.begin(), ruleType.end(), ruleType.begin(), ::tolower);
+                    
+                    // Parse "word, color" or "word,color"
+                    size_t comma = rest.find(',');
+                    if (comma != std::string::npos) {
+                        std::string word = trim(rest.substr(0, comma));
+                        std::string colorStr = trim(rest.substr(comma + 1));
+                        WORD color = parseColor(colorStr);
+                        
+                        SyntaxRule rule;
+                        rule.pattern = word;
+                        rule.color = color;
+                        
+                        if (ruleType == "keyword") {
+                            rule.type = RuleType::KEYWORD;
+                        } else if (ruleType == "preprocessor") {
+                            rule.type = RuleType::PREPROCESSOR;
+                        } else {
+                            rule.type = RuleType::KEYWORD;  // Default
+                        }
+                        
+                        currentLang.rules.push_back(rule);
+                    }
+                }
+            }
+        }
+        
+        // Handle unclosed section
+        if (inSection && !currentExtension.empty()) {
+            syntaxPlugins[currentExtension] = currentLang;
+        }
+    }
+    
+    // Load all .nano plugins from plugins folder
+    void loadPlugins() {
+        // Find plugins directory relative to executable
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path pluginsDir = fs::path(exePath).parent_path() / "plugins";
+        
+        // Also check current directory
+        fs::path localPlugins = fs::current_path() / "plugins";
+        
+        std::vector<fs::path> searchPaths = { pluginsDir, localPlugins };
+        
+        for (const auto& dir : searchPaths) {
+            if (!fs::exists(dir)) continue;
+            
+            for (const auto& entry : fs::directory_iterator(dir)) {
+                if (entry.is_regular_file()) {
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".nano") {
+                        parsePlugin(entry.path().string());
+                    }
+                }
+            }
+        }
+    }
+    
+    // Select syntax based on current file extension
+    void selectSyntax() {
+        currentSyntax = nullptr;
+        keywords.clear();
+        preprocessors.clear();
+        
+        if (fileExtension.empty()) return;
+        
+        auto it = syntaxPlugins.find(fileExtension);
+        if (it != syntaxPlugins.end()) {
+            currentSyntax = &it->second;
+            // Build fast lookup sets
+            for (const auto& rule : currentSyntax->rules) {
+                if (rule.type == RuleType::KEYWORD) {
+                    keywords.insert(rule.pattern);
+                } else if (rule.type == RuleType::PREPROCESSOR) {
+                    preprocessors.insert(rule.pattern);
+                }
+            }
+            statusMessage = "Syntax: " + fileExtension;
+        }
+    }
+    
+    // Get color for a word based on syntax rules
+    WORD getWordColor(const std::string& word) {
+        if (!currentSyntax) return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+        
+        for (const auto& rule : currentSyntax->rules) {
+            if (rule.pattern == word) {
+                return rule.color;
+            }
+        }
+        return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+    }
+    
+    // Check if character is part of a word
+    bool isWordChar(char c) {
+        return std::isalnum(c) || c == '_' || c == '#';
+    }
+    
     void getTerminalSize() {
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         if (GetConsoleScreenBufferInfo(hConsole, &csbi)) {
@@ -56,13 +283,6 @@ private:
         SetConsoleCursorInfo(hConsole, &info);
     }
 
-    void clearLine(int y) {
-        setCursorPosition(0, y);
-        for (int i = 0; i < screenWidth; i++) {
-            std::cout << ' ';
-        }
-    }
-
     void setColor(WORD color) {
         SetConsoleTextAttribute(hConsole, color);
     }
@@ -70,10 +290,51 @@ private:
     void resetColor() {
         setColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
     }
+    
+    // Write a single character to screen buffer
+    void bufferWriteChar(int x, int y, char c, WORD attr) {
+        if (y < 0 || y >= screenHeight || x < 0 || x >= screenWidth) return;
+        int idx = y * screenWidth + x;
+        if (idx < (int)screenBuffer.size()) {
+            screenBuffer[idx].Char.AsciiChar = c;
+            screenBuffer[idx].Attributes = attr;
+        }
+    }
+    
+    // Write a string to the screen buffer at position
+    void bufferWrite(int x, int y, const std::string& text, WORD attr) {
+        if (y < 0 || y >= screenHeight) return;
+        int idx = y * screenWidth + x;
+        for (size_t i = 0; i < text.length() && x + (int)i < screenWidth; i++) {
+            if (idx + (int)i < (int)screenBuffer.size()) {
+                screenBuffer[idx + i].Char.AsciiChar = text[i];
+                screenBuffer[idx + i].Attributes = attr;
+            }
+        }
+    }
+    
+    // Fill a region with a character
+    void bufferFill(int x, int y, int width, char c, WORD attr) {
+        if (y < 0 || y >= screenHeight) return;
+        int idx = y * screenWidth + x;
+        for (int i = 0; i < width && x + i < screenWidth; i++) {
+            if (idx + i < (int)screenBuffer.size()) {
+                screenBuffer[idx + i].Char.AsciiChar = c;
+                screenBuffer[idx + i].Attributes = attr;
+            }
+        }
+    }
+    
+    // Flush the screen buffer to console (fast!)
+    void flushBuffer() {
+        COORD bufferSize = { (SHORT)screenWidth, (SHORT)screenHeight };
+        COORD bufferCoord = { 0, 0 };
+        SMALL_RECT writeRegion = { 0, 0, (SHORT)(screenWidth - 1), (SHORT)(screenHeight - 1) };
+        WriteConsoleOutputA(hConsole, screenBuffer.data(), bufferSize, bufferCoord, &writeRegion);
+    }
 
     void drawHeader() {
-        setCursorPosition(0, 0);
-        setColor(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_BLUE);
+        WORD headerAttr = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_BLUE;
         
         std::string title = " NANO ";
         if (filename.empty()) {
@@ -84,14 +345,12 @@ private:
         if (modified) {
             title += " *";
         }
-        
-        std::cout << title;
-        int remaining = screenWidth - (int)title.length();
-        for (int i = 0; i < remaining; i++) {
-            std::cout << ' ';
+        if (currentSyntax) {
+            title += " [" + fileExtension + "]";
         }
         
-        resetColor();
+        bufferFill(0, 0, screenWidth, ' ', headerAttr);
+        bufferWrite(0, 0, title, headerAttr);
     }
 
     void drawFooter() {
@@ -102,67 +361,35 @@ private:
         WORD keyColor = bgWhite | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
         WORD textColor = bgWhite;
         
-        setCursorPosition(0, line1);
-        setColor(keyColor);
-        std::cout << "^X";
-        setColor(textColor);
-        std::cout << " Exit  ";
-        setColor(keyColor);
-        std::cout << "^O";
-        setColor(textColor);
-        std::cout << " Save  ";
-        setColor(keyColor);
-        std::cout << "^G";
-        setColor(textColor);
-        std::cout << " Help  ";
-        setColor(keyColor);
-        std::cout << "^K";
-        setColor(textColor);
-        std::cout << " Cut   ";
-        setColor(keyColor);
-        std::cout << "^U";
-        setColor(textColor);
-        std::cout << " Paste ";
+        // Line 1
+        bufferFill(0, line1, screenWidth, ' ', textColor);
+        int pos = 0;
+        bufferWrite(pos, line1, "^X", keyColor); pos += 2;
+        bufferWrite(pos, line1, " Exit  ", textColor); pos += 7;
+        bufferWrite(pos, line1, "^O", keyColor); pos += 2;
+        bufferWrite(pos, line1, " Save  ", textColor); pos += 7;
+        bufferWrite(pos, line1, "^G", keyColor); pos += 2;
+        bufferWrite(pos, line1, " Help  ", textColor); pos += 7;
+        bufferWrite(pos, line1, "^K", keyColor); pos += 2;
+        bufferWrite(pos, line1, " Cut   ", textColor); pos += 7;
+        bufferWrite(pos, line1, "^U", keyColor); pos += 2;
+        bufferWrite(pos, line1, " Paste ", textColor);
         
-        int pos = 48;
-        while (pos < screenWidth) {
-            std::cout << ' ';
-            pos++;
+        // Line 2
+        bufferFill(0, line2, screenWidth, ' ', textColor);
+        pos = 0;
+        bufferWrite(pos, line2, "^W", keyColor); pos += 2;
+        bufferWrite(pos, line2, " Search  ", textColor); pos += 9;
+        
+        if (!statusMessage.empty()) {
+            bufferWrite(pos, line2, statusMessage, bgWhite | FOREGROUND_RED | FOREGROUND_BLUE);
         }
-        
-        setCursorPosition(0, line2);
-        setColor(keyColor);
-        std::cout << "^W";
-        setColor(textColor);
-        std::cout << " Search  ";
         
         std::string posInfo = "L:" + std::to_string(cursorY + 1) + "/" + 
                               std::to_string(lines.size()) + " C:" + 
                               std::to_string(cursorX + 1);
-        
-        int infoStart = screenWidth - (int)posInfo.length() - 2;
-        int currentPos = 11;
-        
-        if (!statusMessage.empty()) {
-            setColor(bgWhite | FOREGROUND_RED | FOREGROUND_BLUE);
-            std::cout << statusMessage;
-            currentPos += (int)statusMessage.length();
-        }
-        
-        while (currentPos < infoStart) {
-            std::cout << ' ';
-            currentPos++;
-        }
-        
-        setColor(bgWhite | FOREGROUND_BLUE);
-        std::cout << posInfo;
-        
-        while (currentPos + (int)posInfo.length() < screenWidth) {
-            std::cout << ' ';
-            currentPos++;
-        }
-        
-        resetColor();
+        int infoStart = screenWidth - (int)posInfo.length() - 1;
+        bufferWrite(infoStart, line2, posInfo, bgWhite | FOREGROUND_BLUE);
     }
 
     void drawContent() {
@@ -170,31 +397,156 @@ private:
         int contentEnd = screenHeight - 3;
         int contentHeight = contentEnd - contentStart + 1;
         
+        WORD normalAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+        WORD tildeAttr = FOREGROUND_BLUE;
+        WORD stringAttr = FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+        WORD commentAttr = FOREGROUND_INTENSITY;
+        WORD numberAttr = FOREGROUND_RED | FOREGROUND_GREEN;
+        
         for (int y = 0; y < contentHeight; y++) {
             int screenY = contentStart + y;
             int lineIdx = scrollOffsetY + y;
             
-            setCursorPosition(0, screenY);
-            
             if (lineIdx < (int)lines.size()) {
-                std::string& line = lines[lineIdx];
-                int printLen = (int)line.length();
-                if (printLen > screenWidth) {
-                    printLen = screenWidth;
+                const std::string& line = lines[lineIdx];
+                
+                // Apply horizontal scroll offset
+                int startX = scrollOffsetX;
+                int lineLen = (int)line.length();
+                
+                // Get visible portion of line
+                std::string visiblePart;
+                if (startX < lineLen) {
+                    int endX = startX + screenWidth;
+                    if (endX > lineLen) endX = lineLen;
+                    visiblePart = line.substr(startX, endX - startX);
                 }
-                for (int i = 0; i < printLen; i++) {
-                    std::cout << line[i];
+                int printLen = (int)visiblePart.length();
+                
+                if (!currentSyntax) {
+                    // No syntax highlighting
+                    bufferWrite(0, screenY, visiblePart, normalAttr);
+                    bufferFill(printLen, screenY, screenWidth - printLen, ' ', normalAttr);
+                } else {
+                    // Apply syntax highlighting to visible portion
+                    // First, clear the line
+                    bufferFill(0, screenY, screenWidth, ' ', normalAttr);
+                    
+                    // We process the FULL line to get correct syntax state, but only render visible part
+                    int x = 0;  // Position in full line
+                    bool inString = false;
+                    char stringChar = '\0';
+                    int fullLen = (int)line.length();
+                    
+                    while (x < fullLen) {
+                        // Calculate screen position (only render if visible)
+                        int screenX = x - scrollOffsetX;
+                        bool isVisible = (screenX >= 0 && screenX < screenWidth);
+                        
+                        // Check for line comment (// or #)
+                        if (!inString && x + 1 < fullLen && line[x] == '/' && line[x+1] == '/') {
+                            // Rest of line is comment
+                            for (int i = x; i < fullLen; i++) {
+                                int sx = i - scrollOffsetX;
+                                if (sx >= 0 && sx < screenWidth) {
+                                    bufferWriteChar(sx, screenY, line[i], commentAttr);
+                                }
+                            }
+                            break;
+                        }
+                        
+                        // Check for # at start of line (preprocessor)
+                        if (x == 0 && line[x] == '#') {
+                            WORD preprocColor = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+                            for (int i = 0; i < fullLen; i++) {
+                                int sx = i - scrollOffsetX;
+                                if (sx >= 0 && sx < screenWidth) {
+                                    bufferWriteChar(sx, screenY, line[i], preprocColor);
+                                }
+                            }
+                            break;
+                        }
+                        
+                        // Check for string start/end
+                        if ((line[x] == '"' || line[x] == '\'') && (x == 0 || line[x-1] != '\\')) {
+                            if (!inString) {
+                                inString = true;
+                                stringChar = line[x];
+                                if (isVisible) bufferWriteChar(screenX, screenY, line[x], stringAttr);
+                                x++;
+                                continue;
+                            } else if (line[x] == stringChar) {
+                                if (isVisible) bufferWriteChar(screenX, screenY, line[x], stringAttr);
+                                inString = false;
+                                stringChar = '\0';
+                                x++;
+                                continue;
+                            }
+                        }
+                        
+                        if (inString) {
+                            if (isVisible) bufferWriteChar(screenX, screenY, line[x], stringAttr);
+                            x++;
+                            continue;
+                        }
+                        
+                        // Check for numbers
+                        if (std::isdigit(line[x])) {
+                            if (isVisible) bufferWriteChar(screenX, screenY, line[x], numberAttr);
+                            x++;
+                            continue;
+                        }
+                        
+                        // Check for special characters from plugin
+                        bool foundSpecial = false;
+                        for (const auto& pair : currentSyntax->specialChars) {
+                            if (pair.first.find(line[x]) != std::string::npos) {
+                                if (isVisible) bufferWriteChar(screenX, screenY, line[x], pair.second);
+                                foundSpecial = true;
+                                break;
+                            }
+                        }
+                        if (foundSpecial) {
+                            x++;
+                            continue;
+                        }
+                        
+                        // Check for keywords
+                        if (isWordChar(line[x]) && (x == 0 || !isWordChar(line[x-1]))) {
+                            // Extract word
+                            int wordStart = x;
+                            while (x < fullLen && isWordChar(line[x])) x++;
+                            std::string word = line.substr(wordStart, x - wordStart);
+                            
+                            // Check if it's a keyword
+                            WORD wordColor = normalAttr;
+                            if (keywords.count(word) > 0) {
+                                wordColor = getWordColor(word);
+                            } else if (preprocessors.count(word) > 0) {
+                                wordColor = getWordColor(word);
+                            }
+                            
+                            // Write word (only visible portion)
+                            for (int i = wordStart; i < x; i++) {
+                                int sx = i - scrollOffsetX;
+                                if (sx >= 0 && sx < screenWidth) {
+                                    bufferWriteChar(sx, screenY, line[i], wordColor);
+                                }
+                            }
+                            continue;
+                        }
+                        
+                        // Default: normal character
+                        if (isVisible) bufferWriteChar(screenX, screenY, line[x], normalAttr);
+                        x++;
+                    }
                 }
-                for (int i = printLen; i < screenWidth; i++) {
-                    std::cout << ' ';
-                }
+                
+                // Fill rest with spaces (already done by bufferFill at start for syntax, or here for non-syntax)
             } else {
-                setColor(FOREGROUND_BLUE);
-                std::cout << '~';
-                resetColor();
-                for (int i = 1; i < screenWidth; i++) {
-                    std::cout << ' ';
-                }
+                // Empty line with tilde
+                bufferWrite(0, screenY, "~", tildeAttr);
+                bufferFill(1, screenY, screenWidth - 1, ' ', normalAttr);
             }
         }
     }
@@ -203,13 +555,24 @@ private:
         hideCursor();
         getTerminalSize();
         
+        // Resize buffer if needed
+        int bufferSize = screenWidth * screenHeight;
+        if ((int)screenBuffer.size() != bufferSize) {
+            screenBuffer.resize(bufferSize);
+            needsFullRedraw = true;
+        }
+        
         drawHeader();
         drawContent();
         drawFooter();
         
+        // Flush entire buffer at once (very fast!)
+        flushBuffer();
+        
         int contentStart = 1;
         int displayY = contentStart + (cursorY - scrollOffsetY);
-        int displayX = cursorX;
+        int displayX = cursorX - scrollOffsetX;  // Account for horizontal scroll
+        if (displayX < 0) displayX = 0;
         if (displayX >= screenWidth) displayX = screenWidth - 1;
         
         setCursorPosition(displayX, displayY);
@@ -220,6 +583,7 @@ private:
         int contentHeight = screenHeight - 4;
         if (contentHeight < 1) contentHeight = 1;
         
+        // Vertical scrolling
         if (cursorY < scrollOffsetY) {
             scrollOffsetY = cursorY;
         }
@@ -228,6 +592,21 @@ private:
         }
         if (scrollOffsetY < 0) {
             scrollOffsetY = 0;
+        }
+        
+        // Horizontal scrolling - keep cursor 5 chars from edge when possible
+        int margin = 5;
+        int viewWidth = screenWidth - margin;
+        if (viewWidth < 10) viewWidth = screenWidth;
+        
+        if (cursorX < scrollOffsetX) {
+            scrollOffsetX = cursorX;
+        }
+        if (cursorX >= scrollOffsetX + viewWidth) {
+            scrollOffsetX = cursorX - viewWidth + 1;
+        }
+        if (scrollOffsetX < 0) {
+            scrollOffsetX = 0;
         }
     }
 
@@ -272,6 +651,19 @@ private:
 
     void insertChar(char c) {
         if (lines.empty()) lines.push_back("");
+        
+        // Auto-wrap: if at screen edge, create new line first
+        if (cursorX >= screenWidth - 1) {
+            // Move cursor to next line (like pressing Enter)
+            std::string rest = lines[cursorY].substr(cursorX);
+            lines[cursorY] = lines[cursorY].substr(0, cursorX);
+            lines.insert(lines.begin() + cursorY + 1, rest);
+            cursorY++;
+            cursorX = 0;
+            scrollOffsetX = 0;  // Reset horizontal scroll
+            ensureCursorVisible();
+        }
+        
         lines[cursorY].insert(cursorX, 1, c);
         cursorX++;
         modified = true;
@@ -293,12 +685,26 @@ private:
             lines[cursorY].erase(cursorX - 1, 1);
             cursorX--;
             modified = true;
+            // Reset horizontal scroll if cursor is now visible without it
+            if (cursorX < screenWidth - 5) {
+                scrollOffsetX = 0;
+            }
         } else if (cursorY > 0) {
-            cursorX = (int)lines[cursorY - 1].length();
+            // Merging with previous line
+            int prevLineLen = (int)lines[cursorY - 1].length();
             lines[cursorY - 1] += lines[cursorY];
             lines.erase(lines.begin() + cursorY);
             cursorY--;
+            cursorX = prevLineLen;
             modified = true;
+            
+            // Reset horizontal scroll - we want cursor visible
+            scrollOffsetX = 0;
+            if (cursorX >= screenWidth - 5) {
+                // Cursor is beyond screen, need to scroll
+                scrollOffsetX = cursorX - screenWidth + 10;
+                if (scrollOffsetX < 0) scrollOffsetX = 0;
+            }
             ensureCursorVisible();
         }
     }
@@ -390,6 +796,13 @@ private:
         filename = saveName;
         modified = false;
         statusMessage = "Saved";
+        
+        // Update extension and syntax on first save
+        fs::path p(filename);
+        if (p.has_extension()) {
+            fileExtension = p.extension().string();
+            selectSyntax();
+        }
     }
 
     void search() {
@@ -439,6 +852,8 @@ private:
         std::cout << "  Ctrl+U      - Paste line\n";
         std::cout << "  Ctrl+W      - Search\n";
         std::cout << "  Ctrl+G      - This help\n\n";
+        std::cout << "  SYNTAX HIGHLIGHTING\n";
+        std::cout << "  Place .nano files in plugins/ folder\n\n";
         std::cout << "  Press any key to continue...";
         _getch();
     }
@@ -456,9 +871,9 @@ private:
         }
     }
 
-    void processInput() {
+    // Process a single input character (returns true if should continue processing)
+    bool processSingleInput(int ch) {
         statusMessage = "";
-        int ch = _getch();
         
         if (ch == 0 || ch == 224) {
             ch = _getch();
@@ -479,6 +894,7 @@ private:
             saveFile();
         } else if (ch == 7) {
             showHelp();
+            return false; // Force full redraw after help
         } else if (ch == 11) {
             cutLine();
         } else if (ch == 21) {
@@ -494,6 +910,7 @@ private:
         } else if (ch >= 32 && ch < 127) {
             insertChar((char)ch);
         }
+        return true;
     }
 
     void loadFile(const std::string& path) {
@@ -515,26 +932,60 @@ private:
 
 public:
     NanoEditor(const std::string& filepath = "") 
-        : filename(filepath), cursorX(0), cursorY(0), scrollOffsetY(0),
-          screenWidth(80), screenHeight(25), modified(false), running(true) {
+        : filename(filepath), cursorX(0), cursorY(0), scrollOffsetY(0), scrollOffsetX(0),
+          screenWidth(80), screenHeight(25), modified(false), running(true),
+          needsFullRedraw(true) {
         
         hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         getTerminalSize();
+        screenBuffer.resize(screenWidth * screenHeight);
         
+        // Load syntax plugins
+        loadPlugins();
+        
+        // Extract file extension
         if (!filepath.empty()) {
+            fs::path p(filepath);
+            if (p.has_extension()) {
+                fileExtension = p.extension().string();
+            }
             loadFile(filepath);
         } else {
             lines.push_back("");
             statusMessage = "New buffer";
         }
+        
+        // Select syntax based on extension
+        selectSyntax();
     }
 
     void run() {
         system("cls");
         
+        // Initial screen refresh before waiting for input
+        refreshScreen();
+        
         while (running) {
+            // Process ALL pending input before refreshing screen
+            // This handles paste operations as a batch
+            bool hasInput = _kbhit();
+            
+            if (hasInput) {
+                // Process all available input without refreshing
+                while (_kbhit()) {
+                    int ch = _getch();
+                    if (!processSingleInput(ch)) {
+                        break; // Force refresh (e.g., after help)
+                    }
+                }
+            } else {
+                // No input pending, wait for input
+                int ch = _getch();
+                processSingleInput(ch);
+            }
+            
+            // Refresh screen after processing all pending input
             refreshScreen();
-            processInput();
         }
         
         system("cls");

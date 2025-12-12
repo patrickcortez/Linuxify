@@ -1,0 +1,87 @@
+# Python Syntax Highlighting Plugin for Nano
+# Place this file in the plugins/ folder
+
+# Special character colors
+set `{}` = blue;
+set `()` = yellow;
+set `[]` = cyan;
+
+Section [.py]{
+    # Keywords
+    keyword: def, magenta;
+    keyword: class, magenta;
+    keyword: if, magenta;
+    keyword: elif, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: try, magenta;
+    keyword: except, magenta;
+    keyword: finally, magenta;
+    keyword: with, magenta;
+    keyword: as, magenta;
+    keyword: import, magenta;
+    keyword: from, magenta;
+    keyword: return, magenta;
+    keyword: yield, magenta;
+    keyword: break, magenta;
+    keyword: continue, magenta;
+    keyword: pass, magenta;
+    keyword: raise, magenta;
+    keyword: assert, magenta;
+    keyword: lambda, magenta;
+    keyword: async, magenta;
+    keyword: await, magenta;
+    
+    # Built-in types
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: str, blue;
+    keyword: bool, blue;
+    keyword: list, blue;
+    keyword: dict, blue;
+    keyword: set, blue;
+    keyword: tuple, blue;
+    keyword: bytes, blue;
+    keyword: None, blue;
+    keyword: True, orange;
+    keyword: False, orange;
+    
+    # Built-in functions
+    keyword: print, green;
+    keyword: input, green;
+    keyword: len, green;
+    keyword: range, green;
+    keyword: open, green;
+    keyword: type, green;
+    keyword: isinstance, green;
+    keyword: hasattr, green;
+    keyword: getattr, green;
+    keyword: setattr, green;
+    keyword: enumerate, green;
+    keyword: zip, green;
+    keyword: map, green;
+    keyword: filter, green;
+    keyword: sorted, green;
+    keyword: reversed, green;
+    keyword: sum, green;
+    keyword: min, green;
+    keyword: max, green;
+    keyword: abs, green;
+    keyword: round, green;
+    keyword: format, green;
+    keyword: repr, green;
+    keyword: super, green;
+    keyword: self, cyan;
+    keyword: cls, cyan;
+    
+    # Operators
+    keyword: and, yellow;
+    keyword: or, yellow;
+    keyword: not, yellow;
+    keyword: in, yellow;
+    keyword: is, yellow;
+    keyword: global, yellow;
+    keyword: nonlocal, yellow;
+    keyword: del, red;
+}

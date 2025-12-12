@@ -422,3 +422,26 @@ exit
 gcc --version
 gcc
 g++
+which gcc
+clear
+which g++
+which cc
+cc
+cd test
+ls
+rm main.exe
+cc main.cpp -o main
+nano main.cpp
+help
+lvc
+lin
+lin list
+clear
+ls
+cd test
+ls
+cat pythonic.sh
+./pythonic.sh
+exit
+help
+registry

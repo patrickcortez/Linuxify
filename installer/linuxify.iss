@@ -52,11 +52,15 @@ Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recu
 ; Bundled C++ Toolchain (MinGW-w64)
 Source: "{#SourcePath}\toolchain\*"; DestDir: "{app}\toolchain"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Nano syntax highlighting plugins
+Source: "{#SourcePath}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
+
 [Dirs]
 Name: "{app}\cmds"
 Name: "{app}\linuxdb"
 Name: "{app}\toolchain"
 Name: "{app}\toolchain\compiler"
+Name: "{app}\plugins"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"
