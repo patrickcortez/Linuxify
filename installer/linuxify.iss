@@ -34,7 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add Linuxify to system PATH"; GroupDescription: "System Integration:"
 Name: "addtoterminal"; Description: "Add Linuxify to Windows Terminal"; GroupDescription: "System Integration:"
-Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"; Flags: checked
+Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"
 
 [Files]
 ; Main executables

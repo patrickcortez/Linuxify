@@ -5099,7 +5099,8 @@ public:
         std::cout << "                             By Cortez\n" << std::endl;
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "  Linux Commands for Windows - Type 'help' for commands\n" << std::endl;
+        std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
+        std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
 
         // Silently start crond if not running (auto-setup cron on first run)
         {
