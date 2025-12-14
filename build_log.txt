@@ -1,0 +1,17 @@
+main.cpp: In member function 'void Linuxify::run()':
+main.cpp:5183:1: error: expected primary-expression before 'public'
+ 5183 | public:
+      | ^~~~~~
+main.cpp:5339:1: error: expected primary-expression before 'public'
+ 5339 | public:
+      | ^~~~~~
+main.cpp:5353:48: error: a function-definition is not allowed here before '{' token
+ 5353 |     int runScript(const std::string& filename) {
+      |                                                ^
+main.cpp:5377:48: error: a function-definition is not allowed here before '{' token
+ 5377 |     int runCommand(const std::string& command) {
+      |                                                ^
+main.cpp: In function 'int main(int, char**)':
+main.cpp:5418:22: error: 'class Linuxify' has no member named 'runScript'
+ 5418 |         return shell.runScript(argv[1]);
+      |                      ^~~~~~~~~

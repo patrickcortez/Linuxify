@@ -128,9 +128,75 @@ int g_fontWidth = 8;
 int g_fontHeight = 16;
 HWND g_hwnd = NULL;
 
-// ============================================================================
-// Logic
-// ============================================================================
+bool g_selecting = false;
+int g_selStartRow = -1, g_selStartCol = -1;
+int g_selEndRow = -1, g_selEndCol = -1;
+
+void ScreenToCell(int screenX, int screenY, int& row, int& col) {
+    int padding = 10;
+    int termY = TAB_HEIGHT + padding;
+    int termX = padding;
+    
+    col = (screenX - termX) / g_fontWidth;
+    row = (screenY - termY) / g_fontHeight;
+    if (col < 0) col = 0;
+    if (row < 0) row = 0;
+}
+
+void ClearSelection() {
+    g_selecting = false;
+    g_selStartRow = g_selStartCol = g_selEndRow = g_selEndCol = -1;
+}
+
+bool HasSelection() {
+    return g_selStartRow >= 0 && g_selEndRow >= 0;
+}
+
+void GetOrderedSelection(int& r1, int& c1, int& r2, int& c2) {
+    if (g_selStartRow < g_selEndRow || (g_selStartRow == g_selEndRow && g_selStartCol <= g_selEndCol)) {
+        r1 = g_selStartRow; c1 = g_selStartCol;
+        r2 = g_selEndRow; c2 = g_selEndCol;
+    } else {
+        r1 = g_selEndRow; c1 = g_selEndCol;
+        r2 = g_selStartRow; c2 = g_selStartCol;
+    }
+}
+
+std::string GetSelectedText() {
+    if (!HasSelection() || g_activeSessionIndex < 0) return "";
+    Session* s = g_sessions[g_activeSessionIndex];
+    std::lock_guard<std::mutex> lock(s->mutex);
+    
+    int r1, c1, r2, c2;
+    GetOrderedSelection(r1, c1, r2, c2);
+    
+    std::string text;
+    int historySize = s->inAltBuffer ? 0 : s->history.size();
+    int totalRows = historySize + s->grid.size();
+    int startLine = totalRows - s->rows - s->viewOffset;
+    
+    for (int i = r1; i <= r2 && i < s->rows; i++) {
+        int lineIdx = startLine + i;
+        if (lineIdx < 0 || lineIdx >= totalRows) continue;
+        
+        const std::vector<Cell>* rowPtr = nullptr;
+        if (lineIdx < historySize) rowPtr = &s->history[lineIdx];
+        else rowPtr = &s->grid[lineIdx - historySize];
+        
+        if (!rowPtr) continue;
+        
+        int startCol = (i == r1) ? c1 : 0;
+        int endCol = (i == r2) ? c2 : (int)rowPtr->size() - 1;
+        
+        for (int c = startCol; c <= endCol && c < (int)rowPtr->size(); c++) {
+            text += (*rowPtr)[c].ch;
+        }
+        if (i < r2) text += "\r\n";
+    }
+    
+    // Trim trailing spaces from each line
+    return text;
+}
 
 COLORREF GetXtermColor(int index) {
     if (index < 16) return PALETTE[index];
@@ -441,12 +507,39 @@ void PaintWindow(HWND hwnd, HDC hdc) {
             
             if (rowPtr) {
                 const auto& row = *rowPtr;
+                
+                // Get selection bounds
+                int r1, c1, r2, c2;
+                bool hasSel = HasSelection();
+                if (hasSel) GetOrderedSelection(r1, c1, r2, c2);
+                
                 for (int c = 0; c < row.size(); ++c) {
                     const Cell& cell = row[c];
                     int x = termX + c * g_fontWidth;
                     int y = termY + i * g_fontHeight;
-                    SetTextColor(hdcMem, cell.fg);
-                    SetBkColor(hdcMem, cell.bg);
+                    
+                    // Check if this cell is selected
+                    bool isSelected = false;
+                    if (hasSel && i >= r1 && i <= r2) {
+                        if (r1 == r2) {
+                            isSelected = (c >= c1 && c <= c2);
+                        } else if (i == r1) {
+                            isSelected = (c >= c1);
+                        } else if (i == r2) {
+                            isSelected = (c <= c2);
+                        } else {
+                            isSelected = true;
+                        }
+                    }
+                    
+                    if (isSelected) {
+                        // Highlight: invert colors (white bg, dark text)
+                        SetTextColor(hdcMem, RGB(0, 0, 0));
+                        SetBkColor(hdcMem, RGB(100, 149, 237)); // Cornflower blue selection
+                    } else {
+                        SetTextColor(hdcMem, cell.fg);
+                        SetBkColor(hdcMem, cell.bg);
+                    }
                     TextOutA(hdcMem, x, y, &cell.ch, 1);
                 }
             }
@@ -520,8 +613,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT) {
             POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
-            if (pt.y < TAB_HEIGHT) SetCursor(LoadCursor(NULL, IDC_ARROW));
-            else SetCursor(LoadCursor(NULL, IDC_IBEAM));
+            // Always use arrow cursor in terminal (like PowerShell)
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
             return TRUE;
         }
         break;
@@ -537,6 +630,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (x > tabLeft + tabWidth - 25) CloseSession(clickedIndex);
                     else SwitchTab(clickedIndex);
                 } else if (clickedIndex == g_sessions.size() && x < ((g_sessions.size()*tabWidth)+40)) CreateNewSession();
+            } else {
+                // Start text selection in terminal area
+                ScreenToCell(x, y, g_selStartRow, g_selStartCol);
+                g_selEndRow = g_selStartRow;
+                g_selEndCol = g_selStartCol;
+                g_selecting = true;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+        if (g_selecting) {
+            int x = LOWORD(lParam); int y = HIWORD(lParam);
+            ScreenToCell(x, y, g_selEndRow, g_selEndCol);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (g_selecting) {
+            int x = LOWORD(lParam); int y = HIWORD(lParam);
+            ScreenToCell(x, y, g_selEndRow, g_selEndCol);
+            g_selecting = false;
+            ReleaseCapture();
+            InvalidateRect(hwnd, NULL, FALSE);
+            
+            // If no actual selection (same start/end), clear
+            if (g_selStartRow == g_selEndRow && g_selStartCol == g_selEndCol) {
+                ClearSelection();
             }
         }
         return 0;
@@ -547,6 +671,45 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (y < TAB_HEIGHT) {
                 int clickedIndex = x / 140;
                 if (clickedIndex < g_sessions.size()) CloseSession(clickedIndex);
+            }
+        }
+        return 0;
+
+    case WM_RBUTTONUP:
+        // Right-click: copy if selection, paste if no selection
+        if (g_activeSessionIndex >= 0) {
+            Session* s = g_sessions[g_activeSessionIndex];
+            int y = HIWORD(lParam);
+            if (y >= TAB_HEIGHT) {  // Only in terminal area
+                if (HasSelection()) {
+                    // Copy selection to clipboard
+                    std::string text = GetSelectedText();
+                    if (!text.empty() && OpenClipboard(hwnd)) {
+                        EmptyClipboard();
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+                        if (hMem) {
+                            memcpy(GlobalLock(hMem), text.c_str(), text.size() + 1);
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_TEXT, hMem);
+                        }
+                        CloseClipboard();
+                        ClearSelection();
+                        InvalidateRect(hwnd, NULL, FALSE);
+                    }
+                } else {
+                    // Paste from clipboard
+                    if (OpenClipboard(hwnd)) {
+                        HANDLE hData = GetClipboardData(CF_TEXT);
+                        if (hData) {
+                            char* text = (char*)GlobalLock(hData);
+                            if (text) {
+                                WriteFile(s->hPipeIn, text, strlen(text), NULL, NULL);
+                                GlobalUnlock(hData);
+                            }
+                        }
+                        CloseClipboard();
+                    }
+                }
             }
         }
         return 0;
@@ -591,11 +754,49 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
             // Handle Ctrl Shortcuts
             if (GetKeyState(VK_CONTROL) & 0x8000) {
+                bool hasShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                
                 if (wParam == 'T') { CreateNewSession(); return 0; }
                 if (wParam == 'W') { CloseSession(g_activeSessionIndex); return 0; }
                 
-                // Generic Ctrl+A to Ctrl+Z mapping
-                if (wParam >= 'A' && wParam <= 'Z') {
+                // Ctrl+Shift+C - Copy selection to clipboard
+                if (wParam == 'C' && hasShift) {
+                    if (HasSelection()) {
+                        std::string text = GetSelectedText();
+                        if (!text.empty() && OpenClipboard(hwnd)) {
+                            EmptyClipboard();
+                            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+                            if (hMem) {
+                                memcpy(GlobalLock(hMem), text.c_str(), text.size() + 1);
+                                GlobalUnlock(hMem);
+                                SetClipboardData(CF_TEXT, hMem);
+                            }
+                            CloseClipboard();
+                            ClearSelection();
+                            InvalidateRect(hwnd, NULL, FALSE);
+                        }
+                    }
+                    return 0;
+                }
+                
+                // Ctrl+Shift+V - Paste from clipboard
+                if (wParam == 'V' && hasShift) {
+                    if (OpenClipboard(hwnd)) {
+                        HANDLE hData = GetClipboardData(CF_TEXT);
+                        if (hData) {
+                            char* text = (char*)GlobalLock(hData);
+                            if (text) {
+                                WriteFile(s->hPipeIn, text, strlen(text), NULL, NULL);
+                                GlobalUnlock(hData);
+                            }
+                        }
+                        CloseClipboard();
+                    }
+                    return 0;
+                }
+                
+                // Generic Ctrl+A to Ctrl+Z mapping (send control char to terminal)
+                if (wParam >= 'A' && wParam <= 'Z' && !hasShift) {
                     char c = (char)(wParam - 'A' + 1);
                     WriteFile(s->hPipeIn, &c, 1, NULL, NULL);
                     return 0;

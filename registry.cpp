@@ -344,24 +344,49 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             return false;
         }
         
+        // Normalize interpreter name for comparison
+        std::string interpreterName = interpreterSpec;
+        // Remove .exe if present
+        if (interpreterName.size() > 4 && interpreterName.substr(interpreterName.size() - 4) == ".exe") {
+            interpreterName = interpreterName.substr(0, interpreterName.size() - 4);
+        }
+        // Get basename (remove path)
+        size_t lastSlash = interpreterName.find_last_of("/\\");
+        if (lastSlash != std::string::npos) {
+            interpreterName = interpreterName.substr(lastSlash + 1);
+        }
+        // Convert to lowercase for comparison
+        std::transform(interpreterName.begin(), interpreterName.end(), interpreterName.begin(), ::tolower);
+        
+        // Check for internal interpreters (default, lish, bash, sh)
+        // These should be handled by linuxify's internal interpreter, not looked up externally
+        if (interpreterName == "default" || interpreterName == "lish" || 
+            interpreterName == "bash" || interpreterName == "sh") {
+            // Use linuxify's internal interpreter - find linuxify.exe
+            char exePathBuf[MAX_PATH];
+            GetModuleFileNameA(NULL, exePathBuf, MAX_PATH);
+            interpreterPath = exePathBuf;  // Current linuxify.exe
+        }
         // Check if it's an absolute path or a registry name
-        fs::path specPath(interpreterSpec);
-        if (specPath.is_absolute() && fs::exists(interpreterSpec)) {
-            // Direct absolute path
-            interpreterPath = interpreterSpec;
-        } else {
-            // Try to look up in registry
-            std::string regPath = getExecutablePath(interpreterSpec);
-            if (!regPath.empty() && fs::exists(regPath)) {
-                interpreterPath = regPath;
-            } else if (fs::exists(interpreterSpec)) {
-                // Relative path that exists
-                interpreterPath = fs::absolute(interpreterSpec).string();
+        else {
+            fs::path specPath(interpreterSpec);
+            if (specPath.is_absolute() && fs::exists(interpreterSpec)) {
+                // Direct absolute path
+                interpreterPath = interpreterSpec;
             } else {
-                std::cerr << "Interpreter not found: " << interpreterSpec << std::endl;
-                std::cerr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << std::endl;
-                std::cerr << "Or use an absolute path in the shebang" << std::endl;
-                return false;
+                // Try to look up in registry
+                std::string regPath = getExecutablePath(interpreterSpec);
+                if (!regPath.empty() && fs::exists(regPath)) {
+                    interpreterPath = regPath;
+                } else if (fs::exists(interpreterSpec)) {
+                    // Relative path that exists
+                    interpreterPath = fs::absolute(interpreterSpec).string();
+                } else {
+                    std::cerr << "Interpreter not found: " << interpreterSpec << std::endl;
+                    std::cerr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << std::endl;
+                    std::cerr << "Or use an absolute path in the shebang" << std::endl;
+                    return false;
+                }
             }
         }
         

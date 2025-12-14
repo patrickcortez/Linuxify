@@ -2,6 +2,7 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
+claude=C:\Users\patri\.local\bin\claude.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
 convert=C:\WINDOWS\system32\convert.exe
@@ -12,8 +13,6 @@ gcc=C:\mingw64\mingw64\bin\gcc.exe
 git=C:\Program Files\Git\cmd\git.exe
 java=C:\Program Files (x86)\Common Files\Oracle\Java\javapath\java.exe
 javac=C:\Users\patri\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\javac.exe
-linuxify=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe
-lish=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\cmds\lish.exe
 mysql=C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe
@@ -21,14 +20,13 @@ nslookup=C:\WINDOWS\system32\nslookup.exe
 ping=C:\WINDOWS\system32\ping.exe
 pip=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip.exe
 pip3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip3.exe
+proj1=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\project.sh
 python=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python.exe
 python3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python3.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
-sudo=C:\WINDOWS\system32\sudo.exe
 tar=C:\WINDOWS\system32\tar.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
-winver=C:\WINDOWS\system32\winver.exe

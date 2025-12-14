@@ -82,15 +82,20 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 ; Register crond to run at SYSTEM boot (not just user login)
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LinuxifyCrond"; ValueData: """{app}\cmds\crond.exe"""; Tasks: installcron; Flags: uninsdeletevalue
 
-; Open Linuxify Here Context Menu (Directory Background)
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify"; ValueType: string; ValueName: ""; ValueData: "Open Linuxify Here"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\assets\linux_penguin_animal_9362.ico"
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"""
+; Open in Windux Context Menu (Directory Background - right-click in folder empty space)
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Windux"; ValueType: string; ValueName: ""; ValueData: "Open in Windux"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Windux"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\cmds\windux.exe"""
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Windux\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"" ""%V"""
 
-; Open Linuxify Here Context Menu (Directory)
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify"; ValueType: string; ValueName: ""; ValueData: "Open Linuxify Here"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\assets\linux_penguin_animal_9362.ico"
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"""
+; Open in Windux Context Menu (Directory - right-click on a folder)
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Windux"; ValueType: string; ValueName: ""; ValueData: "Open in Windux"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Windux"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\cmds\windux.exe"""
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Windux\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"" ""%V"""
+
+; Open in Windux Context Menu (Desktop Background - right-click on desktop)
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\Windux"; ValueType: string; ValueName: ""; ValueData: "Open in Windux"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\Windux"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\cmds\windux.exe"""
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\Windux\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"" ""%V"""
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

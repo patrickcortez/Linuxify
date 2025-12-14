@@ -23,6 +23,7 @@
 #include "process_manager.hpp"
 #include "system_info.hpp"
 #include "networking.hpp"
+#include "cmds-src/interpreter.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -38,6 +39,7 @@ private:
     std::string currentDir;
     std::vector<std::string> commandHistory;
     std::map<std::string, std::string> sessionEnv;  // Session-specific environment variables
+    Bash::Interpreter interpreter;
 
     std::vector<std::string> tokenize(const std::string& input) {
         std::vector<std::string> tokens;
@@ -3754,6 +3756,7 @@ private:
             std::cout << "  setup status       Check current file association\n";
             std::cout << "  setup admin        Enable sudo command for Windows (requires admin)\n";
             std::cout << "  setup cron         Configure cron daemon (auto-start at boot)\n";
+            std::cout << "  setup windux       Add 'Open in Windux' to Explorer right-click menu\n";
             return;
         }
         
@@ -4057,6 +4060,84 @@ private:
                 printError("Some issues found. Please fix them above.");
             }
             
+        } else if (action == "windux") {
+            // Add "Open in Windux" to Windows Explorer context menu
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            fs::path winduxPath = fs::path(exePath).parent_path() / "cmds" / "windux.exe";
+            
+            if (!fs::exists(winduxPath)) {
+                printError("windux.exe not found at: " + winduxPath.string());
+                return;
+            }
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Adding 'Open in Windux' to Windows Explorer context menu...\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            std::string winduxCmd = "\"" + winduxPath.string() + "\"";
+            bool success = true;
+            HKEY hKey;
+            
+            // 1. Add to Directory Background (right-click in folder empty space)
+            std::cout << "[1/3] Directory background context menu... ";
+            std::string keyPath1 = "Directory\\Background\\shell\\Windux";
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, keyPath1.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)"Open in Windux", 15);
+                RegSetValueExA(hKey, "Icon", 0, REG_SZ, (const BYTE*)winduxCmd.c_str(), (DWORD)(winduxCmd.length() + 1));
+                RegCloseKey(hKey);
+                
+                std::string cmdKeyPath = keyPath1 + "\\command";
+                if (RegCreateKeyExA(HKEY_CLASSES_ROOT, cmdKeyPath.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                    std::string cmd = winduxCmd + " \"%V\"";
+                    RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)cmd.c_str(), (DWORD)(cmd.length() + 1));
+                    RegCloseKey(hKey);
+                    std::cout << "\033[32mOK\033[0m\n";
+                } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            
+            // 2. Add to Desktop Background (right-click on desktop)
+            std::cout << "[2/3] Desktop background context menu... ";
+            std::string keyPath2 = "DesktopBackground\\shell\\Windux";
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, keyPath2.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)"Open in Windux", 15);
+                RegSetValueExA(hKey, "Icon", 0, REG_SZ, (const BYTE*)winduxCmd.c_str(), (DWORD)(winduxCmd.length() + 1));
+                RegCloseKey(hKey);
+                
+                std::string cmdKeyPath = keyPath2 + "\\command";
+                if (RegCreateKeyExA(HKEY_CLASSES_ROOT, cmdKeyPath.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                    std::string cmd = winduxCmd + " \"%V\"";
+                    RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)cmd.c_str(), (DWORD)(cmd.length() + 1));
+                    RegCloseKey(hKey);
+                    std::cout << "\033[32mOK\033[0m\n";
+                } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            
+            // 3. Add to Folder context menu (right-click on a folder)
+            std::cout << "[3/3] Folder context menu... ";
+            std::string keyPath3 = "Directory\\shell\\Windux";
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, keyPath3.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)"Open in Windux", 15);
+                RegSetValueExA(hKey, "Icon", 0, REG_SZ, (const BYTE*)winduxCmd.c_str(), (DWORD)(winduxCmd.length() + 1));
+                RegCloseKey(hKey);
+                
+                std::string cmdKeyPath = keyPath3 + "\\command";
+                if (RegCreateKeyExA(HKEY_CLASSES_ROOT, cmdKeyPath.c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                    std::string cmd = winduxCmd + " \"%V\"";
+                    RegSetValueExA(hKey, NULL, 0, REG_SZ, (const BYTE*)cmd.c_str(), (DWORD)(cmd.length() + 1));
+                    RegCloseKey(hKey);
+                    std::cout << "\033[32mOK\033[0m\n";
+                } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            } else { std::cout << "\033[31mFAILED\033[0m\n"; success = false; }
+            
+            std::cout << "\n";
+            if (success) {
+                printSuccess("'Open in Windux' added to Explorer context menu!");
+                std::cout << "Right-click in Explorer to see the option.\n";
+            } else {
+                printError("Some entries failed. Try running as Administrator.");
+            }
+            
         } else {
             printError("Unknown setup action: " + action);
         }
@@ -4069,7 +4150,9 @@ private:
 
         const std::string& cmd = tokens[0];
 
-        std::cout << std::endl;
+        // Only print newline if not running from a script (how to detect?)
+        // For now, keep it potentially noisy or improve later.
+        // std::cout << std::endl; 
 
         try {
         if (cmd == "pwd") {
@@ -4639,6 +4722,29 @@ private:
                 return;
             }
             
+            // Normalize interpreter name for comparison
+            std::string interpreterName = interpreterSpec;
+            // Remove .exe if present
+            if (interpreterName.size() > 4 && interpreterName.substr(interpreterName.size() - 4) == ".exe") {
+                interpreterName = interpreterName.substr(0, interpreterName.size() - 4);
+            }
+            // Get basename (remove path)
+            size_t lastSlash = interpreterName.find_last_of("/\\");
+            if (lastSlash != std::string::npos) {
+                interpreterName = interpreterName.substr(lastSlash + 1);
+            }
+            // Convert to lowercase for comparison
+            std::transform(interpreterName.begin(), interpreterName.end(), interpreterName.begin(), ::tolower);
+            
+            // Check for internal interpreters (default, lish, bash, sh)
+            // These should be handled by the internal interpreter, not looked up externally
+            if (interpreterName == "default" || interpreterName == "lish" || 
+                interpreterName == "bash" || interpreterName == "sh") {
+                // Use the internal interpreter directly - run the script!
+                runScript(fullPath);
+                return;
+            }
+            
             // Check if it's an absolute path or a registry name
             fs::path specPath(interpreterSpec);
             if (specPath.is_absolute() && fs::exists(interpreterSpec)) {
@@ -4716,15 +4822,15 @@ public:
         SetEnvironmentVariableA("SHELL", exePath);
         SetEnvironmentVariableA("LINUXIFY", "1");
         SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
+
+        // Link interpreter to this shell
+        interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) {
+            this->executeCommand(args);
+            return 0;
+        });
     }
 
-    // Run a single command (for -c flag support)
-    void runCommand(const std::string& cmdStr) {
-        std::vector<std::string> tokens = tokenize(cmdStr);
-        if (!tokens.empty()) {
-            executeCommand(tokens);
-        }
-    }
+
 
     // Check if a command is a built-in Linuxify command
     bool isBuiltinCommand(const std::string& cmd) {
@@ -5174,7 +5280,7 @@ public:
                     }
                 }
             }
-        }
+    }
 
         std::string input;
         
@@ -5326,8 +5432,55 @@ public:
             }
         }
 
-        std::cout << "\nGoodbye!\n";
     }
+
+
+
+
+    int runScript(const std::string& filename, const std::vector<std::string>& args = {}) {
+        std::ifstream file(filename);
+        if (!file) {
+            printError("Script not found: " + filename);
+            return 1;
+        }
+        
+        // Skip shebang if present
+        std::string line;
+        std::getline(file, line);
+        if (line.size() > 2 && line[0] == '#' && line[1] == '!') {
+            // Check for recursive lish execution
+            std::string shebang = line.substr(2);
+            if (shebang.find("lish") != std::string::npos) {
+                printError("No Goofy shebangs allowed ;), thats basically inception. Sooooo...... Yeah");
+                return 1;
+            }
+        } else {
+            // Not a shebang, rewind
+            file.clear();
+            file.seekg(0);
+        }
+        
+        // Set up script arguments ($0, $1, $2, etc.)
+        std::vector<std::string> scriptArgs;
+        scriptArgs.push_back(filename);  // $0 is script name
+        for (const auto& arg : args) {
+            scriptArgs.push_back(arg);
+        }
+        interpreter.setScriptArgs(scriptArgs);
+        
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        int result = interpreter.runCode(buffer.str());
+        
+        interpreter.clearScriptArgs();
+        return result;
+    }
+    
+    // Run a single command string (e.g. from -c)
+    int runCommand(const std::string& command) {
+        return interpreter.runCode(command);
+    }
+    
 };
 
 // Ctrl+C handler - prevents shell from exiting
@@ -5351,17 +5504,25 @@ int main(int argc, char* argv[]) {
     
     Linuxify shell;
     
-    // Handle -c flag: execute command and exit (used by sudo)
+    // Handle -c flag: execute command and exit
     if (argc >= 3 && std::string(argv[1]) == "-c") {
-        // Combine all remaining arguments as the command
         std::string command;
         for (int i = 2; i < argc; i++) {
             if (i > 2) command += " ";
             command += argv[i];
         }
-        
         shell.runCommand(command);
         return 0;
+    }
+    
+    // Handle script file execution
+    if (argc >= 2 && argv[1][0] != '-') {
+        // Collect script arguments
+        std::vector<std::string> scriptArgs;
+        for (int i = 2; i < argc; i++) {
+            scriptArgs.push_back(argv[i]);
+        }
+        return shell.runScript(argv[1], scriptArgs);
     }
     
     shell.run();
