@@ -67,8 +67,10 @@ Name: "{app}\plugins"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"
+Name: "{group}\Windux"; Filename: "{app}\cmds\windux.exe"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"; Tasks: desktopicon
+Name: "{autodesktop}\Windux"; Filename: "{app}\cmds\windux.exe"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"; Tasks: desktopicon
 
 [Registry]
 ; Add Linuxify and toolchain to PATH
@@ -79,6 +81,16 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 
 ; Register crond to run at SYSTEM boot (not just user login)
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LinuxifyCrond"; ValueData: """{app}\cmds\crond.exe"""; Tasks: installcron; Flags: uninsdeletevalue
+
+; Open Linuxify Here Context Menu (Directory Background)
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify"; ValueType: string; ValueName: ""; ValueData: "Open Linuxify Here"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\assets\linux_penguin_animal_9362.ico"
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Linuxify\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"""
+
+; Open Linuxify Here Context Menu (Directory)
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify"; ValueType: string; ValueName: ""; ValueData: "Open Linuxify Here"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\assets\linux_penguin_animal_9362.ico"
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\Linuxify\command"; ValueType: string; ValueName: ""; ValueData: """{app}\cmds\windux.exe"""
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

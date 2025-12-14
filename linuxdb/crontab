@@ -1,7 +1,1 @@
-# Linuxify Crontab - Test Configuration
-# 
-# Format: min hour day month weekday command
-# Special: @reboot @hourly @daily @weekly @monthly @yearly
-
-# Test job - runs every minute, prints to console
-* * * * * python test_cron.py
+# Linuxify Crontab - Empty

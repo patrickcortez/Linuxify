@@ -1,7 +1,4 @@
 // Linuxify Cron Daemon (crond)
-// A standalone daemon that runs scheduled tasks based on crontab
-// Communicates with linuxify shell via named pipes (IPC)
-//
 // Compile: g++ -std=c++17 -static -o crond.exe crond.cpp -lws2_32
 
 #include <windows.h>
@@ -100,6 +97,76 @@ void printUsage() {
     std::cout << "  --uninstall Remove crond from Windows startup\n";
     std::cout << "  --status    Check if crond is running\n";
     std::cout << "  --help      Show this help\n";
+}
+
+// ============================================================================
+// Registry Lookup (for interpreter resolution)
+// ============================================================================
+
+std::map<std::string, std::string> g_registry;  // command -> path
+std::string g_registryPath;
+
+void loadRegistry() {
+    g_registry.clear();
+    g_registryPath = g_linuxdbPath + "\\registry.lin";
+    
+    std::ifstream file(g_registryPath);
+    if (!file) return;
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        
+        size_t pos = line.find('=');
+        if (pos != std::string::npos) {
+            std::string cmd = line.substr(0, pos);
+            std::string path = line.substr(pos + 1);
+            
+            // Trim whitespace
+            cmd.erase(0, cmd.find_first_not_of(" \t"));
+            cmd.erase(cmd.find_last_not_of(" \t\r\n") + 1);
+            path.erase(0, path.find_first_not_of(" \t"));
+            path.erase(path.find_last_not_of(" \t\r\n") + 1);
+            
+            if (!cmd.empty() && !path.empty()) {
+                g_registry[cmd] = path;
+            }
+        }
+    }
+    
+    logMessage("Registry loaded: " + std::to_string(g_registry.size()) + " interpreters");
+}
+
+std::string lookupInterpreter(const std::string& name) {
+    // Check registry first
+    auto it = g_registry.find(name);
+    if (it != g_registry.end() && fs::exists(it->second)) {
+        return it->second;
+    }
+    
+    // Check if it's in the cmds folder (like lish)
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    fs::path cmdsDir = fs::path(exePath).parent_path();
+    if (cmdsDir.filename() == "cmds") {
+        cmdsDir = cmdsDir.parent_path() / "cmds";
+    } else {
+        cmdsDir = cmdsDir / "cmds";
+    }
+    
+    // Check for .exe in cmds folder
+    fs::path cmdPath = cmdsDir / (name + ".exe");
+    if (fs::exists(cmdPath)) {
+        return cmdPath.string();
+    }
+    
+    // Check if it's already an absolute path to an executable
+    if (fs::exists(name)) {
+        return name;
+    }
+    
+    // Not found
+    return "";
 }
 
 // ============================================================================
@@ -290,30 +357,60 @@ bool shouldRunNow(const CronJob& job, const std::tm& tm) {
 void executeJob(const CronJob& job) {
     logMessage("Executing: " + job.command);
     
-    // Get linuxify.exe path
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    fs::path exeDir = fs::path(exePath).parent_path();
+    // Parse the command - first word might be an interpreter
+    std::string command = job.command;
+    std::string firstWord;
+    std::string restOfCommand;
     
-    if (exeDir.filename() == "cmds") {
-        exeDir = exeDir.parent_path();
+    // Trim leading whitespace
+    size_t start = command.find_first_not_of(" \t");
+    if (start != std::string::npos) {
+        command = command.substr(start);
     }
     
-    fs::path linuxifyPath = exeDir / "linuxify.exe";
+    // Extract first word
+    size_t spacePos = command.find(' ');
+    if (spacePos != std::string::npos) {
+        firstWord = command.substr(0, spacePos);
+        restOfCommand = command.substr(spacePos + 1);
+        // Trim leading space from rest
+        size_t rs = restOfCommand.find_first_not_of(" \t");
+        if (rs != std::string::npos) restOfCommand = restOfCommand.substr(rs);
+    } else {
+        firstWord = command;
+        restOfCommand = "";
+    }
     
     std::string cmdLine;
     
-    // Check if it's an executable path or needs linuxify
-    if (job.command.find(".exe") != std::string::npos ||
-        job.command.find(".bat") != std::string::npos ||
-        job.command.find(".cmd") != std::string::npos ||
-        job.command.find(".ps1") != std::string::npos ||
-        job.command.find(":\\") != std::string::npos) {
-        // Direct executable
+    // Check if first word is a direct executable (contains path or extension)
+    bool isDirectExecutable = 
+        firstWord.find(".exe") != std::string::npos ||
+        firstWord.find(".bat") != std::string::npos ||
+        firstWord.find(".cmd") != std::string::npos ||
+        firstWord.find(".ps1") != std::string::npos ||
+        firstWord.find(":\\") != std::string::npos ||
+        firstWord.find("/") != std::string::npos;
+    
+    if (isDirectExecutable) {
+        // Direct executable - run as-is via cmd
         cmdLine = "cmd /c " + job.command;
     } else {
-        // Run via linuxify
-        cmdLine = "\"" + linuxifyPath.string() + "\" -c \"" + job.command + "\"";
+        // Try to look up the interpreter in registry
+        std::string interpreterPath = lookupInterpreter(firstWord);
+        
+        if (!interpreterPath.empty()) {
+            // Found interpreter in registry - use it directly
+            cmdLine = "\"" + interpreterPath + "\"";
+            if (!restOfCommand.empty()) {
+                cmdLine += " " + restOfCommand;
+            }
+            logMessage("Using interpreter: " + firstWord + " -> " + interpreterPath);
+        } else {
+            // Not found in registry - try running via cmd (might be in PATH)
+            cmdLine = "cmd /c " + job.command;
+            logMessage("Interpreter not in registry, using PATH: " + firstWord);
+        }
     }
     
     STARTUPINFOA si;
@@ -422,6 +519,9 @@ void ipcServerLoop() {
 void daemonLoop() {
     logMessage("Cron daemon started");
     
+    // Load registry for interpreter lookup
+    loadRegistry();
+    
     // Load crontab
     loadCrontab();
     
@@ -444,7 +544,8 @@ void daemonLoop() {
             std::tm tm;
             localtime_s(&tm, &now);
             
-            // Reload crontab to pick up changes
+            // Reload registry and crontab to pick up changes
+            loadRegistry();
             loadCrontab();
             
             // Check each job
