@@ -1,5 +1,7 @@
 # Linuxify
 
+*Status: W.I.P*
+
 A custom written shell called **Linuxify** in C++ for Users to directly interact with the
 Windows kernel with linux syntax for its commands.
 
@@ -62,5 +64,3 @@ Windows kernel with linux syntax for its commands.
 ## Phase 7 Integrating Linux commands and utilities
 
 - [ ] Integrate the rest of the Linux commands and utilities
-- [ ] Emulate Linux environment 
-- [ ] Emulate Linux file system

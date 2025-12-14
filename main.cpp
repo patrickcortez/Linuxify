@@ -16,6 +16,7 @@
 #include <sstream>
 #include <ctime>
 #include <map>
+#include <functional>
 #include <sys/utime.h>
 
 #include "registry.hpp"
@@ -25,6 +26,9 @@
 
 // Global process manager instance
 ProcessManager g_procMgr;
+
+// IPC pipe name for crond communication
+const char* CROND_PIPE_NAME = "\\\\.\\pipe\\LinuxifyCrond";
 
 namespace fs = std::filesystem;
 
@@ -1895,6 +1899,1163 @@ private:
         }
     }
 
+    // ============================================================================
+    // TEXT PROCESSING COMMANDS
+    // ============================================================================
+
+    // less/more - pager for viewing files
+    void cmdLess(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (args.size() > 1) {
+            std::string filePath = resolvePath(args[1]);
+            std::ifstream file(filePath);
+            if (!file) {
+                printError("less: cannot open '" + args[1] + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("less: missing file operand");
+            return;
+        }
+        
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        int pageSize = csbi.srWindow.Bottom - csbi.srWindow.Top - 1;
+        if (pageSize < 5) pageSize = 20;
+        
+        size_t currentLine = 0;
+        HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD oldMode;
+        GetConsoleMode(hInput, &oldMode);
+        SetConsoleMode(hInput, 0);  // Raw input mode
+        
+        while (currentLine < lines.size()) {
+            // Display a page
+            for (int i = 0; i < pageSize && currentLine < lines.size(); ++i, ++currentLine) {
+                std::cout << lines[currentLine] << "\n";
+            }
+            
+            if (currentLine >= lines.size()) break;
+            
+            // Show prompt
+            SetConsoleTextAttribute(hConsole, FOREGROUND_INTENSITY);
+            std::cout << "-- More -- (q to quit, Enter for next line, Space for next page)";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            // Wait for key
+            INPUT_RECORD ir;
+            DWORD read;
+            while (true) {
+                ReadConsoleInput(hInput, &ir, 1, &read);
+                if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
+                    char ch = ir.Event.KeyEvent.uChar.AsciiChar;
+                    if (ch == 'q' || ch == 'Q') {
+                        std::cout << "\r                                                            \r";
+                        SetConsoleMode(hInput, oldMode);
+                        return;
+                    } else if (ch == ' ') {
+                        std::cout << "\r                                                            \r";
+                        break;  // Next page
+                    } else if (ch == '\r' || ch == '\n') {
+                        std::cout << "\r                                                            \r";
+                        currentLine--;  // Show one more line
+                        break;
+                    }
+                }
+            }
+        }
+        
+        SetConsoleMode(hInput, oldMode);
+    }
+
+    // cut - extract columns from text
+    void cmdCut(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        char delimiter = '\t';  // Default delimiter is tab
+        std::vector<int> fields;
+        std::string filePath;
+        bool byChar = false;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-d" && i + 1 < args.size()) {
+                std::string delim = args[++i];
+                if (!delim.empty()) delimiter = delim[0];
+            } else if (args[i] == "-f" && i + 1 < args.size()) {
+                std::string fieldSpec = args[++i];
+                // Parse field specification (e.g., "1,2,3" or "1-3")
+                std::istringstream fss(fieldSpec);
+                std::string part;
+                while (std::getline(fss, part, ',')) {
+                    size_t dashPos = part.find('-');
+                    if (dashPos != std::string::npos) {
+                        int start = std::stoi(part.substr(0, dashPos));
+                        int end = std::stoi(part.substr(dashPos + 1));
+                        for (int f = start; f <= end; ++f) {
+                            fields.push_back(f);
+                        }
+                    } else {
+                        fields.push_back(std::stoi(part));
+                    }
+                }
+            } else if (args[i] == "-c" && i + 1 < args.size()) {
+                byChar = true;
+                std::string charSpec = args[++i];
+                std::istringstream css(charSpec);
+                std::string part;
+                while (std::getline(css, part, ',')) {
+                    size_t dashPos = part.find('-');
+                    if (dashPos != std::string::npos) {
+                        int start = std::stoi(part.substr(0, dashPos));
+                        int end = std::stoi(part.substr(dashPos + 1));
+                        for (int c = start; c <= end; ++c) {
+                            fields.push_back(c);
+                        }
+                    } else {
+                        fields.push_back(std::stoi(part));
+                    }
+                }
+            } else if (args[i][0] != '-') {
+                filePath = args[i];
+            }
+        }
+        
+        if (fields.empty()) {
+            printError("cut: you must specify a list of bytes, characters, or fields");
+            return;
+        }
+        
+        std::vector<std::string> lines;
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("cut: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("cut: missing file operand");
+            return;
+        }
+        
+        for (const auto& line : lines) {
+            if (byChar) {
+                // Cut by character position
+                std::string result;
+                for (int pos : fields) {
+                    if (pos > 0 && pos <= (int)line.length()) {
+                        result += line[pos - 1];
+                    }
+                }
+                std::cout << result << "\n";
+            } else {
+                // Cut by field
+                std::vector<std::string> tokens;
+                std::string token;
+                std::istringstream tss(line);
+                while (std::getline(tss, token, delimiter)) {
+                    tokens.push_back(token);
+                }
+                
+                std::string result;
+                for (size_t i = 0; i < fields.size(); ++i) {
+                    int fieldNum = fields[i];
+                    if (fieldNum > 0 && fieldNum <= (int)tokens.size()) {
+                        if (!result.empty()) result += delimiter;
+                        result += tokens[fieldNum - 1];
+                    }
+                }
+                std::cout << result << "\n";
+            }
+        }
+    }
+
+    // tr - translate or delete characters
+    void cmdTr(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        bool deleteMode = false;
+        bool squeezeMode = false;
+        std::string set1, set2;
+        
+        size_t argIdx = 1;
+        while (argIdx < args.size() && args[argIdx][0] == '-') {
+            if (args[argIdx] == "-d") deleteMode = true;
+            else if (args[argIdx] == "-s") squeezeMode = true;
+            argIdx++;
+        }
+        
+        if (argIdx < args.size()) {
+            set1 = args[argIdx++];
+        }
+        if (argIdx < args.size() && !deleteMode) {
+            set2 = args[argIdx++];
+        }
+        
+        if (set1.empty()) {
+            printError("tr: missing operand");
+            return;
+        }
+        
+        // Expand character classes like a-z, A-Z, 0-9
+        auto expandSet = [](const std::string& set) -> std::string {
+            std::string result;
+            for (size_t i = 0; i < set.length(); ++i) {
+                if (i + 2 < set.length() && set[i + 1] == '-') {
+                    char start = set[i];
+                    char end = set[i + 2];
+                    for (char c = start; c <= end; ++c) {
+                        result += c;
+                    }
+                    i += 2;
+                } else {
+                    result += set[i];
+                }
+            }
+            return result;
+        };
+        
+        std::string expandedSet1 = expandSet(set1);
+        std::string expandedSet2 = expandSet(set2);
+        
+        // Extend set2 if shorter than set1
+        while (!deleteMode && expandedSet2.length() < expandedSet1.length() && !expandedSet2.empty()) {
+            expandedSet2 += expandedSet2.back();
+        }
+        
+        std::string input = pipedInput;
+        if (input.empty()) {
+            printError("tr: requires piped input");
+            return;
+        }
+        
+        std::string result;
+        char lastChar = '\0';
+        
+        for (char c : input) {
+            size_t pos = expandedSet1.find(c);
+            if (deleteMode) {
+                if (pos == std::string::npos) {
+                    result += c;
+                }
+            } else if (pos != std::string::npos) {
+                char newChar = (pos < expandedSet2.length()) ? expandedSet2[pos] : c;
+                if (!squeezeMode || newChar != lastChar) {
+                    result += newChar;
+                    lastChar = newChar;
+                }
+            } else {
+                if (!squeezeMode || c != lastChar) {
+                    result += c;
+                    lastChar = c;
+                }
+            }
+        }
+        
+        std::cout << result;
+    }
+
+    // sed - stream editor (basic s/pattern/replacement/ support)
+    void cmdSed(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        if (args.size() < 2) {
+            printError("sed: missing script");
+            std::cout << "Usage: sed 's/pattern/replacement/[g]' [file]\n";
+            return;
+        }
+        
+        std::string script = args[1];
+        std::string filePath;
+        bool inPlace = false;
+        
+        for (size_t i = 2; i < args.size(); ++i) {
+            if (args[i] == "-i") inPlace = true;
+            else if (args[i][0] != '-') filePath = args[i];
+        }
+        
+        // Parse s/pattern/replacement/flags
+        if (script.length() < 4 || script[0] != 's') {
+            printError("sed: only s/// substitution supported");
+            return;
+        }
+        
+        char delim = script[1];
+        std::vector<std::string> parts;
+        std::string current;
+        bool escaped = false;
+        
+        for (size_t i = 2; i < script.length(); ++i) {
+            if (escaped) {
+                current += script[i];
+                escaped = false;
+            } else if (script[i] == '\\') {
+                escaped = true;
+            } else if (script[i] == delim) {
+                parts.push_back(current);
+                current.clear();
+            } else {
+                current += script[i];
+            }
+        }
+        parts.push_back(current);
+        
+        if (parts.size() < 2) {
+            printError("sed: invalid substitution syntax");
+            return;
+        }
+        
+        std::string pattern = parts[0];
+        std::string replacement = parts[1];
+        bool globalReplace = (parts.size() > 2 && parts[2].find('g') != std::string::npos);
+        
+        std::vector<std::string> lines;
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("sed: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("sed: missing file operand or piped input");
+            return;
+        }
+        
+        std::ostringstream output;
+        for (const auto& line : lines) {
+            std::string result = line;
+            if (globalReplace) {
+                size_t pos = 0;
+                while ((pos = result.find(pattern, pos)) != std::string::npos) {
+                    result.replace(pos, pattern.length(), replacement);
+                    pos += replacement.length();
+                }
+            } else {
+                size_t pos = result.find(pattern);
+                if (pos != std::string::npos) {
+                    result.replace(pos, pattern.length(), replacement);
+                }
+            }
+            output << result << "\n";
+        }
+        
+        if (inPlace && !filePath.empty()) {
+            std::ofstream file(resolvePath(filePath));
+            file << output.str();
+        } else {
+            std::cout << output.str();
+        }
+    }
+
+    // awk - pattern scanning and processing (basic field extraction)
+    void cmdAwk(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        if (args.size() < 2) {
+            printError("awk: missing program");
+            std::cout << "Usage: awk '{print $1}' [file] or awk -F: '{print $1}' [file]\n";
+            return;
+        }
+        
+        char fieldSep = ' ';
+        std::string program;
+        std::string filePath;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-F" && i + 1 < args.size()) {
+                std::string fs = args[++i];
+                if (!fs.empty()) fieldSep = fs[0];
+            } else if (args[i].substr(0, 2) == "-F") {
+                std::string fs = args[i].substr(2);
+                if (!fs.empty()) fieldSep = fs[0];
+            } else if (program.empty() && args[i][0] != '-') {
+                program = args[i];
+            } else if (args[i][0] != '-') {
+                filePath = args[i];
+            }
+        }
+        
+        // Parse simple print command: {print $1, $2}
+        std::vector<int> fieldsToPrint;
+        std::string printSep = " ";
+        
+        if (program.find("print") != std::string::npos) {
+            size_t printPos = program.find("print");
+            std::string printPart = program.substr(printPos + 5);
+            
+            // Extract field numbers
+            for (size_t i = 0; i < printPart.length(); ++i) {
+                if (printPart[i] == '$') {
+                    std::string numStr;
+                    size_t j = i + 1;
+                    while (j < printPart.length() && std::isdigit(printPart[j])) {
+                        numStr += printPart[j++];
+                    }
+                    if (!numStr.empty()) {
+                        fieldsToPrint.push_back(std::stoi(numStr));
+                    }
+                    i = j - 1;
+                }
+            }
+        }
+        
+        if (fieldsToPrint.empty()) {
+            fieldsToPrint.push_back(0);  // Print whole line
+        }
+        
+        std::vector<std::string> lines;
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (!filePath.empty()) {
+            std::ifstream file(resolvePath(filePath));
+            if (!file) {
+                printError("awk: cannot open '" + filePath + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("awk: missing file operand or piped input");
+            return;
+        }
+        
+        for (const auto& line : lines) {
+            std::vector<std::string> fields;
+            fields.push_back(line);  // $0 = whole line
+            
+            // Split by field separator (handling multiple separators as one)
+            std::string token;
+            bool inToken = false;
+            for (char c : line) {
+                if (c == fieldSep || (fieldSep == ' ' && std::isspace(c))) {
+                    if (inToken) {
+                        fields.push_back(token);
+                        token.clear();
+                        inToken = false;
+                    }
+                } else {
+                    token += c;
+                    inToken = true;
+                }
+            }
+            if (inToken) {
+                fields.push_back(token);
+            }
+            
+            std::string output;
+            for (size_t i = 0; i < fieldsToPrint.size(); ++i) {
+                int fieldNum = fieldsToPrint[i];
+                if (fieldNum >= 0 && fieldNum < (int)fields.size()) {
+                    if (!output.empty()) output += printSep;
+                    output += fields[fieldNum];
+                }
+            }
+            std::cout << output << "\n";
+        }
+    }
+
+    // diff - compare files line by line
+    void cmdDiff(const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            printError("diff: missing file operands");
+            std::cout << "Usage: diff file1 file2\n";
+            return;
+        }
+        
+        bool unified = false;
+        std::string file1Path, file2Path;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-u") unified = true;
+            else if (file1Path.empty()) file1Path = args[i];
+            else if (file2Path.empty()) file2Path = args[i];
+        }
+        
+        std::ifstream f1(resolvePath(file1Path));
+        std::ifstream f2(resolvePath(file2Path));
+        
+        if (!f1) {
+            printError("diff: cannot open '" + file1Path + "'");
+            return;
+        }
+        if (!f2) {
+            printError("diff: cannot open '" + file2Path + "'");
+            return;
+        }
+        
+        std::vector<std::string> lines1, lines2;
+        std::string line;
+        while (std::getline(f1, line)) lines1.push_back(line);
+        while (std::getline(f2, line)) lines2.push_back(line);
+        
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        if (unified) {
+            std::cout << "--- " << file1Path << "\n";
+            std::cout << "+++ " << file2Path << "\n";
+        }
+        
+        // Simple diff algorithm (line-by-line comparison)
+        size_t i = 0, j = 0;
+        while (i < lines1.size() || j < lines2.size()) {
+            if (i >= lines1.size()) {
+                // Remaining lines only in file2
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "+ " << lines2[j++] << "\n";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            } else if (j >= lines2.size()) {
+                // Remaining lines only in file1
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                std::cout << "- " << lines1[i++] << "\n";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            } else if (lines1[i] == lines2[j]) {
+                // Lines match
+                if (unified) {
+                    std::cout << "  " << lines1[i] << "\n";
+                }
+                i++; j++;
+            } else {
+                // Lines differ - look ahead for resync
+                bool foundMatch = false;
+                for (size_t look = 1; look < 5 && !foundMatch; ++look) {
+                    if (j + look < lines2.size() && lines1[i] == lines2[j + look]) {
+                        // Extra lines in file2
+                        for (size_t k = 0; k < look; ++k) {
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                            std::cout << "+ " << lines2[j++] << "\n";
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                        }
+                        foundMatch = true;
+                    } else if (i + look < lines1.size() && lines1[i + look] == lines2[j]) {
+                        // Extra lines in file1
+                        for (size_t k = 0; k < look; ++k) {
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                            std::cout << "- " << lines1[i++] << "\n";
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                        }
+                        foundMatch = true;
+                    }
+                }
+                if (!foundMatch) {
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                    std::cout << "- " << lines1[i++] << "\n";
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                    std::cout << "+ " << lines2[j++] << "\n";
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                }
+            }
+        }
+    }
+
+    // tee - read from stdin and write to stdout and files
+    void cmdTee(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        if (pipedInput.empty()) {
+            printError("tee: requires piped input");
+            return;
+        }
+        
+        bool appendMode = false;
+        std::vector<std::string> files;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-a") appendMode = true;
+            else if (args[i][0] != '-') files.push_back(resolvePath(args[i]));
+        }
+        
+        // Write to stdout
+        std::cout << pipedInput;
+        
+        // Write to files
+        for (const auto& filePath : files) {
+            std::ofstream file;
+            if (appendMode) {
+                file.open(filePath, std::ios::app);
+            } else {
+                file.open(filePath, std::ios::out);
+            }
+            if (file) {
+                file << pipedInput;
+            } else {
+                printError("tee: cannot write to '" + filePath + "'");
+            }
+        }
+    }
+
+    // xargs - build and execute command lines from stdin
+    void cmdXargs(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        if (pipedInput.empty()) {
+            printError("xargs: requires piped input");
+            return;
+        }
+        
+        std::string command = "echo";  // Default command
+        bool verbose = false;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-t") verbose = true;
+            else if (args[i][0] != '-') {
+                command = args[i];
+                for (size_t j = i + 1; j < args.size(); ++j) {
+                    command += " " + args[j];
+                }
+                break;
+            }
+        }
+        
+        // Collect arguments from input
+        std::vector<std::string> inputArgs;
+        std::istringstream iss(pipedInput);
+        std::string arg;
+        while (iss >> arg) {
+            inputArgs.push_back(arg);
+        }
+        
+        // Build command line
+        std::string cmdLine = command;
+        for (const auto& a : inputArgs) {
+            cmdLine += " \"" + a + "\"";
+        }
+        
+        if (verbose) {
+            std::cout << cmdLine << "\n";
+        }
+        
+        // Execute
+        std::vector<std::string> tokens = tokenize(cmdLine);
+        executeCommand(tokens);
+    }
+
+    // rev - reverse lines character-wise
+    void cmdRev(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+        std::vector<std::string> lines;
+        
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                lines.push_back(line);
+            }
+        } else if (args.size() > 1) {
+            std::ifstream file(resolvePath(args[1]));
+            if (!file) {
+                printError("rev: cannot open '" + args[1] + "'");
+                return;
+            }
+            std::string line;
+            while (std::getline(file, line)) {
+                lines.push_back(line);
+            }
+        } else {
+            printError("rev: missing file operand or piped input");
+            return;
+        }
+        
+        for (const auto& line : lines) {
+            std::string reversed(line.rbegin(), line.rend());
+            std::cout << reversed << "\n";
+        }
+    }
+
+    // ============================================================================
+    // FILE OPERATIONS COMMANDS
+    // ============================================================================
+
+    // ln - create links (symbolic links on Windows)
+    void cmdLn(const std::vector<std::string>& args) {
+        if (args.size() < 3) {
+            printError("ln: missing operands");
+            std::cout << "Usage: ln [-s] target link_name\n";
+            return;
+        }
+        
+        bool symbolic = false;
+        std::string target, linkName;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-s") symbolic = true;
+            else if (target.empty()) target = args[i];
+            else linkName = args[i];
+        }
+        
+        if (target.empty() || linkName.empty()) {
+            printError("ln: missing target or link name");
+            return;
+        }
+        
+        std::string targetPath = resolvePath(target);
+        std::string linkPath = resolvePath(linkName);
+        
+        if (!symbolic) {
+            // Hard links
+            if (CreateHardLinkA(linkPath.c_str(), targetPath.c_str(), NULL)) {
+                std::cout << "Created hard link: " << linkName << " -> " << target << "\n";
+            } else {
+                printError("ln: failed to create hard link (error " + std::to_string(GetLastError()) + ")");
+            }
+        } else {
+            // Symbolic links (requires admin or developer mode on Windows)
+            DWORD flags = fs::is_directory(targetPath) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+            flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+            
+            if (CreateSymbolicLinkA(linkPath.c_str(), targetPath.c_str(), flags)) {
+                std::cout << "Created symbolic link: " << linkName << " -> " << target << "\n";
+            } else {
+                DWORD error = GetLastError();
+                if (error == ERROR_PRIVILEGE_NOT_HELD) {
+                    printError("ln: symbolic links require admin privileges or Developer Mode enabled");
+                } else {
+                    printError("ln: failed to create symbolic link (error " + std::to_string(error) + ")");
+                }
+            }
+        }
+    }
+
+    // stat - display file status
+    void cmdStat(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("stat: missing file operand");
+            return;
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i][0] == '-') continue;
+            
+            std::string filePath = resolvePath(args[i]);
+            
+            if (!fs::exists(filePath)) {
+                printError("stat: cannot stat '" + args[i] + "': No such file or directory");
+                continue;
+            }
+            
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "  File: ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            std::cout << args[i] << "\n";
+            
+            try {
+                auto status = fs::status(filePath);
+                auto fileSize = fs::is_regular_file(filePath) ? fs::file_size(filePath) : 0;
+                auto lastWrite = fs::last_write_time(filePath);
+                
+                std::string fileType;
+                if (fs::is_regular_file(filePath)) fileType = "regular file";
+                else if (fs::is_directory(filePath)) fileType = "directory";
+                else if (fs::is_symlink(filePath)) fileType = "symbolic link";
+                else if (fs::is_block_file(filePath)) fileType = "block device";
+                else if (fs::is_character_file(filePath)) fileType = "character device";
+                else fileType = "unknown";
+                
+                std::cout << "  Size: " << fileSize << " bytes\n";
+                std::cout << "  Type: " << fileType << "\n";
+                
+                // Get file attributes
+                DWORD attrs = GetFileAttributesA(filePath.c_str());
+                std::string attrStr;
+                if (attrs & FILE_ATTRIBUTE_READONLY) attrStr += "readonly ";
+                if (attrs & FILE_ATTRIBUTE_HIDDEN) attrStr += "hidden ";
+                if (attrs & FILE_ATTRIBUTE_SYSTEM) attrStr += "system ";
+                if (attrs & FILE_ATTRIBUTE_ARCHIVE) attrStr += "archive ";
+                if (attrStr.empty()) attrStr = "none";
+                std::cout << " Attrs: " << attrStr << "\n";
+                
+                // Convert file time to readable format
+                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    lastWrite - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+                auto time = std::chrono::system_clock::to_time_t(sctp);
+                std::cout << "Modify: " << std::ctime(&time);
+                
+            } catch (const std::exception& e) {
+                printError("stat: " + std::string(e.what()));
+            }
+            
+            std::cout << "\n";
+        }
+    }
+
+    // file - determine file type
+    void cmdFile(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("file: missing file operand");
+            return;
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i][0] == '-') continue;
+            
+            std::string filePath = resolvePath(args[i]);
+            
+            if (!fs::exists(filePath)) {
+                std::cout << args[i] << ": cannot open (No such file or directory)\n";
+                continue;
+            }
+            
+            std::cout << args[i] << ": ";
+            
+            if (fs::is_directory(filePath)) {
+                std::cout << "directory\n";
+                continue;
+            }
+            
+            if (fs::is_symlink(filePath)) {
+                std::cout << "symbolic link\n";
+                continue;
+            }
+            
+            // Read magic bytes
+            std::ifstream file(filePath, std::ios::binary);
+            if (!file) {
+                std::cout << "cannot open\n";
+                continue;
+            }
+            
+            unsigned char magic[16] = {0};
+            file.read(reinterpret_cast<char*>(magic), 16);
+            size_t bytesRead = file.gcount();
+            
+            if (bytesRead == 0) {
+                std::cout << "empty\n";
+                continue;
+            }
+            
+            // Detect file type by magic bytes
+            if (magic[0] == 0x4D && magic[1] == 0x5A) {
+                std::cout << "PE32 executable (Windows)\n";
+            } else if (magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
+                std::cout << "ELF executable (Linux)\n";
+            } else if (magic[0] == 0x89 && magic[1] == 'P' && magic[2] == 'N' && magic[3] == 'G') {
+                std::cout << "PNG image data\n";
+            } else if (magic[0] == 0xFF && magic[1] == 0xD8 && magic[2] == 0xFF) {
+                std::cout << "JPEG image data\n";
+            } else if (magic[0] == 'G' && magic[1] == 'I' && magic[2] == 'F') {
+                std::cout << "GIF image data\n";
+            } else if (magic[0] == 'P' && magic[1] == 'K' && magic[2] == 0x03 && magic[3] == 0x04) {
+                std::cout << "Zip archive data\n";
+            } else if (magic[0] == 0x1F && magic[1] == 0x8B) {
+                std::cout << "gzip compressed data\n";
+            } else if (magic[0] == '%' && magic[1] == 'P' && magic[2] == 'D' && magic[3] == 'F') {
+                std::cout << "PDF document\n";
+            } else if (magic[0] == 0xD0 && magic[1] == 0xCF) {
+                std::cout << "Microsoft Office document\n";
+            } else if (magic[0] == '<' && (magic[1] == '?' || magic[1] == '!' || magic[1] == 'h')) {
+                std::cout << "HTML/XML document\n";
+            } else if (magic[0] == '{' || magic[0] == '[') {
+                std::cout << "JSON data\n";
+            } else if (magic[0] == '#' && magic[1] == '!') {
+                std::cout << "script, shebang executable\n";
+            } else {
+                // Check if it's text
+                bool isText = true;
+                for (size_t j = 0; j < bytesRead; ++j) {
+                    if (magic[j] < 0x09 || (magic[j] > 0x0D && magic[j] < 0x20 && magic[j] != 0x1B)) {
+                        if (magic[j] != 0) isText = false;
+                    }
+                }
+                if (isText) {
+                    std::cout << "ASCII text\n";
+                } else {
+                    std::cout << "data\n";
+                }
+            }
+        }
+    }
+
+    // readlink - print resolved symbolic link
+    void cmdReadlink(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("readlink: missing file operand");
+            return;
+        }
+        
+        bool canonicalize = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-f" || args[i] == "-e" || args[i] == "-m") {
+                canonicalize = true;
+                continue;
+            }
+            if (args[i][0] == '-') continue;
+            
+            std::string filePath = resolvePath(args[i]);
+            
+            if (canonicalize) {
+                try {
+                    std::cout << fs::canonical(filePath).string() << "\n";
+                } catch (...) {
+                    std::cout << fs::absolute(filePath).string() << "\n";
+                }
+            } else {
+                if (fs::is_symlink(filePath)) {
+                    try {
+                        std::cout << fs::read_symlink(filePath).string() << "\n";
+                    } catch (const std::exception& e) {
+                        printError("readlink: " + std::string(e.what()));
+                    }
+                } else {
+                    printError("readlink: '" + args[i] + "' is not a symbolic link");
+                }
+            }
+        }
+    }
+
+    // realpath - print resolved absolute path
+    void cmdRealpath(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("realpath: missing file operand");
+            return;
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i][0] == '-') continue;
+            
+            std::string filePath = resolvePath(args[i]);
+            
+            try {
+                if (fs::exists(filePath)) {
+                    std::cout << fs::canonical(filePath).string() << "\n";
+                } else {
+                    std::cout << fs::absolute(filePath).string() << "\n";
+                }
+            } catch (const std::exception& e) {
+                std::cout << fs::absolute(filePath).string() << "\n";
+            }
+        }
+    }
+
+    // basename - strip directory from filename
+    void cmdBasename(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("basename: missing operand");
+            return;
+        }
+        
+        std::string suffix;
+        if (args.size() > 2 && args[args.size() - 2] == "-s") {
+            suffix = args[args.size() - 1];
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-a" || args[i] == "-s") continue;
+            if (i > 1 && args[i - 1] == "-s") continue;
+            
+            fs::path p(args[i]);
+            std::string name = p.filename().string();
+            
+            if (!suffix.empty() && name.length() > suffix.length()) {
+                if (name.substr(name.length() - suffix.length()) == suffix) {
+                    name = name.substr(0, name.length() - suffix.length());
+                }
+            }
+            
+            std::cout << name << "\n";
+        }
+    }
+
+    // dirname - strip filename from path
+    void cmdDirname(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("dirname: missing operand");
+            return;
+        }
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i][0] == '-') continue;
+            
+            fs::path p(args[i]);
+            std::string dir = p.parent_path().string();
+            if (dir.empty()) dir = ".";
+            
+            std::cout << dir << "\n";
+        }
+    }
+
+    // tree - display directory tree
+    void cmdTree(const std::vector<std::string>& args) {
+        std::string path = ".";
+        int maxDepth = -1;
+        bool dirsOnly = false;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-L" && i + 1 < args.size()) {
+                maxDepth = std::stoi(args[++i]);
+            } else if (args[i] == "-d") {
+                dirsOnly = true;
+            } else if (args[i][0] != '-') {
+                path = args[i];
+            }
+        }
+        
+        std::string fullPath = resolvePath(path);
+        if (!fs::exists(fullPath) || !fs::is_directory(fullPath)) {
+            printError("tree: '" + path + "' is not a directory");
+            return;
+        }
+        
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << path << "\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        
+        int dirCount = 0, fileCount = 0;
+        
+        std::function<void(const fs::path&, const std::string&, int)> printTree;
+        printTree = [&](const fs::path& p, const std::string& prefix, int depth) {
+            if (maxDepth >= 0 && depth >= maxDepth) return;
+            
+            std::vector<fs::directory_entry> entries;
+            try {
+                for (const auto& entry : fs::directory_iterator(p)) {
+                    if (dirsOnly && !entry.is_directory()) continue;
+                    entries.push_back(entry);
+                }
+            } catch (...) {
+                return;
+            }
+            
+            std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                return a.path().filename() < b.path().filename();
+            });
+            
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const auto& entry = entries[i];
+                bool isLast = (i == entries.size() - 1);
+                
+                std::cout << prefix;
+                std::cout << (isLast ? "`-- " : "|-- ");
+                
+                if (entry.is_directory()) {
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                    std::cout << entry.path().filename().string() << "\n";
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    dirCount++;
+                    printTree(entry.path(), prefix + (isLast ? "    " : "|   "), depth + 1);
+                } else {
+                    std::cout << entry.path().filename().string() << "\n";
+                    fileCount++;
+                }
+            }
+        };
+        
+        printTree(fullPath, "", 0);
+        
+        std::cout << "\n" << dirCount << " directories";
+        if (!dirsOnly) {
+            std::cout << ", " << fileCount << " files";
+        }
+        std::cout << "\n";
+    }
+
+    // du - disk usage
+    void cmdDu(const std::vector<std::string>& args) {
+        bool humanReadable = false;
+        bool summary = false;
+        int maxDepth = -1;
+        std::vector<std::string> paths;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-h") humanReadable = true;
+            else if (args[i] == "-s") summary = true;
+            else if (args[i] == "-d" && i + 1 < args.size()) {
+                maxDepth = std::stoi(args[++i]);
+            } else if (args[i].substr(0, 2) == "-d") {
+                maxDepth = std::stoi(args[i].substr(2));
+            } else if (args[i][0] != '-') {
+                paths.push_back(args[i]);
+            }
+        }
+        
+        if (paths.empty()) paths.push_back(".");
+        
+        auto formatSize = [humanReadable](uintmax_t bytes) -> std::string {
+            if (!humanReadable) {
+                return std::to_string(bytes / 1024);  // KB
+            }
+            
+            const char* units[] = {"B", "K", "M", "G", "T"};
+            int unit = 0;
+            double size = (double)bytes;
+            while (size >= 1024 && unit < 4) {
+                size /= 1024;
+                unit++;
+            }
+            
+            std::ostringstream oss;
+            if (unit == 0) {
+                oss << (int)size << units[unit];
+            } else {
+                oss << std::fixed << std::setprecision(1) << size << units[unit];
+            }
+            return oss.str();
+        };
+        
+        for (const auto& path : paths) {
+            std::string fullPath = resolvePath(path);
+            
+            if (!fs::exists(fullPath)) {
+                printError("du: cannot access '" + path + "': No such file or directory");
+                continue;
+            }
+            
+            std::function<uintmax_t(const fs::path&, int)> calcSize;
+            calcSize = [&](const fs::path& p, int depth) -> uintmax_t {
+                uintmax_t total = 0;
+                
+                try {
+                    if (fs::is_regular_file(p)) {
+                        return fs::file_size(p);
+                    }
+                    
+                    for (const auto& entry : fs::directory_iterator(p, fs::directory_options::skip_permission_denied)) {
+                        if (entry.is_directory()) {
+                            uintmax_t dirSize = calcSize(entry.path(), depth + 1);
+                            total += dirSize;
+                            
+                            if (!summary && (maxDepth < 0 || depth < maxDepth)) {
+                                std::cout << std::setw(8) << formatSize(dirSize) << "\t" 
+                                         << entry.path().string() << "\n";
+                            }
+                        } else if (entry.is_regular_file()) {
+                            total += fs::file_size(entry.path());
+                        }
+                    }
+                } catch (...) {}
+                
+                return total;
+            };
+            
+            uintmax_t totalSize = calcSize(fullPath, 0);
+            std::cout << std::setw(8) << formatSize(totalSize) << "\t" << path << "\n";
+        }
+    }
+
     std::string getPackagesFilePath() {
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -2349,17 +3510,126 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Find files (find . -name \"*.txt\")\n";
 
+        std::cout << "\n  Text Processing (Extended):\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  less/more";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "     Pager for viewing files (q to quit)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cut";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Extract columns (-d delim -f fields)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  tr";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            Translate characters (tr a-z A-Z)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  sed";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Stream editor (sed 's/old/new/g')\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  awk";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Field extraction (awk '{print $1}')\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  diff";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Compare files (diff file1 file2)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  tee";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Write to stdout and file (-a append)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  xargs";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Build command from stdin\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  rev";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Reverse lines character-wise\n";
+
+        std::cout << "\n  File Operations:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  ln";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            Create links (-s for symbolic)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  stat";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Display file status/metadata\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  file";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Determine file type\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  readlink";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Print resolved symlink target\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  realpath";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Resolve to absolute path\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  basename";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Strip directory from path\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  dirname";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Strip filename from path\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  tree";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Directory tree view (-L depth)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  du";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "            Disk usage (-h human, -s summary)\n";
+
         std::cout << "\n  Redirection & Piping:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  cmd > file";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "    Write output to file\n";
+        std::cout << "    Write stdout to file\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  cmd >> file";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "   Append output to file\n";
+        std::cout << "   Append stdout to file\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd 2> file";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Write stderr to file\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd 2>&1";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Redirect stderr to stdout\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmd &> file";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Redirect both to file\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  cmd | cmd";
@@ -2435,6 +3705,33 @@ private:
         std::cout << "  Run 'registry refresh' to scan for installed commands.\n";
 
         std::cout << "\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "Task Scheduler (Cron):\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  crontab -l";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      List scheduled tasks\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  crontab -e";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Edit crontab in nano\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  crontab -r";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Remove all scheduled tasks\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  setup cron";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Verify/fix cron daemon config\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "  Cron runs at system boot. Format: min hour day month weekday cmd\n";
+        std::cout << "  Special: @reboot @hourly @daily @weekly @monthly @yearly\n";
+
+        std::cout << "\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  exit";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
@@ -2455,6 +3752,8 @@ private:
             std::cout << "  setup install      Register .sh files with Windows (requires admin)\n";
             std::cout << "  setup uninstall    Remove .sh file association\n";
             std::cout << "  setup status       Check current file association\n";
+            std::cout << "  setup admin        Enable sudo command for Windows (requires admin)\n";
+            std::cout << "  setup cron         Configure cron daemon (auto-start at boot)\n";
             return;
         }
         
@@ -2465,8 +3764,8 @@ private:
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
         fs::path lishPath = fs::path(exePath).parent_path() / "cmds" / "lish.exe";
         
-        // Check if running as admin for install/uninstall
-        if (action == "install" || action == "uninstall") {
+        // Check if running as admin - ALL setup commands require admin
+        {
             BOOL isAdmin = FALSE;
             PSID adminGroup = NULL;
             SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
@@ -2585,6 +3884,179 @@ private:
             
             std::cout << "\nlish.exe location: " << lishPath.string() << "\n";
             std::cout << "Exists: " << (fs::exists(lishPath) ? "Yes" : "No") << "\n";
+        } else if (action == "admin") {
+            // Enable Windows 11 native sudo command
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Enabling Windows 11 native sudo...\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            // Check Windows version first
+            std::cout << "Checking Windows version...\n";
+            
+            // Enable sudo in normal mode (runs in same terminal, allows input)
+            // This requires Windows 11 24H2 or later
+            std::cout << "Running: sudo config --enable normal\n";
+            int result = runProcess("sudo config --enable normal");
+            
+            if (result == 0) {
+                SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "\nSuccess! Windows sudo is now enabled.\n";
+                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << "\nThis means sudo commands run in the SAME terminal window!\n";
+                std::cout << "\nUsage:\n";
+                std::cout << "  From cmd:         sudo <command>\n";
+                std::cout << "  From PowerShell:  sudo <command>\n";
+                std::cout << "  From Linuxify:    sudo <command>\n";
+                std::cout << "\nExamples:\n";
+                std::cout << "  sudo notepad C:\\Windows\\System32\\drivers\\etc\\hosts\n";
+                std::cout << "  sudo netsh wlan show profiles\n";
+                std::cout << "  sudo ln -s source.txt link.txt\n";
+            } else {
+                printError("Failed to enable sudo.");
+                std::cout << "\nPossible causes:\n";
+                std::cout << "  1. Windows 11 version 24H2 or later is required\n";
+                std::cout << "  2. You may need to update Windows\n";
+                std::cout << "  3. Run 'winver' to check your Windows version\n";
+                std::cout << "\nAlternatively, you can enable it manually:\n";
+                std::cout << "  Settings > System > For Developers > Enable sudo\n";
+            }
+            
+            
+        } else if (action == "cron") {
+            // Setup/verify cron daemon
+            std::cout << "Checking cron daemon configuration...\n\n";
+            
+            // Get paths
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            fs::path crondPath = fs::path(exePath).parent_path() / "cmds" / "crond.exe";
+            fs::path crontabPath = fs::path(exePath).parent_path() / "linuxdb" / "crontab";
+            
+            bool allGood = true;
+            
+            // 1. Check if crond.exe exists
+            std::cout << "[1/4] Checking crond.exe... ";
+            if (fs::exists(crondPath)) {
+                std::cout << "\033[32mOK\033[0m\n";
+            } else {
+                std::cout << "\033[31mMISSING\033[0m\n";
+                printError("crond.exe not found at: " + crondPath.string());
+                allGood = false;
+            }
+            
+            // 2. Check if crontab exists
+            std::cout << "[2/4] Checking crontab file... ";
+            if (fs::exists(crontabPath)) {
+                std::cout << "\033[32mOK\033[0m\n";
+            } else {
+                std::cout << "\033[33mCREATING\033[0m\n";
+                // Create default crontab
+                fs::create_directories(crontabPath.parent_path());
+                std::ofstream file(crontabPath);
+                file << "# Linuxify Crontab\n";
+                file << "# Format: min hour day month weekday command\n";
+                file << "# Special: @reboot @hourly @daily @weekly @monthly @yearly\n\n";
+                std::cout << "  Created: " << crontabPath.string() << "\n";
+            }
+            
+            // 3. Check if crond is registered to start at system boot
+            std::cout << "[3/4] Checking system startup registration... ";
+            HKEY hKey;
+            bool isRegistered = false;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                              "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                              0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                char value[MAX_PATH];
+                DWORD size = sizeof(value);
+                isRegistered = RegQueryValueExA(hKey, "LinuxifyCrond", NULL, NULL,
+                                                (LPBYTE)value, &size) == ERROR_SUCCESS;
+                RegCloseKey(hKey);
+            }
+            
+            if (isRegistered) {
+                std::cout << "\033[32mOK\033[0m (starts at system boot)\n";
+            } else {
+                std::cout << "\033[33mNOT REGISTERED\033[0m\n";
+                std::cout << "  Installing crond to start at system boot...\n";
+                
+                // Register in startup (HKLM requires admin)
+                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                                  "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                  0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                    std::string regValue = "\"" + crondPath.string() + "\"";
+                    if (RegSetValueExA(hKey, "LinuxifyCrond", 0, REG_SZ,
+                                       (const BYTE*)regValue.c_str(),
+                                       (DWORD)(regValue.length() + 1)) == ERROR_SUCCESS) {
+                        std::cout << "  \033[32mInstalled to system startup\033[0m\n";
+                    } else {
+                        printError("Failed to register crond (may need admin rights)");
+                        allGood = false;
+                    }
+                    RegCloseKey(hKey);
+                } else {
+                    printError("Failed to access registry (run as admin)");
+                    allGood = false;
+                }
+            }
+            
+            // 4. Check if crond is currently running
+            std::cout << "[4/4] Checking if crond is running... ";
+            HANDLE hPipe = CreateFileA(
+                CROND_PIPE_NAME,
+                GENERIC_READ | GENERIC_WRITE,
+                0, NULL, OPEN_EXISTING, 0, NULL
+            );
+            
+            if (hPipe != INVALID_HANDLE_VALUE) {
+                // Send PING to verify
+                const char* msg = "PING";
+                DWORD bytesWritten;
+                WriteFile(hPipe, msg, (DWORD)strlen(msg), &bytesWritten, NULL);
+                
+                char response[256];
+                DWORD bytesRead;
+                if (ReadFile(hPipe, response, sizeof(response) - 1, &bytesRead, NULL) && bytesRead > 0) {
+                    std::cout << "\033[32mRUNNING\033[0m\n";
+                } else {
+                    std::cout << "\033[31mNOT RESPONDING\033[0m\n";
+                    allGood = false;
+                }
+                CloseHandle(hPipe);
+            } else {
+                std::cout << "\033[33mNOT RUNNING\033[0m\n";
+                std::cout << "  Starting crond daemon...\n";
+                
+                // Start crond in background
+                STARTUPINFOA si;
+                PROCESS_INFORMATION pi;
+                ZeroMemory(&si, sizeof(si));
+                si.cb = sizeof(si);
+                ZeroMemory(&pi, sizeof(pi));
+                
+                std::string cmdLine = "\"" + crondPath.string() + "\"";
+                char cmdBuffer[1024];
+                strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+                
+                if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, FALSE,
+                                   CREATE_NO_WINDOW | DETACHED_PROCESS,
+                                   NULL, NULL, &si, &pi)) {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    std::cout << "  \033[32mStarted crond daemon\033[0m\n";
+                } else {
+                    printError("Failed to start crond daemon");
+                    allGood = false;
+                }
+            }
+            
+            std::cout << "\n";
+            if (allGood) {
+                printSuccess("Cron daemon is configured correctly!");
+                std::cout << "Use 'crontab -e' to edit scheduled tasks.\n";
+            } else {
+                printError("Some issues found. Please fix them above.");
+            }
+            
         } else {
             printError("Unknown setup action: " + action);
         }
@@ -2711,6 +4183,44 @@ private:
             cmdUniq(tokens);
         } else if (cmd == "find") {
             cmdFind(tokens);
+        // Text Processing Commands
+        } else if (cmd == "less" || cmd == "more") {
+            cmdLess(tokens);
+        } else if (cmd == "cut") {
+            cmdCut(tokens);
+        } else if (cmd == "tr") {
+            cmdTr(tokens);
+        } else if (cmd == "sed") {
+            cmdSed(tokens);
+        } else if (cmd == "awk") {
+            cmdAwk(tokens);
+        } else if (cmd == "diff") {
+            cmdDiff(tokens);
+        } else if (cmd == "tee") {
+            cmdTee(tokens);
+        } else if (cmd == "xargs") {
+            cmdXargs(tokens);
+        } else if (cmd == "rev") {
+            cmdRev(tokens);
+        // File Operations Commands
+        } else if (cmd == "ln") {
+            cmdLn(tokens);
+        } else if (cmd == "stat") {
+            cmdStat(tokens);
+        } else if (cmd == "file") {
+            cmdFile(tokens);
+        } else if (cmd == "readlink") {
+            cmdReadlink(tokens);
+        } else if (cmd == "realpath") {
+            cmdRealpath(tokens);
+        } else if (cmd == "basename") {
+            cmdBasename(tokens);
+        } else if (cmd == "dirname") {
+            cmdDirname(tokens);
+        } else if (cmd == "tree") {
+            cmdTree(tokens);
+        } else if (cmd == "du") {
+            cmdDu(tokens);
         } else if (cmd == "lsmem" || cmd == "free") {
             SystemInfo::listMemory();
         } else if (cmd == "lscpu") {
@@ -2798,6 +4308,190 @@ private:
             } else {
                 printError("Toolchain not found. Expected at: " + toolchainBin.string());
                 printError("Please reinstall Linuxify or check toolchain installation.");
+            }
+        } else if (cmd == "sudo") {
+            // Use Windows 11 native sudo
+            if (tokens.size() < 2) {
+                std::cout << "Usage: sudo <command> [arguments]\n";
+                std::cout << "Run a command with administrator privileges.\n";
+                std::cout << "\nNote: Requires Windows 11 24H2+ with sudo enabled.\n";
+                std::cout << "Run 'setup admin' to enable sudo on your system.\n";
+                std::cout << "\nExamples:\n";
+                std::cout << "  sudo notepad C:\\Windows\\System32\\drivers\\etc\\hosts\n";
+                std::cout << "  sudo netsh wlan show profiles\n";
+                std::cout << "  sudo ln -s source.txt link.txt\n";
+            } else {
+                // Check if the command is a Linuxify builtin
+                std::string targetCmd = tokens[1];
+                bool isBuiltin = isBuiltinCommand(targetCmd);
+                
+                // Also check if it's in our cmds folder
+                char exePath[MAX_PATH];
+                GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
+                bool isInCmds = false;
+                std::vector<std::string> exts = {".exe", ".cmd", ".bat", ""};
+                for (const auto& ext : exts) {
+                    if (fs::exists(cmdsDir / (targetCmd + ext))) {
+                        isInCmds = true;
+                        break;
+                    }
+                }
+                
+                std::string sudoCmd;
+                if (isBuiltin || isInCmds) {
+                    // For Linuxify commands, wrap with: sudo linuxify.exe -c "command args"
+                    sudoCmd = "sudo \"" + std::string(exePath) + "\" -c \"";
+                    for (size_t i = 1; i < tokens.size(); i++) {
+                        if (i > 1) sudoCmd += " ";
+                        // Escape quotes in arguments
+                        std::string arg = tokens[i];
+                        if (arg.find(' ') != std::string::npos || arg.find('"') != std::string::npos) {
+                            // Simple escaping for nested quotes
+                            sudoCmd += "'" + arg + "'";
+                        } else {
+                            sudoCmd += arg;
+                        }
+                    }
+                    sudoCmd += "\"";
+                } else {
+                    // For system commands, pass directly to Windows sudo
+                    sudoCmd = "sudo";
+                    for (size_t i = 1; i < tokens.size(); i++) {
+                        sudoCmd += " ";
+                        if (tokens[i].find(' ') != std::string::npos) {
+                            sudoCmd += "\"" + tokens[i] + "\"";
+                        } else {
+                            sudoCmd += tokens[i];
+                        }
+                    }
+                }
+                
+                // Run the sudo command
+                int result = runProcess(sudoCmd);
+                if (result != 0) {
+                    printError("sudo command failed. Make sure sudo is enabled:");
+                    std::cout << "  Run 'setup admin' or enable in Settings > For Developers\n";
+                }
+            }
+        } else if (cmd == "crontab") {
+            // Crontab - edit scheduled tasks (communicates with crond daemon via IPC)
+            auto sendToCrond = [](const char* command) -> std::string {
+                HANDLE hPipe = CreateFileA(
+                    CROND_PIPE_NAME,
+                    GENERIC_READ | GENERIC_WRITE,
+                    0, NULL, OPEN_EXISTING, 0, NULL
+                );
+                
+                if (hPipe == INVALID_HANDLE_VALUE) {
+                    return "";  // Daemon not running
+                }
+                
+                DWORD bytesWritten;
+                WriteFile(hPipe, command, (DWORD)strlen(command), &bytesWritten, NULL);
+                
+                char response[8192];
+                DWORD bytesRead;
+                std::string result;
+                if (ReadFile(hPipe, response, sizeof(response) - 1, &bytesRead, NULL)) {
+                    response[bytesRead] = '\0';
+                    result = response;
+                }
+                
+                CloseHandle(hPipe);
+                return result;
+            };
+            
+            auto getCrontabPath = []() -> std::string {
+                char exePath[MAX_PATH];
+                GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                return (fs::path(exePath).parent_path() / "linuxdb" / "crontab").string();
+            };
+            
+            if (tokens.size() < 2) {
+                std::cout << "Usage: crontab [-l | -e | -r]\n";
+                std::cout << "  -l    List crontab entries\n";
+                std::cout << "  -e    Edit crontab in nano\n";
+                std::cout << "  -r    Remove all entries\n";
+                std::cout << "\nCrontab format: min hour day month weekday command\n";
+                std::cout << "Special: @reboot @hourly @daily @weekly @monthly @yearly\n";
+                std::cout << "\nExample:\n";
+                std::cout << "  */5 * * * * ping google.com\n";
+                std::cout << "  @daily C:\\backup\\daily.bat\n";
+                std::cout << "  @reboot echo System started\n";
+            } else {
+                std::string arg = tokens[1];
+                std::string crontabPath = getCrontabPath();
+                
+                if (arg == "-l") {
+                    // List crontab
+                    std::ifstream file(crontabPath);
+                    if (file) {
+                        std::string line;
+                        bool hasJobs = false;
+                        while (std::getline(file, line)) {
+                            // Skip comments but show for context
+                            std::cout << line << "\n";
+                            if (!line.empty() && line[0] != '#') {
+                                hasJobs = true;
+                            }
+                        }
+                        if (!hasJobs) {
+                            std::cout << "\n(No active jobs)\n";
+                        }
+                    } else {
+                        std::cout << "No crontab file. Use 'crontab -e' to create one.\n";
+                    }
+                    
+                } else if (arg == "-e") {
+                    // Edit crontab with nano
+                    char exePath[MAX_PATH];
+                    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                    fs::path nanoPath = fs::path(exePath).parent_path() / "nano.exe";
+                    
+                    // Create crontab if it doesn't exist
+                    if (!fs::exists(crontabPath)) {
+                        std::ofstream file(crontabPath);
+                        file << "# Linuxify Crontab - Edit with crontab -e\n";
+                        file << "# Format: min hour day month weekday command\n";
+                        file << "# Example: */5 * * * * ping google.com\n\n";
+                    }
+                    
+                    if (fs::exists(nanoPath)) {
+                        std::string cmdLine = "\"" + nanoPath.string() + "\" \"" + crontabPath + "\"";
+                        runProcess(cmdLine);
+                        
+                        // Tell crond to reload
+                        std::string response = sendToCrond("RELOAD");
+                        if (response.empty()) {
+                            std::cout << "Crontab saved. Note: crond is not running.\n";
+                            std::cout << "Start it with: crond (or crond --install for auto-start)\n";
+                        } else {
+                            printSuccess("Crontab saved and reloaded.");
+                        }
+                    } else {
+                        printError("nano not found. Edit manually: " + crontabPath);
+                    }
+                    
+                } else if (arg == "-r") {
+                    std::cout << "Remove all cron jobs? (y/n): ";
+                    char c;
+                    std::cin >> c;
+                    std::cin.ignore(10000, '\n');
+                    
+                    if (c == 'y' || c == 'Y') {
+                        std::ofstream file(crontabPath);
+                        file << "# Linuxify Crontab - Empty\n";
+                        sendToCrond("RELOAD");
+                        printSuccess("All cron jobs removed.");
+                    } else {
+                        std::cout << "Cancelled.\n";
+                    }
+                    
+                } else {
+                    printError("Unknown option: " + arg);
+                    std::cout << "Use: crontab -l | -e | -r\n";
+                }
             }
         } else if (cmd == "uninstall") {
             cmdUninstall(tokens);
@@ -3024,6 +4718,14 @@ public:
         SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
     }
 
+    // Run a single command (for -c flag support)
+    void runCommand(const std::string& cmdStr) {
+        std::vector<std::string> tokens = tokenize(cmdStr);
+        if (!tokens.empty()) {
+            executeCommand(tokens);
+        }
+    }
+
     // Check if a command is a built-in Linuxify command
     bool isBuiltinCommand(const std::string& cmd) {
         static std::vector<std::string> builtins = {
@@ -3032,12 +4734,20 @@ public:
             "nano", "lin", "registry", "history", "whoami", "echo", "env", 
             "printenv", "export", "which", "ps", "kill", "top", "htop", "jobs", "fg",
             "grep", "head", "tail", "wc", "sort", "uniq", "find",
+            // Text processing commands
+            "less", "more", "cut", "tr", "sed", "awk", "diff", "tee", "xargs", "rev",
+            // File operations commands
+            "ln", "stat", "file", "readlink", "realpath", "basename", "dirname", "tree", "du",
             "lsmem", "free", "lscpu", "lshw", "sysinfo", "lsmount", "lsblk", "df",
             "lsusb", "lsnet", "lsof", "ip", "ping", "traceroute", "tracert",
             "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig",
             // Toolchain commands
             "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
-            "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt"
+            "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt",
+            // Admin commands
+            "sudo", "setup", "uninstall",
+            // Scheduler commands
+            "crontab"
         };
         for (const auto& builtin : builtins) {
             if (cmd == builtin) return true;
@@ -3085,12 +4795,115 @@ public:
         return output;
     }
 
-    // Parse and handle output redirection (>, >>) and pipes (|)
+    // Parse and handle output redirection (>, >>, 2>, 2>&1, &>) and pipes (|)
     bool handleRedirection(const std::string& input) {
+        // Check for stderr redirections first
+        size_t stderrToStdout = input.find("2>&1");
+        size_t stderrAppend = input.find("2>>");
+        size_t stderrWrite = input.find("2>");
+        size_t bothAppend = input.find("&>>");
+        size_t bothWrite = input.find("&>");
+        
+        // Handle 2>&1 - redirect stderr to stdout (strip it and let external command handle it)
+        std::string processedInput = input;
+        bool mergeStderr = false;
+        
+        if (stderrToStdout != std::string::npos) {
+            // Remove 2>&1 from input and set flag
+            processedInput = input.substr(0, stderrToStdout);
+            if (stderrToStdout + 4 < input.length()) {
+                processedInput += input.substr(stderrToStdout + 4);
+            }
+            // Trim
+            processedInput.erase(processedInput.find_last_not_of(" \t") + 1);
+            mergeStderr = true;
+        }
+        
+        // Handle &> or &>> (redirect both stdout and stderr to file)
+        if (bothWrite != std::string::npos || bothAppend != std::string::npos) {
+            bool append = (bothAppend != std::string::npos && (bothWrite == std::string::npos || bothAppend < bothWrite));
+            size_t pos = append ? bothAppend : bothWrite;
+            size_t skip = append ? 3 : 2;
+            
+            std::string cmdPart = input.substr(0, pos);
+            std::string filePart = input.substr(pos + skip);
+            
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            filePart.erase(0, filePart.find_first_not_of(" \t"));
+            filePart.erase(filePart.find_last_not_of(" \t") + 1);
+            
+            if (filePart.empty()) {
+                printError("Syntax error: missing filename after redirect");
+                return true;
+            }
+            
+            std::string outputFile = resolvePath(filePart);
+            
+            // Execute with stderr merged
+            std::vector<std::string> tokens = tokenize(cmdPart);
+            if (tokens.empty()) return true;
+            
+            // For external commands, use 2>&1
+            std::string fullCmd = "cd /d \"" + currentDir + "\" && " + cmdPart + " 2>&1";
+            FILE* pipe = _popen(fullCmd.c_str(), "r");
+            std::string output;
+            if (pipe) {
+                char buffer[256];
+                while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                    output += buffer;
+                }
+                _pclose(pipe);
+            }
+            
+            std::ofstream file;
+            if (append) {
+                file.open(outputFile, std::ios::app);
+            } else {
+                file.open(outputFile, std::ios::out);
+            }
+            
+            if (file) {
+                file << output;
+            } else {
+                printError("Cannot open file: " + filePart);
+            }
+            
+            return true;
+        }
+        
+        // Handle 2> or 2>> (redirect only stderr to file) - but NOT if 2>&1 was detected
+        if (stderrToStdout == std::string::npos && 
+            ((stderrWrite != std::string::npos && stderrWrite != stderrAppend - 1) || stderrAppend != std::string::npos)) {
+            bool append = (stderrAppend != std::string::npos);
+            size_t pos = append ? stderrAppend : stderrWrite;
+            size_t skip = append ? 3 : 2;
+            
+            std::string cmdPart = input.substr(0, pos);
+            std::string filePart = input.substr(pos + skip);
+            
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            filePart.erase(0, filePart.find_first_not_of(" \t"));
+            filePart.erase(filePart.find_last_not_of(" \t") + 1);
+            
+            if (filePart.empty()) {
+                printError("Syntax error: missing filename after redirect");
+                return true;
+            }
+            
+            std::string stderrFile = resolvePath(filePart);
+            
+            // Execute command, capture stderr separately
+            std::string fullCmd = "cd /d \"" + currentDir + "\" && " + cmdPart + " 2>\"" + stderrFile + "\"";
+            int result = system(fullCmd.c_str());
+            (void)result;  // Suppress warning
+            
+            return true;
+        }
+        
         // Check for output redirection first (> or >>)
-        size_t appendPos = input.find(">>");
-        size_t writePos = input.find(">");
-        size_t pipePos = input.find("|");
+        size_t appendPos = processedInput.find(">>");
+        size_t writePos = processedInput.find(">");
+        size_t pipePos = processedInput.find("|");
         
         // Handle output redirection
         if (appendPos != std::string::npos || (writePos != std::string::npos && (appendPos == std::string::npos || writePos < appendPos))) {
@@ -3098,8 +4911,8 @@ public:
             size_t pos = append ? appendPos : writePos;
             size_t skip = append ? 2 : 1;
             
-            std::string cmdPart = input.substr(0, pos);
-            std::string filePart = input.substr(pos + skip);
+            std::string cmdPart = processedInput.substr(0, pos);
+            std::string filePart = processedInput.substr(pos + skip);
             
             // Trim
             cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
@@ -3114,7 +4927,21 @@ public:
             std::string outputFile = resolvePath(filePart);
             
             // Use executeAndCapture to get output from any command
-            std::string output = executeAndCapture(cmdPart);
+            std::string output;
+            if (mergeStderr) {
+                // For merged stderr, use _popen with 2>&1
+                std::string fullCmd = "cd /d \"" + currentDir + "\" && " + cmdPart + " 2>&1";
+                FILE* pipe = _popen(fullCmd.c_str(), "r");
+                if (pipe) {
+                    char buffer[256];
+                    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                        output += buffer;
+                    }
+                    _pclose(pipe);
+                }
+            } else {
+                output = executeAndCapture(cmdPart);
+            }
             
             // Write to file
             std::ofstream file;
@@ -3183,6 +5010,22 @@ public:
                         cmdSort(tokens, pipedOutput);
                     } else if (cmd == "uniq") {
                         cmdUniq(tokens, pipedOutput);
+                    } else if (cmd == "cut") {
+                        cmdCut(tokens, pipedOutput);
+                    } else if (cmd == "tr") {
+                        cmdTr(tokens, pipedOutput);
+                    } else if (cmd == "sed") {
+                        cmdSed(tokens, pipedOutput);
+                    } else if (cmd == "awk") {
+                        cmdAwk(tokens, pipedOutput);
+                    } else if (cmd == "tee") {
+                        cmdTee(tokens, pipedOutput);
+                    } else if (cmd == "xargs") {
+                        cmdXargs(tokens, pipedOutput);
+                    } else if (cmd == "rev") {
+                        cmdRev(tokens, pipedOutput);
+                    } else if (cmd == "less" || cmd == "more") {
+                        cmdLess(tokens, pipedOutput);
                     } else {
                         // For other commands, just print the piped input
                         std::cout << pipedOutput;
@@ -3258,6 +5101,80 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  Linux Commands for Windows - Type 'help' for commands\n" << std::endl;
 
+        // Silently start crond if not running (auto-setup cron on first run)
+        {
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            fs::path crondPath = fs::path(exePath).parent_path() / "cmds" / "crond.exe";
+            fs::path crontabPath = fs::path(exePath).parent_path() / "linuxdb" / "crontab";
+            
+            if (fs::exists(crondPath)) {
+                // Check if crond is running via IPC
+                HANDLE hPipe = CreateFileA(
+                    CROND_PIPE_NAME,
+                    GENERIC_READ | GENERIC_WRITE,
+                    0, NULL, OPEN_EXISTING, 0, NULL
+                );
+                
+                bool crondRunning = (hPipe != INVALID_HANDLE_VALUE);
+                if (crondRunning) CloseHandle(hPipe);
+                
+                if (!crondRunning) {
+                    // Ensure crontab exists
+                    if (!fs::exists(crontabPath)) {
+                        fs::create_directories(crontabPath.parent_path());
+                        std::ofstream file(crontabPath);
+                        file << "# Linuxify Crontab\n";
+                        file << "# Format: min hour day month weekday command\n";
+                        file << "# Edit with: crontab -e\n\n";
+                    }
+                    
+                    // Start crond silently in background
+                    STARTUPINFOA si;
+                    PROCESS_INFORMATION pi;
+                    ZeroMemory(&si, sizeof(si));
+                    si.cb = sizeof(si);
+                    ZeroMemory(&pi, sizeof(pi));
+                    
+                    std::string cmdLine = "\"" + crondPath.string() + "\"";
+                    char cmdBuffer[1024];
+                    strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+                    
+                    if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, FALSE,
+                                       CREATE_NO_WINDOW | DETACHED_PROCESS,
+                                       NULL, NULL, &si, &pi)) {
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+                    }
+                    
+                    // Register in system startup if not already (first run - needs admin)
+                    HKEY hKey;
+                    bool isRegistered = false;
+                    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                                      "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                      0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                        char val[MAX_PATH];
+                        DWORD sz = sizeof(val);
+                        isRegistered = RegQueryValueExA(hKey, "LinuxifyCrond", NULL, NULL, (LPBYTE)val, &sz) == ERROR_SUCCESS;
+                        RegCloseKey(hKey);
+                    }
+                    
+                    // Only try to register if not already done (installer should have done this)
+                    // Silent fail is OK here - installer handles this with admin rights
+                    if (!isRegistered) {
+                        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                                          "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                          0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                            std::string regValue = "\"" + crondPath.string() + "\"";
+                            RegSetValueExA(hKey, "LinuxifyCrond", 0, REG_SZ,
+                                           (const BYTE*)regValue.c_str(), (DWORD)(regValue.length() + 1));
+                            RegCloseKey(hKey);
+                        }
+                    }
+                }
+            }
+        }
+
         std::string input;
         
         while (running) {
@@ -3273,6 +5190,73 @@ public:
 
             if (input.empty()) {
                 continue;
+            }
+
+            // History expansion: !!, !n, !-n, !string
+            if (input[0] == '!' && input.length() > 1) {
+                std::string expandedInput;
+                bool expanded = false;
+                
+                if (input == "!!") {
+                    // !! - repeat last command
+                    if (!commandHistory.empty()) {
+                        expandedInput = commandHistory.back();
+                        expanded = true;
+                    } else {
+                        printError("!!: event not found");
+                        continue;
+                    }
+                } else if (input[1] == '-' && input.length() > 2) {
+                    // !-n - run n-th previous command
+                    try {
+                        int n = std::stoi(input.substr(2));
+                        if (n > 0 && n <= (int)commandHistory.size()) {
+                            expandedInput = commandHistory[commandHistory.size() - n];
+                            expanded = true;
+                        } else {
+                            printError("!" + input.substr(1) + ": event not found");
+                            continue;
+                        }
+                    } catch (...) {
+                        printError("!" + input.substr(1) + ": event not found");
+                        continue;
+                    }
+                } else if (std::isdigit(input[1])) {
+                    // !n - run command n from history
+                    try {
+                        int n = std::stoi(input.substr(1));
+                        if (n > 0 && n <= (int)commandHistory.size()) {
+                            expandedInput = commandHistory[n - 1];
+                            expanded = true;
+                        } else {
+                            printError("!" + input.substr(1) + ": event not found");
+                            continue;
+                        }
+                    } catch (...) {
+                        printError("!" + input.substr(1) + ": event not found");
+                        continue;
+                    }
+                } else {
+                    // !string - run most recent command starting with string
+                    std::string prefix = input.substr(1);
+                    for (int i = (int)commandHistory.size() - 1; i >= 0; --i) {
+                        if (commandHistory[i].substr(0, prefix.length()) == prefix) {
+                            expandedInput = commandHistory[i];
+                            expanded = true;
+                            break;
+                        }
+                    }
+                    if (!expanded) {
+                        printError("!" + prefix + ": event not found");
+                        continue;
+                    }
+                }
+                
+                if (expanded) {
+                    // Show the expanded command
+                    std::cout << expandedInput << std::endl;
+                    input = expandedInput;
+                }
             }
 
             // Save command to history (except for history command itself to avoid clutter)
@@ -3360,11 +5344,25 @@ BOOL WINAPI CtrlHandler(DWORD ctrlType) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     // Set up Ctrl+C handler to prevent shell from exiting
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
     
     Linuxify shell;
+    
+    // Handle -c flag: execute command and exit (used by sudo)
+    if (argc >= 3 && std::string(argv[1]) == "-c") {
+        // Combine all remaining arguments as the command
+        std::string command;
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) command += " ";
+            command += argv[i];
+        }
+        
+        shell.runCommand(command);
+        return 0;
+    }
+    
     shell.run();
     return 0;
 }

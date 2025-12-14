@@ -1,6 +1,0 @@
-# For loop test
-for i in 1 2 3
-do
-    echo "Number: $i"
-done
-echo "Done!"

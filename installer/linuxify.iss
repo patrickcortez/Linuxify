@@ -34,6 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add Linuxify to system PATH"; GroupDescription: "System Integration:"
 Name: "addtoterminal"; Description: "Add Linuxify to Windows Terminal"; GroupDescription: "System Integration:"
+Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"; Flags: checked
 
 [Files]
 ; Main executables
@@ -47,6 +48,7 @@ Source: "{#SourcePath}\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion 
 Source: "{#SourcePath}\linuxdb\*"; DestDir: "{app}\linuxdb"; Flags: ignoreversion
 
 ; Custom commands (lvc, etc.)
+Source: "{#SourcePath}\cmds\node.exe"; DestDir: "{app}\cmds"; Flags: ignoreversion
 Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Bundled C++ Toolchain (MinGW-w64)
@@ -58,6 +60,7 @@ Source: "{#SourcePath}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversio
 [Dirs]
 Name: "{app}\cmds"
 Name: "{app}\linuxdb"
+Name: "{app}\linuxdb\nodes"
 Name: "{app}\toolchain"
 Name: "{app}\toolchain\compiler"
 Name: "{app}\plugins"
@@ -74,8 +77,13 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: string; ValueName: "CC"; ValueData: "{app}\toolchain\compiler\mingw64\bin\gcc.exe"; Tasks: addtopath
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: string; ValueName: "CXX"; ValueData: "{app}\toolchain\compiler\mingw64\bin\g++.exe"; Tasks: addtopath
 
+; Register crond to run at SYSTEM boot (not just user login)
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LinuxifyCrond"; ValueData: """{app}\cmds\crond.exe"""; Tasks: installcron; Flags: uninsdeletevalue
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; Start crond daemon after installation
+Filename: "{app}\cmds\crond.exe"; Tasks: installcron; Flags: nowait runhidden postinstall
 
 [Code]
 function NeedsAddPath(Param: string): boolean;
@@ -164,5 +172,10 @@ begin
           'Path', Path);
       end;
     end;
+    
+    // Remove crond from system startup registry
+    RegDeleteValue(HKEY_LOCAL_MACHINE,
+      'Software\Microsoft\Windows\CurrentVersion\Run',
+      'LinuxifyCrond');
   end;
 end;

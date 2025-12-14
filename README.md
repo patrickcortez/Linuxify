@@ -11,6 +11,7 @@ A custom-written userland distribution for Windows that brings the Linux experie
 - Bundled C++ Toolchain (MinGW-w64 GCC 15.x)
 - Lish shell script interpreter
 - LVC version control system
+- Node graph file system
 - Shebang (`./`) execution support
 
 ## Components
@@ -241,6 +242,35 @@ A git-like version control system built into Linuxify with sophisticated algorit
 | `lvc versions <file>` | List file versions |
 | `lvc show <commit>` | Show commit details |
 
+
+---
+
+### **Node (Graph File System)**
+
+A fully functional graph-based virtual file system tool (`node.exe`). It creates and manages virtual disk images with a complete directory structure and interactive shell.
+
+**Features:**
+- Graph-based inode structure
+- Virtual disk images stored in `linuxdb/nodes/`
+- **Password protection support (Full Disk Encryption)**
+- Interactive shell with colored output
+- Full file persistence
+- Block-based storage allocation
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `node init <name>` | Create new image in `linuxdb/nodes/` |
+| `node init --password <name>` | Create password-protected image |
+| `node mount <name>` | Mount image from `linuxdb/nodes/` |
+| `node list` | List available file systems |
+| `ls`, `cd`, `pwd` | Directory navigation |
+| `mkdir`, `rmdir` | Directory management |
+| `touch`, `rm`, `cat` | File operations |
+| `nano`, `echo` | File editing |
+| `exit` | Unmount and exit |
+
 ---
 
 ### **Bundled C++ Toolchain**
@@ -271,7 +301,8 @@ Linuxify/
 ├── nano.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
-│   └── lvc.exe         # Version control
+│   ├── lvc.exe         # Version control
+│   └── node.exe        # Graph file system
 ├── linuxdb/            # Database files
 │   ├── registry.lin    # Registered commands
 │   ├── packages.lin    # Package aliases (128+)

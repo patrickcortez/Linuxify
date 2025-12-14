@@ -445,3 +445,224 @@ cat pythonic.sh
 exit
 help
 registry
+lsof
+lsof
+help
+lsof
+exit
+node
+node init
+ls
+node init --size 100 --path myfs.node
+ls
+ls | grep -n "myfs.node"
+node mount myfs.node
+exit
+node
+node list
+node init --size 100 main
+node list
+mount main
+node mount main
+clear
+node
+ls
+ls | grep -n ".node"
+ls | grep -n "main"
+ls | grep -n "db"
+cd linuxdb
+ls
+cd nodes
+exit
+node list
+node init --size 100 main
+node
+node init --size 100 --password 112595 main
+node list
+node mount main
+node list
+node init --size 100 --password test
+exit
+ls
+node list
+node mount test
+help
+cd test
+ls
+nano main.cpp
+cat main.cpp
+help
+exit
+node
+exit
+node
+node list
+node init --size 100 --password --maxfile 0 Private
+exit
+help
+node
+node list
+node remove main
+node remove main
+node remove test
+node list
+node reemove Private
+node remove Private
+node --help
+node init --size 100 --password --maxfile 0 main
+exit
+ls
+help
+cd test
+ls
+cat file.txt
+touch lamb.txt
+cat file.txt >> lamb.txt
+cat lamb.txt
+exit
+cd test
+ls > output.txt 2>&1
+ls
+cat output.txt
+exit
+help
+lvc
+cd Folder1
+mkdir Folder1
+cd Folder1
+ls
+lvc init
+lvc status
+touch file.txt
+lvc status
+nano file.txt
+ls
+lvc init
+lvc status
+lvc add -A
+lvc status
+nano file.txt
+lvc status
+lvc add -A
+lvc commit -v 1.0
+lvc
+clear
+cd
+ls
+clear
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+cd ..
+ls
+rm -r Sample2
+ls
+rm -r Sample2
+rm -r Sample
+;s
+ls
+help
+touch file.txt
+ls
+ln
+ln -s file.txt file
+sudo
+exitt
+exit
+linuxify
+setup
+setup status
+setup admin
+setup admin
+cd test
+ls
+sudo ln -s lamb.txt lamb.link
+sudo ln -s lamb.txt lamb.link
+yes
+sudo ln -s lamb.txt lamb.link
+ls
+cd test
+ls
+sudo cd test
+sudo cd test
+sudo cd test
+sudo ln -s lamb.txt lamb.link
+sudo ln -s lamb.txt lamb.link
+sudo ln -s lamb.txt lamb.link
+sudo ln -s lamb.txt lamb.link
+setup admin
+setup admin
+winver
+exit
+setup admin
+setup admin
+sudo
+cd test
+sudo ln -s lamb.txt lamb.link
+exit
+exit
+sudo ln -s lamb.txt lamb.link
+ls
+cd test
+ls
+sudo ln -s lamb.txt lamb.link
+ls
+ln -s lamb.txt lamb.link
+ls
+./lamb.lnk
+./lamb.link
+cat lamb.link
+ls -la
+clear
+ls
+sudo ln -s file.txt file.link
+ls
+exit
+exit
+exit
+exit
+ls
+cd test
+ls
+car &1
+cat &1
+cat &1
+ln
+sudo ln -s file.txt file.link
+ls
+clear
+ls
+help
+exit
+crontab
+crontab test.cron
+crontab -l
+crond start
+crond status
+cat crontest.log
+cat crontest.log
+cat crontest.log
+touch crontest.log
+ls
+cat crontest.log
+crond status
+cat crontest.log
+crond status
+cat crontest.log
+crond stop
+crontab -r
+help
+cron
+setup
+exitt
+exit
+setup
+setup cron
+setup cron
+crond
+crontab
+help
+crontab
+cronlab -l
+crontab -l
+clear
+crontab -e
+crontab -e
