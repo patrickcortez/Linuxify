@@ -1,6 +1,6 @@
 # Linuxify
 
-A custom-written userland distribution for Windows that brings the Linux experience to Windows users.
+A native Unix-like shell and development platform for Windows — featuring an integrated Bash interpreter, GUI terminal, version control, virtual file system, task scheduler, and bundled toolchain. Built entirely from scratch in C++.
 
 ## Features
 
