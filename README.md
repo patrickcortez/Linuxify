@@ -9,9 +9,12 @@ A custom-written userland distribution for Windows that brings the Linux experie
 - Lin Package Manager (winget-powered)
 - Registry for packages and commands
 - Bundled C++ Toolchain (MinGW-w64 GCC 15.x)
-- Lish shell script interpreter
+- Integrated Bash shell script interpreter
 - LVC version control system
-- Node graph file system
+- Node graph file system with encryption support
+- Nexplore - GUI file explorer for Node images
+- GUI Terminal (windux) with tabs and ConPTY
+- Crond daemon for scheduled tasks
 - Shebang (`./`) execution support
 
 ## Components
@@ -20,7 +23,7 @@ A custom-written userland distribution for Windows that brings the Linux experie
 
 ### **Linuxify Shell**
 
-The main shell executable (`linuxify.exe`) — a fully-featured command-line interface providing Linux-like commands on Windows. Written in C++ with 3300+ lines and 60+ commands.
+The main shell executable (`linuxify.exe`) — a complete Unix-like shell environment for Windows with an integrated Bash interpreter. Comparable to bash or zsh, it features native script execution, control flow, variable expansion, and 60+ built-in commands. Written in C++ with 5500+ lines.
 
 **Supported Commands:**
 
@@ -33,6 +36,7 @@ The main shell executable (`linuxify.exe`) — a fully-featured command-line int
 | **Networking** | `ip`, `ping`, `traceroute`, `nslookup`, `dig`, `curl`, `wget`, `netstat`, `ifconfig` |
 | **Shell** | `history`, `whoami`, `env`, `export`, `which`, `clear`, `exit` |
 | **Toolchain** | `gcc`, `g++`, `make`, `gdb`, `ar`, `ld`, `objdump`, `nm`, `strip` |
+| **Scheduling** | `crontab`, `crond` |
 
 **Shell Features:**
 - Syntax highlighting for commands as you type
@@ -41,6 +45,7 @@ The main shell executable (`linuxify.exe`) — a fully-featured command-line int
 - Redirection: `>` (write), `>>` (append)
 - Background processes: `command &`
 - Environment variables: `$VAR`, `${VAR}`
+- Integrated Bash interpreter for `.sh` scripts
 
 ---
 
@@ -78,13 +83,11 @@ The shebang line (`#!`) is **required** for running scripts with `./` in Linuxif
 **Example Scripts:**
 ```bash
 #!/bin/lish
-# This script runs with lish
 echo "Hello from lish!"
 ```
 
 ```python
 #!python
-# This script runs with python (must be in registry)
 print("Hello from Python!")
 ```
 
@@ -178,15 +181,11 @@ A terminal-based text editor with fast rendering and plugin-based syntax highlig
 
 Create `.nano` files in `plugins/` folder:
 ```
-# plugins/cpp.nano
-
-set `{}` = blue; #set color of special characters 
-
-Section [.cpp]{ #make sure to add the file extension of the language inside []
+Section [.cpp]{
     keyword: int, blue;
     keyword: if, magenta;
     keyword: return, magenta;
-    preprocessor: include, green; #To set preprocessor keywords
+    preprocessor: include, green;
 }
 ```
 
@@ -196,10 +195,7 @@ Bundled plugins: `cpp.nano` (C/C++), `python.nano`
 
 ### **Lish (Shell Interpreter)**
 
-A native shell script interpreter (`lish.exe`) that runs `.sh` scripts on Windows with bash-like syntax. Features a complete lexer, parser, and AST executor. 
-
-Note:
-You always need the shebang line for your .sh scripts to run, without it linuxify or your windows wont know what to run it with.
+A native shell script interpreter (`lish.exe`) that runs `.sh` scripts on Windows with bash-like syntax. Features a complete lexer, parser, and AST executor.
 
 **Usage:**
 ```bash
@@ -216,6 +212,26 @@ lish                   # Interactive mode
 - Pipes and redirects: `|`, `>`, `>>`
 - Functions: `function name() { ... }`
 - Command substitution: `$(command)`
+
+---
+
+### **Integrated Bash Interpreter**
+
+The shell now includes a fully integrated Bash interpreter (`interpreter.hpp`) with 1600+ lines of code, providing:
+
+**Components:**
+- **Lexer**: Tokenizes shell script input with support for all bash tokens
+- **Parser**: Builds an Abstract Syntax Tree (AST) for script execution
+- **Executor**: Walks the AST and executes commands with proper control flow
+
+**Supported Constructs:**
+- Simple commands and pipelines
+- Compound commands (`&&`, `||`)
+- If/elif/else conditionals
+- For and while loops
+- Function definitions and calls
+- Variable expansion and command substitution
+- Redirections and background execution
 
 ---
 
@@ -253,6 +269,7 @@ A fully functional graph-based virtual file system tool (`node.exe`). It creates
 - Graph-based inode structure
 - Virtual disk images stored in `linuxdb/nodes/`
 - **Password protection support (Full Disk Encryption)**
+- SHA-256 key derivation with PBKDF2-style iterations
 - Interactive shell with colored output
 - Full file persistence
 - Block-based storage allocation
@@ -270,6 +287,89 @@ A fully functional graph-based virtual file system tool (`node.exe`). It creates
 | `touch`, `rm`, `cat` | File operations |
 | `nano`, `echo` | File editing |
 | `exit` | Unmount and exit |
+
+---
+
+### **Nexplore (GUI File Explorer)**
+
+A Windows GUI application (`nexplore.exe`) for browsing `.node` file system images with an Explorer-style interface.
+
+**Features:**
+- Dark-themed modern UI with DWM integration
+- Folder and file icons with visual selection
+- Navigation with back button and breadcrumb path
+- Mouse wheel scrolling support
+- Double-click to open folders or view file contents
+- **Encrypted `.node` file support** with password prompt
+- SHA-256 key derivation for decryption
+
+**Usage:**
+- Launch via `nexplore` command or double-click
+- Use File → Open to browse for `.node` images
+- Navigate folders by double-clicking
+- Click Back button or use history to return
+
+---
+
+### **GUI Terminal (windux)**
+
+A modern Windows GUI terminal emulator (`windux.exe`) with tabbed interface and ConPTY support.
+
+**Features:**
+- **Tabbed interface** - Multiple terminal sessions in one window
+- **ConPTY integration** - Full pseudo-console support for TUI apps
+- **Pixel-perfect font rendering** with custom bitmap font
+- **ANSI/VT100 escape sequence processing**
+- **TUI Support** - Alternate screen buffer for apps like nano, htop
+- **Text selection** with mouse drag and copy/paste
+- **Scrollback buffer** with mouse wheel scrolling
+- **Visual scrollbar** for navigation
+- **Keyboard shortcuts**: Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+Tab (switch)
+
+**Usage:**
+```bash
+windux              # Launch GUI terminal
+```
+
+---
+
+### **Crond (Cron Daemon)**
+
+A Unix-style cron daemon (`crond.exe`) for scheduling recurring tasks on Windows.
+
+**Features:**
+- Full crontab syntax support (minute, hour, day, month, weekday)
+- Special schedules: `@reboot`, `@daily`, `@hourly`, etc.
+- Range and step expressions: `1-5`, `*/15`, `1,3,5`
+- Script interpreter resolution via Registry
+- IPC communication with the shell
+- Windows startup integration
+- Detailed logging to `linuxdb/crond.log`
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `crontab -e` | Edit crontab file |
+| `crontab -l` | List scheduled jobs |
+| `crond start` | Start daemon in background |
+| `crond stop` | Stop running daemon |
+| `crond status` | Check daemon status |
+| `crond install` | Install to Windows startup |
+| `crond uninstall` | Remove from Windows startup |
+
+**Crontab Format:**
+```
+# ┌───────────── minute (0 - 59)
+# │ ┌───────────── hour (0 - 23)
+# │ │ ┌───────────── day of month (1 - 31)
+# │ │ │ ┌───────────── month (1 - 12)
+# │ │ │ │ ┌───────────── day of week (0 - 6) (Sunday = 0)
+# │ │ │ │ │
+# * * * * * command
+0 9 * * * echo "Good morning!"
+@daily ./backup.sh
+```
 
 ---
 
@@ -297,16 +397,30 @@ IDEs like VS Code and CLion auto-detect the compiler.
 
 ```
 Linuxify/
-├── linuxify.exe        # Main shell
+├── linuxify.exe        # Main shell (5500+ lines)
 ├── nano.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
 │   ├── lvc.exe         # Version control
-│   └── node.exe        # Graph file system
+│   ├── node.exe        # Graph file system
+│   ├── nexplore.exe    # GUI file explorer
+│   ├── windux.exe      # GUI terminal
+│   └── crond.exe       # Cron daemon
+├── cmds-src/           # Source files
+│   ├── interpreter.hpp # Bash interpreter (1600+ lines)
+│   ├── lish.hpp        # Lish interpreter
+│   ├── lvc.hpp         # LVC implementation
+│   ├── node.hpp        # Node FS implementation
+│   ├── nexplore.cpp    # Nexplore GUI
+│   ├── gui_terminal.cpp # Terminal GUI (850+ lines)
+│   └── crond.cpp       # Cron daemon
 ├── linuxdb/            # Database files
 │   ├── registry.lin    # Registered commands
 │   ├── packages.lin    # Package aliases (128+)
-│   └── history.lin     # Command history
+│   ├── history.lin     # Command history
+│   ├── crontab         # Scheduled tasks
+│   ├── crond.log       # Daemon log
+│   └── nodes/          # Node FS images
 ├── plugins/            # Nano syntax plugins
 │   ├── cpp.nano
 │   └── python.nano
@@ -336,6 +450,24 @@ Run the installer, which will:
 # Build nano
 .\toolchain\compiler\mingw64\bin\g++ -std=c++17 -O2 -o nano.exe nano.cpp
 
+# Build lish
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\lish.exe cmds-src\lish.cpp
+
+# Build lvc
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\lvc.exe cmds-src\lvc.cpp
+
+# Build node
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\node.exe cmds-src\node.cpp
+
+# Build nexplore (GUI)
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -mwindows -o cmds\nexplore.exe cmds-src\nexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
+
+# Build GUI terminal (windux)
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -mwindows -o cmds\windux.exe cmds-src\gui_terminal.cpp cmds-src\terminal.res -lgdi32 -luser32 -ldwmapi
+
+# Build crond
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\crond.exe cmds-src\crond.cpp -lws2_32
+
 # Build installer
 .\build-installer.ps1
 ```
@@ -344,4 +476,6 @@ Run the installer, which will:
 
 ## License
 
-Linuxify is open source. MinGW-w64 components are licensed under GPL/LGPL.
+Linuxify is licensed under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for details.
+
+MinGW-w64 components are licensed under GPL/LGPL.
