@@ -75,7 +75,7 @@ namespace __detail
       _GLIBCXX_UNITS_SUFFIX(atto,  "as")
       _GLIBCXX_UNITS_SUFFIX(femto, "fs")
       _GLIBCXX_UNITS_SUFFIX(pico,  "ps")
-      _GLIBCXX_UNITS_SUFFIX(nano,  "ns")
+      _GLIBCXX_UNITS_SUFFIX(Lino,  "ns")
       _GLIBCXX_UNITS_SUFFIX(milli, "ms")
 #if _GLIBCXX_USE_ALT_MICROSECONDS_SUFFIX
       // Deciding this at compile-time is wrong, maybe use nl_langinfo(CODESET)

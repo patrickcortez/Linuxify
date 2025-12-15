@@ -1,0 +1,16 @@
+# Test plugin for Context validation
+
+syntax: context_test;
+ext: .ctx;
+
+Context [.ctx](red) {
+    keyword: int, blue;
+    keyword: return, blue;
+    keyword: if, blue;
+    keyword: else, blue;
+    keyword: void, blue;
+    keyword: main, green;
+    keyword: printf, cyan;
+    
+    comments: //, grey;
+}

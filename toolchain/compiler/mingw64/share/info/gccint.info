@@ -6132,8 +6132,8 @@ specified for the particular test in an earlier ‘dg-options’ or
 ‘newlib’
      Target supports Newlib.
 
-‘newlib_nano_io’
-     GCC was configured with ‘--enable-newlib-nano-formatted-io’, which
+‘newlib_Lino_io’
+     GCC was configured with ‘--enable-newlib-Lino-formatted-io’, which
      reduces the code size of Newlib formatted I/O functions.
 
 ‘posix_memalign’

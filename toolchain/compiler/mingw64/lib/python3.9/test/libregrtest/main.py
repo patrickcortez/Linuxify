@@ -697,7 +697,7 @@ class Regrtest:
             try:
                 self.win_load_tracker = WindowsLoadTracker()
             except FileNotFoundError as error:
-                # Windows IoT Core and Windows Nano Server do not provide
+                # Windows IoT Core and Windows Lino Server do not provide
                 # typeperf.exe for x64, x86 or ARM
                 print(f'Failed to create WindowsLoadTracker: {error}')
 

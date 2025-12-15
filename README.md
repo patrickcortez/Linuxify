@@ -4,17 +4,18 @@ A native Unix-like shell and development platform for Windows — featuring an i
 
 ## Features
 
-- Nano Text Editor with User-defined Syntax Highlighting
+- Lino Text Editor with User-defined Syntax Highlighting
 - Linux Shell with 60+ Linux commands
 - Lin Package Manager (winget-powered)
 - Registry for packages and commands
-- Bundled C++ Toolchain (MinGW-w64 GCC 15.x)
+- Bundled C++ Toolchain (MinGW-w64 GCC 15.x) with dev libraries
 - Integrated Bash shell script interpreter
 - LVC version control system
 - Node graph file system with encryption support
 - Nexplore - GUI file explorer for Node images
 - GUI Terminal (windux) with tabs and ConPTY
 - Crond daemon for scheduled tasks
+- LinMake build system
 - Shebang (`./`) execution support
 
 ## Components
@@ -156,7 +157,7 @@ A winget-powered package manager with Linux-style syntax. Uses `linuxdb/packages
 
 ---
 
-### **Nano Text Editor**
+### **Lino Text Editor**
 
 A terminal-based text editor with fast rendering and plugin-based syntax highlighting.
 
@@ -179,7 +180,7 @@ A terminal-based text editor with fast rendering and plugin-based syntax highlig
 
 **Syntax Highlighting Plugins:**
 
-Create `.nano` files in `plugins/` folder:
+Create `.Lino` files in `plugins/` folder:
 ```
 Section [.cpp]{
     keyword: int, blue;
@@ -189,7 +190,7 @@ Section [.cpp]{
 }
 ```
 
-Bundled plugins: `cpp.nano` (C/C++), `python.nano`
+Bundled plugins: `cpp.Lino` (C/C++), `python.Lino`
 
 ---
 
@@ -258,6 +259,49 @@ A git-like version control system built into Linuxify with sophisticated algorit
 | `lvc versions <file>` | List file versions |
 | `lvc show <commit>` | Show commit details |
 
+---
+
+### **LinMake (Build System)**
+
+A CMake-like build system (`linmake.exe`) native to Linuxify with simple config files and auto-detection.
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `linmake init` | Create LMake config template |
+| `linmake build` | Compile project (incremental) |
+| `linmake build --release` | Optimized build (-O2) |
+| `linmake build --debug` | Debug build with symbols |
+| `linmake run` | Build and execute |
+| `linmake clean` | Remove build artifacts |
+
+**Features:**
+- Auto-detects `.c`/`.cpp` source files
+- Incremental builds (only recompiles changed files)
+- Resolves bundled libraries automatically (z, ssl, curl, png, sqlite3, curses)
+- Colored output with progress indicators
+
+**LMake Config:**
+```ini
+project = myapp
+type = executable
+version = 1.0.0
+
+[sources]
+src/*.cpp
+main.c
+
+[libraries]
+curl
+sqlite3
+z
+
+[flags]
+std = c++17
+optimize = 2
+static = true
+```
 
 ---
 
@@ -285,7 +329,7 @@ A fully functional graph-based virtual file system tool (`node.exe`). It creates
 | `ls`, `cd`, `pwd` | Directory navigation |
 | `mkdir`, `rmdir` | Directory management |
 | `touch`, `rm`, `cat` | File operations |
-| `nano`, `echo` | File editing |
+| `Lino`, `echo` | File editing |
 | `exit` | Unmount and exit |
 
 ---
@@ -320,7 +364,7 @@ A modern Windows GUI terminal emulator (`windux.exe`) with tabbed interface and 
 - **ConPTY integration** - Full pseudo-console support for TUI apps
 - **Pixel-perfect font rendering** with custom bitmap font
 - **ANSI/VT100 escape sequence processing**
-- **TUI Support** - Alternate screen buffer for apps like nano, htop
+- **TUI Support** - Alternate screen buffer for apps like Lino, htop
 - **Text selection** with mouse drag and copy/paste
 - **Scrollback buffer** with mouse wheel scrolling
 - **Visual scrollbar** for navigation
@@ -391,6 +435,24 @@ After installation:
 
 IDEs like VS Code and CLion auto-detect the compiler.
 
+**Bundled Development Libraries:**
+
+The toolchain includes pre-compiled libraries for common development needs:
+
+| Library | Version | Include | Link Flags | Purpose |
+|---------|---------|---------|------------|---------|
+| zlib | 1.3.1 | `<zlib.h>` | `-lz` | Compression |
+| OpenSSL | 3.4.0 | `<openssl/ssl.h>` | `-lssl -lcrypto` | TLS/crypto |
+| PDCurses | 4.5.3 | `<curses.h>` | `-lpdcurses` | Terminal UI |
+| libpng | 1.6.53 | `<png.h>` | `-lpng -lz` | PNG images |
+| libcurl | 8.11.1 | `<curl/curl.h>` | `-lcurl` | HTTP client |
+| SQLite3 | 3.51.1 | `<sqlite3.h>` | `-lsqlite3` | Embedded database |
+
+**Example:**
+```bash
+gcc myapp.c -lz -lssl -lcrypto -lcurl -lsqlite3 -o myapp.exe
+```
+
 ---
 
 ## Directory Structure
@@ -398,7 +460,7 @@ IDEs like VS Code and CLion auto-detect the compiler.
 ```
 Linuxify/
 ├── linuxify.exe        # Main shell (5500+ lines)
-├── nano.exe            # Text editor
+├── Lino.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
 │   ├── lvc.exe         # Version control
@@ -421,9 +483,9 @@ Linuxify/
 │   ├── crontab         # Scheduled tasks
 │   ├── crond.log       # Daemon log
 │   └── nodes/          # Node FS images
-├── plugins/            # Nano syntax plugins
-│   ├── cpp.nano
-│   └── python.nano
+├── plugins/            # Lino syntax plugins
+│   ├── cpp.Lino
+│   └── python.Lino
 └── toolchain/          # Bundled MinGW-w64
     └── compiler/
         └── mingw64/
@@ -447,8 +509,8 @@ Run the installer, which will:
 # Build main shell
 .\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp
 
-# Build nano
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -O2 -o nano.exe nano.cpp
+# Build Lino
+.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -O2 -o Lino.exe Lino.cpp
 
 # Build lish
 .\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\lish.exe cmds-src\lish.cpp

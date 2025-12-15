@@ -63,8 +63,8 @@ PyAPI_FUNC(int) _PyThread_at_fork_reinit(PyThread_type_lock *lock);
 #define PY_TIMEOUT_T long long
 
 #if defined(_POSIX_THREADS)
-   /* PyThread_acquire_lock_timed() uses _PyTime_FromNanoseconds(us * 1000),
-      convert microseconds to nanoseconds. */
+   /* PyThread_acquire_lock_timed() uses _PyTime_FromLinoseconds(us * 1000),
+      convert microseconds to Linoseconds. */
 #  define PY_TIMEOUT_MAX (LLONG_MAX / 1000)
 #elif defined (NT_THREADS)
    /* In the NT API, the timeout is a DWORD and is expressed in milliseconds */

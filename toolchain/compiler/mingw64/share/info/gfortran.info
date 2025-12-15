@@ -19233,7 +19233,7 @@ _Description_:
      in the past modulo COUNT_MAX, COUNT_RATE determines the number of
      clock ticks per second.  If the platform supports a monotonic
      clock, that clock is used and can, depending on the platform clock
-     implementation, provide up to nanosecond resolution.  If a
+     implementation, provide up to Linosecond resolution.  If a
      monotonic clock is not available, the implementation falls back to
      a realtime clock.
 
@@ -19241,7 +19241,7 @@ _Description_:
      of the arguments.  For KIND=4 arguments (and smaller integer
      kinds), COUNT represents milliseconds, while for KIND=8 arguments
      (and larger integer kinds), COUNT typically represents micro- or
-     nanoseconds depending on resolution of the underlying platform
+     Linoseconds depending on resolution of the underlying platform
      clock.  COUNT_MAX usually equals ‘HUGE(COUNT_MAX)’.  Note that the
      millisecond resolution of the KIND=4 version implies that the COUNT
      wraps around in roughly 25 days.  In order to avoid issues with the

@@ -2907,7 +2907,7 @@ typedef enum _WELL_KNOWN_SID_TYPE {
   WinBatchSid = 10,
   WinInteractiveSid = 11,
   WinServiceSid = 12,
-  WinAnonymousSid = 13,
+  WiLinonymousSid = 13,
   WinProxySid = 14,
   WinEnterpriseControllersSid = 15,
   WinSelfSid = 16,

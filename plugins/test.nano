@@ -1,0 +1,28 @@
+# Test plugin for pattern and context validation
+# Syntax for a simple language with out() and in()
+
+syntax: test;
+ext: .test;
+
+Section [.test] {
+    keyword: var, green;
+    keyword: out, cyan;
+    keyword: in, cyan;
+
+    Pattern [String] {
+        Format: "%s";
+        Color: yellow;
+    }
+
+    Context [io](red) {
+        Values: out, in;
+        keyword: var;
+        Special: '(', ')', ';', '=', '"';
+        
+        Pattern[singles] {
+            {out("<freetext>");},
+            {in("<freetext>");},
+            {var <freetext> = <Values>("<freetext>");}
+        } # for keywords in a programming language
+    }
+}

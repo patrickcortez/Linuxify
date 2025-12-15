@@ -1252,7 +1252,7 @@ private:
         // Check built-in commands first
         std::vector<std::string> builtins = {
             "pwd", "cd", "ls", "mkdir", "rm", "mv", "cp", "cat", "touch", 
-            "chmod", "chown", "clear", "help", "nano", "lin", "registry",
+            "chmod", "chown", "clear", "help", "lino", "lin", "registry",
             "history", "whoami", "echo", "env", "printenv", "export", "which", "exit"
         };
         
@@ -3421,7 +3421,7 @@ private:
         std::cout << "          Show this help message\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  nano";
+        std::cout << "  lino";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Text editor\n";
 
@@ -3717,7 +3717,7 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  crontab -e";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "      Edit crontab in nano\n";
+        std::cout << "      Edit crontab in lino\n";
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  crontab -r";
@@ -4181,12 +4181,12 @@ private:
             cmdClear(tokens);
         } else if (cmd == "help") {
             cmdHelp(tokens);
-        } else if (cmd == "nano") {
-            std::string nanoCmd = "nano.exe";
+        } else if (cmd == "lino") {
+            std::string linoCmd = "lino.exe";
             if (tokens.size() > 1) {
-                nanoCmd += " \"" + resolvePath(tokens[1]) + "\"";
+                linoCmd += " \"" + resolvePath(tokens[1]) + "\"";
             }
-            runProcess(nanoCmd);
+            runProcess(linoCmd);
         } else if (cmd == "lin") {
             cmdLin(tokens);
         } else if (cmd == "setup") {
@@ -4494,7 +4494,7 @@ private:
             if (tokens.size() < 2) {
                 std::cout << "Usage: crontab [-l | -e | -r]\n";
                 std::cout << "  -l    List crontab entries\n";
-                std::cout << "  -e    Edit crontab in nano\n";
+                std::cout << "  -e    Edit crontab in lino\n";
                 std::cout << "  -r    Remove all entries\n";
                 std::cout << "\nCrontab format: min hour day month weekday command\n";
                 std::cout << "Special: @reboot @hourly @daily @weekly @monthly @yearly\n";
@@ -4527,22 +4527,28 @@ private:
                     }
                     
                 } else if (arg == "-e") {
-                    // Edit crontab with nano
+                    // Edit crontab with lino
                     char exePath[MAX_PATH];
                     GetModuleFileNameA(NULL, exePath, MAX_PATH);
-                    fs::path nanoPath = fs::path(exePath).parent_path() / "nano.exe";
+                    fs::path linoPath = fs::path(exePath).parent_path() / "lino.exe";
                     
-                    // Create crontab if it doesn't exist
+                    // Make sure crontab exists
                     if (!fs::exists(crontabPath)) {
-                        std::ofstream file(crontabPath);
-                        file << "# Linuxify Crontab - Edit with crontab -e\n";
-                        file << "# Format: min hour day month weekday command\n";
-                        file << "# Example: */5 * * * * ping google.com\n\n";
+                        std::ofstream ofs(crontabPath);
+                        ofs << "# Linuxify crontab - edit scheduled tasks\n";
+                        ofs << "# Format: min hour day month weekday command\n";
+                        ofs << "# Example: 0 12 * * * echo Hello World\n";
                     }
                     
-                    if (fs::exists(nanoPath)) {
-                        std::string cmdLine = "\"" + nanoPath.string() + "\" \"" + crontabPath + "\"";
-                        runProcess(cmdLine);
+                    if (fs::exists(linoPath)) {
+                        std::string cmdLine = "\"" + linoPath.string() + "\" \"" + crontabPath + "\"";
+                        STARTUPINFOA si = {sizeof(si)};
+                        PROCESS_INFORMATION pi;
+                        if (CreateProcessA(NULL, (LPSTR)cmdLine.c_str(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+                            WaitForSingleObject(pi.hProcess, INFINITE);
+                            CloseHandle(pi.hProcess);
+                            CloseHandle(pi.hThread);
+                        }
                         
                         // Tell crond to reload
                         std::string response = sendToCrond("RELOAD");
@@ -4553,7 +4559,7 @@ private:
                             printSuccess("Crontab saved and reloaded.");
                         }
                     } else {
-                        printError("nano not found. Edit manually: " + crontabPath);
+                        printError("lino not found. Edit manually: " + crontabPath);
                     }
                     
                 } else if (arg == "-r") {
@@ -4837,7 +4843,7 @@ public:
         static std::vector<std::string> builtins = {
             "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy", 
             "cat", "type", "touch", "chmod", "chown", "clear", "cls", "help", 
-            "nano", "lin", "registry", "history", "whoami", "echo", "env", 
+            "lino", "lin", "registry", "history", "whoami", "echo", "env", 
             "printenv", "export", "which", "ps", "kill", "top", "htop", "jobs", "fg",
             "grep", "head", "tail", "wc", "sort", "uniq", "find",
             // Text processing commands

@@ -337,7 +337,7 @@ _WIN32_SERVER_RELEASES = {
 }
 
 def win32_is_iot():
-    return win32_edition() in ('IoTUAP', 'NanoServer', 'WindowsCoreHeadless', 'IoTEdgeOS')
+    return win32_edition() in ('IoTUAP', 'LinoServer', 'WindowsCoreHeadless', 'IoTEdgeOS')
 
 def win32_edition():
     try:

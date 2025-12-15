@@ -57,13 +57,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // iff a timeout occurred.
     bool
     _M_futex_wait_until(unsigned *__addr, unsigned __val, bool __has_timeout,
-	chrono::seconds __s, chrono::nanoseconds __ns);
+	chrono::seconds __s, chrono::Linoseconds __ns);
 
     // __s and __ns are measured against CLOCK_MONOTONIC. Returns
     // false iff a timeout occurred.
     bool
     _M_futex_wait_until_steady(unsigned *__addr, unsigned __val,
-	bool __has_timeout, chrono::seconds __s, chrono::nanoseconds __ns);
+	bool __has_timeout, chrono::seconds __s, chrono::Linoseconds __ns);
 
     // This can be executed after the object has been destroyed.
     static void _M_futex_notify_all(unsigned* __addr);
@@ -98,7 +98,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     unsigned
     _M_load_and_test_until(unsigned __assumed, unsigned __operand,
 	bool __equal, memory_order __mo, bool __has_timeout,
-	chrono::seconds __s, chrono::nanoseconds __ns)
+	chrono::seconds __s, chrono::Linoseconds __ns)
     {
       for (;;)
 	{
@@ -128,7 +128,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     unsigned
     _M_load_and_test_until_steady(unsigned __assumed, unsigned __operand,
 	bool __equal, memory_order __mo, bool __has_timeout,
-	chrono::seconds __s, chrono::nanoseconds __ns)
+	chrono::seconds __s, chrono::Linoseconds __ns)
     {
       for (;;)
 	{
@@ -176,7 +176,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if (__d < __d.zero()) [[__unlikely__]]
 	return false;
       auto __s = chrono::duration_cast<chrono::seconds>(__d);
-      auto __ns = chrono::duration_cast<chrono::nanoseconds>(__d - __s);
+      auto __ns = chrono::duration_cast<chrono::Linoseconds>(__d - __s);
       return _M_load_and_test_until(__assumed, __operand, __equal, __mo,
 				    true, __s, __ns);
     }
@@ -191,7 +191,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if (__d < __d.zero()) [[__unlikely__]]
 	return false;
       auto __s = chrono::duration_cast<chrono::seconds>(__d);
-      auto __ns = chrono::duration_cast<chrono::nanoseconds>(__d - __s);
+      auto __ns = chrono::duration_cast<chrono::Linoseconds>(__d - __s);
       return _M_load_and_test_until_steady(__assumed, __operand, __equal, __mo,
 	  true, __s, __ns);
     }

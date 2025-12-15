@@ -9,9 +9,10 @@
 // Handle to a Pseudo Console
 typedef void* HPCON;
 
-// Attribute for thread creation (needed for STARTUPINFOEX)
+#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE \
     ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
+#endif
 
 // Function Pointers
 typedef HRESULT (WINAPI *PFN_CreatePseudoConsole)(COORD size, HANDLE hInput, HANDLE hOutput, DWORD dwFlags, HPCON* phPC);

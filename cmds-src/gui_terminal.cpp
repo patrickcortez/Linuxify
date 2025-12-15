@@ -74,6 +74,7 @@ struct Session {
     // Actually, ConPTY sends the logic to restore. We just need to track mode to disable scrollbar.
 
     int cursorRow = 0; int cursorCol = 0;
+    bool wrapPending = false;  // Deferred wrap: cursor at last col, wrap on next char
     int rows = 25; int cols = 80;
     
     ParseState parseState = STATE_TEXT;
@@ -90,9 +91,21 @@ struct Session {
 
     void Resize(int r, int c) {
         std::lock_guard<std::mutex> lock(mutex);
+        int oldRows = rows, oldCols = cols;
         rows = std::max(1, r); cols = std::max(1, c);
-        grid.resize(rows);
-        for (auto& row : grid) row.resize(cols);
+        
+        std::vector<std::vector<Cell>> newGrid(rows);
+        for (auto& row : newGrid) row.resize(cols);
+        
+        int copyRows = std::min(oldRows, rows);
+        int copyCols = std::min(oldCols, cols);
+        for (int i = 0; i < copyRows && i < (int)grid.size(); i++) {
+            for (int j = 0; j < copyCols && j < (int)grid[i].size(); j++) {
+                newGrid[i][j] = grid[i][j];
+            }
+        }
+        grid = std::move(newGrid);
+        
         if (cursorRow >= rows) cursorRow = rows - 1;
         if (cursorCol >= cols) cursorCol = cols - 1;
         viewOffset = 0;
@@ -227,6 +240,7 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
             int c = codes[i];
             if (c == 0) { s->currentFg = DEFAULT_FG; s->currentBg = DEFAULT_BG; }
             else if (c == 1) { if (s->currentFg == DEFAULT_FG) s->currentFg = PALETTE[15]; }
+            else if (c == 7) { std::swap(s->currentFg, s->currentBg); } // Reverse video
             else if (c >= 30 && c <= 37) s->currentFg = PALETTE[c - 30];
             else if (c >= 40 && c <= 47) s->currentBg = PALETTE[c - 40];
             else if (c >= 90 && c <= 97) s->currentFg = PALETTE[c - 90 + 8];
@@ -242,50 +256,258 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
             }
         }
         break;
+        
+    // Erase in Display (ED)
     case 'J': 
-        if (codes[0] == 2) {
-             for(auto& r : s->grid) for(auto& c : r) c = Cell{' ', s->currentFg, s->currentBg};
-             s->cursorRow = 0; s->cursorCol = 0;
+        {
+            int mode = codes[0];
+            if (mode == 0) {
+                // Erase from cursor to end of screen
+                if (s->cursorRow < s->rows) {
+                    auto& row = s->grid[s->cursorRow];
+                    for (int i = s->cursorCol; i < s->cols; ++i) row[i] = Cell{' ', s->currentFg, s->currentBg};
+                }
+                for (int r = s->cursorRow + 1; r < s->rows; ++r) {
+                    for (auto& c : s->grid[r]) c = Cell{' ', s->currentFg, s->currentBg};
+                }
+            } else if (mode == 1) {
+                // Erase from start of screen to cursor
+                for (int r = 0; r < s->cursorRow; ++r) {
+                    for (auto& c : s->grid[r]) c = Cell{' ', s->currentFg, s->currentBg};
+                }
+                if (s->cursorRow < s->rows) {
+                    auto& row = s->grid[s->cursorRow];
+                    for (int i = 0; i <= s->cursorCol && i < s->cols; ++i) row[i] = Cell{' ', s->currentFg, s->currentBg};
+                }
+            } else if (mode == 2 || mode == 3) {
+                // Erase entire screen
+                for (auto& r : s->grid) for (auto& c : r) c = Cell{' ', s->currentFg, s->currentBg};
+            }
         }
         break;
+        
+    // Erase in Line (EL)
     case 'K':
-        if (s->cursorRow < s->rows) {
+        if (s->cursorRow < s->rows && s->cursorRow >= 0) {
             auto& row = s->grid[s->cursorRow];
-            for(int i=s->cursorCol; i<s->cols; ++i) row[i] = Cell{' ', s->currentFg, s->currentBg};
+            int mode = codes[0];
+            if (mode == 0) {
+                // Erase from cursor to end of line
+                for (int i = s->cursorCol; i < s->cols; ++i) row[i] = Cell{' ', s->currentFg, s->currentBg};
+            } else if (mode == 1) {
+                // Erase from start of line to cursor
+                for (int i = 0; i <= s->cursorCol && i < s->cols; ++i) row[i] = Cell{' ', s->currentFg, s->currentBg};
+            } else if (mode == 2) {
+                // Erase entire line
+                for (auto& c : row) c = Cell{' ', s->currentFg, s->currentBg};
+            }
         }
         break;
+        
+    // Cursor Position (CUP) / Horizontal and Vertical Position (HVP)
     case 'H':
-        if (codes.size() >= 2) { s->cursorRow = std::max(0, codes[0]-1); s->cursorCol = std::max(0, codes[1]-1); }
-        else { s->cursorRow = 0; s->cursorCol = 0; }
+    case 'f':
+        {
+            int row = (codes.size() >= 1 && codes[0] > 0) ? codes[0] - 1 : 0;
+            int col = (codes.size() >= 2 && codes[1] > 0) ? codes[1] - 1 : 0;
+            s->cursorRow = std::min(std::max(0, row), s->rows - 1);
+            s->cursorCol = std::min(std::max(0, col), s->cols - 1);
+        }
         break;
-    case 'A': s->cursorRow = std::max(0, s->cursorRow - (codes[0]?codes[0]:1)); break;
-    case 'B': s->cursorRow = std::min(s->rows-1, s->cursorRow + (codes[0]?codes[0]:1)); break;
-    case 'C': s->cursorCol = std::min(s->cols-1, s->cursorCol + (codes[0]?codes[0]:1)); break;
-    case 'D': s->cursorCol = std::max(0, s->cursorCol - (codes[0]?codes[0]:1)); break;
+        
+    // Cursor Horizontal Absolute (CHA) - move to column N
+    case 'G':
+        {
+            int col = (codes[0] > 0) ? codes[0] - 1 : 0;
+            s->cursorCol = std::min(std::max(0, col), s->cols - 1);
+        }
+        break;
+        
+    // Vertical Position Absolute (VPA) - move to row N
+    case 'd':
+        {
+            int row = (codes[0] > 0) ? codes[0] - 1 : 0;
+            s->cursorRow = std::min(std::max(0, row), s->rows - 1);
+        }
+        break;
+    
+    // Cursor Up (CUU)
+    case 'A': 
+        s->cursorRow = std::max(0, s->cursorRow - (codes[0] ? codes[0] : 1)); 
+        break;
+        
+    // Cursor Down (CUD)
+    case 'B': 
+        s->cursorRow = std::min(s->rows - 1, s->cursorRow + (codes[0] ? codes[0] : 1)); 
+        break;
+        
+    // Cursor Forward (CUF)
+    case 'C': 
+        s->cursorCol = std::min(s->cols - 1, s->cursorCol + (codes[0] ? codes[0] : 1)); 
+        break;
+        
+    // Cursor Back (CUB)
+    case 'D': 
+        s->cursorCol = std::max(0, s->cursorCol - (codes[0] ? codes[0] : 1)); 
+        break;
+        
+    // Cursor Next Line (CNL)
+    case 'E':
+        s->cursorRow = std::min(s->rows - 1, s->cursorRow + (codes[0] ? codes[0] : 1));
+        s->cursorCol = 0;
+        break;
+        
+    // Cursor Previous Line (CPL)
+    case 'F':
+        s->cursorRow = std::max(0, s->cursorRow - (codes[0] ? codes[0] : 1));
+        s->cursorCol = 0;
+        break;
+        
+    // Insert Line (IL)
+    case 'L':
+        {
+            int count = codes[0] ? codes[0] : 1;
+            for (int n = 0; n < count && s->cursorRow < s->rows; ++n) {
+                // Shift lines down from cursor
+                for (int r = s->rows - 1; r > s->cursorRow; --r) {
+                    s->grid[r] = s->grid[r - 1];
+                }
+                // Clear current line
+                s->grid[s->cursorRow].assign(s->cols, Cell{' ', s->currentFg, s->currentBg});
+            }
+        }
+        break;
+        
+    // Delete Line (DL)
+    case 'M':
+        {
+            int count = codes[0] ? codes[0] : 1;
+            for (int n = 0; n < count && s->cursorRow < s->rows; ++n) {
+                // Shift lines up from cursor
+                for (int r = s->cursorRow; r < s->rows - 1; ++r) {
+                    s->grid[r] = s->grid[r + 1];
+                }
+                // Clear bottom line
+                s->grid[s->rows - 1].assign(s->cols, Cell{' ', s->currentFg, s->currentBg});
+            }
+        }
+        break;
+    
+    // Insert Character (ICH)
+    case '@':
+        if (s->cursorRow < s->rows) {
+            int count = codes[0] ? codes[0] : 1;
+            auto& row = s->grid[s->cursorRow];
+            // Shift characters right from cursor
+            for (int i = s->cols - 1; i >= s->cursorCol + count; --i) {
+                row[i] = row[i - count];
+            }
+            // Clear inserted positions
+            for (int i = s->cursorCol; i < s->cursorCol + count && i < s->cols; ++i) {
+                row[i] = Cell{' ', s->currentFg, s->currentBg};
+            }
+        }
+        break;
+        
+    // Delete Character (DCH)
+    case 'P':
+        if (s->cursorRow < s->rows) {
+            int count = codes[0] ? codes[0] : 1;
+            auto& row = s->grid[s->cursorRow];
+            // Shift characters left from cursor
+            for (int i = s->cursorCol; i < s->cols - count; ++i) {
+                row[i] = row[i + count];
+            }
+            // Clear trailing positions
+            for (int i = s->cols - count; i < s->cols; ++i) {
+                if (i >= 0) row[i] = Cell{' ', s->currentFg, s->currentBg};
+            }
+        }
+        break;
+        
+    // Erase Character (ECH)
+    case 'X':
+        if (s->cursorRow < s->rows) {
+            int count = codes[0] ? codes[0] : 1;
+            auto& row = s->grid[s->cursorRow];
+            for (int i = s->cursorCol; i < s->cursorCol + count && i < s->cols; ++i) {
+                row[i] = Cell{' ', s->currentFg, s->currentBg};
+            }
+        }
+        break;
+        
+    // Scroll Up (SU)
+    case 'S':
+        {
+            int count = codes[0] ? codes[0] : 1;
+            for (int n = 0; n < count; ++n) {
+                s->Scroll();
+            }
+        }
+        break;
+        
+    // Scroll Down (SD)
+    case 'T':
+        {
+            int count = codes[0] ? codes[0] : 1;
+            for (int n = 0; n < count; ++n) {
+                // Insert line at top, shift everything down
+                for (int r = s->rows - 1; r > 0; --r) {
+                    s->grid[r] = s->grid[r - 1];
+                }
+                s->grid[0].assign(s->cols, Cell{' ', s->currentFg, s->currentBg});
+            }
+        }
+        break;
+        
+    // Set Scrolling Region (DECSTBM) - we don't track regions, but handle sequence
+    case 'r':
+        // Currently ignoring scroll region - full screen scrolling only
+        break;
     
     // Private Modes
-    case 'h': // SM
+    case 'h': // SM (Set Mode)
         if (privateMode) {
             for (int code : codes) {
-                if (code == 1049) { 
+                if (code == 1049 || code == 47 || code == 1047) { 
+                    // Switch to alternate screen buffer
+                    s->savedGrid = s->grid;
                     s->inAltBuffer = true; 
-                    s->viewOffset = 0; 
-                    // Optional: Save cursor?
+                    s->viewOffset = 0;
+                    // Clear the alternate buffer
+                    for (auto& r : s->grid) for (auto& c : r) c = Cell{' ', DEFAULT_FG, DEFAULT_BG};
+                } else if (code == 25) {
+                    // Show cursor (DECTCEM) - we don't track this but accept it
                 }
             }
         }
         break;
-    case 'l': // RM
+    case 'l': // RM (Reset Mode)
         if (privateMode) {
             for (int code : codes) {
-                if (code == 1049) { 
-                    s->inAltBuffer = false; 
-                    // Optional: Restore cursor?
+                if (code == 1049 || code == 47 || code == 1047) { 
+                    // Switch back to main screen buffer
+                    s->inAltBuffer = false;
+                    if (!s->savedGrid.empty()) {
+                        s->grid = s->savedGrid;
+                        s->savedGrid.clear();
+                    }
+                } else if (code == 25) {
+                    // Hide cursor (DECTCEM)
                 }
             }
         }
         break;
     }
+    
+    // Clamp cursor position after any operation
+    if (s->cursorRow < 0) s->cursorRow = 0;
+    if (s->cursorRow >= s->rows) s->cursorRow = s->rows - 1;
+    if (s->cursorCol < 0) s->cursorCol = 0;
+    if (s->cursorCol >= s->cols) s->cursorCol = s->cols - 1;
+    
+    // Reset wrapPending when cursor is explicitly moved or screen is modified
+    s->wrapPending = false;
 }
 
 void ApplyOSC(Session* s, const std::string& params) {}
@@ -298,22 +520,42 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
         char c = buffer[i];
         switch (s->parseState) {
         case STATE_TEXT:
-            if (c == '\x1b') s->parseState = STATE_ESCAPE;
-            else if (c == '\r') s->cursorCol = 0;
+            if (c == '\x1b') {
+                s->parseState = STATE_ESCAPE;
+            }
+            else if (c == '\r') {
+                s->cursorCol = 0;
+                s->wrapPending = false;
+            }
             else if (c == '\n') {
+                s->wrapPending = false;
                 s->cursorRow++;
                 if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
             }
-            else if (c == '\b') { if (s->cursorCol > 0) s->cursorCol--; }
+            else if (c == '\b') {
+                s->wrapPending = false;
+                if (s->cursorCol > 0) s->cursorCol--;
+            }
             else if (c == '\a') {}
             else if (c >= 32 || c == '\t') {
                 if (c == '\t') c = ' ';
+                
+                // If wrap was pending from previous char at end of line, now actually wrap
+                if (s->wrapPending) {
+                    s->wrapPending = false;
+                    s->cursorCol = 0;
+                    s->cursorRow++;
+                    if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
+                }
+                
                 if (s->cursorRow < s->rows && s->cursorCol < s->cols) {
                     s->grid[s->cursorRow][s->cursorCol] = Cell{c, s->currentFg, s->currentBg};
                     s->cursorCol++;
+                    
+                    // If we just wrote to the last column, set wrap pending (deferred wrap)
                     if (s->cursorCol >= s->cols) {
-                        s->cursorCol = 0; s->cursorRow++;
-                        if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
+                        s->cursorCol = s->cols - 1;  // Keep cursor at last column
+                        s->wrapPending = true;       // Mark that next char should wrap
                     }
                 }
             }
@@ -321,7 +563,46 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
         case STATE_ESCAPE:
             if (c == '[') { s->parseState = STATE_CSI; s->csiParams = ""; }
             else if (c == ']') { s->parseState = STATE_OSC; s->csiParams = ""; }
-            else s->parseState = STATE_TEXT;
+            else if (c == 'M') {
+                // Reverse Index (RI) - move cursor up, scroll down if needed
+                if (s->cursorRow > 0) {
+                    s->cursorRow--;
+                } else {
+                    // Scroll down - insert line at top
+                    for (int r = s->rows - 1; r > 0; --r) {
+                        s->grid[r] = s->grid[r - 1];
+                    }
+                    s->grid[0].assign(s->cols, Cell{' ', s->currentFg, s->currentBg});
+                }
+                s->wrapPending = false;
+                s->parseState = STATE_TEXT;
+            }
+            else if (c == 'D') {
+                // Index (IND) - move cursor down, scroll up if needed
+                s->cursorRow++;
+                if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
+                s->wrapPending = false;
+                s->parseState = STATE_TEXT;
+            }
+            else if (c == 'E') {
+                // Next Line (NEL) - move to start of next line
+                s->cursorCol = 0;
+                s->cursorRow++;
+                if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
+                s->wrapPending = false;
+                s->parseState = STATE_TEXT;
+            }
+            else if (c == '7') {
+                // Save cursor (DECSC) - ignoring for now
+                s->parseState = STATE_TEXT;
+            }
+            else if (c == '8') {
+                // Restore cursor (DECRC) - ignoring for now
+                s->parseState = STATE_TEXT;
+            }
+            else {
+                s->parseState = STATE_TEXT;
+            }
             break;
         case STATE_CSI:
             if (c >= 0x20 && c <= 0x3F) s->csiParams += c;
@@ -362,7 +643,7 @@ void CreateNewSession() {
     
     RECT rc; GetClientRect(g_hwnd, &rc);
     int termHeight = rc.bottom - TAB_HEIGHT;
-    int cols = std::max(1, (int)((rc.right - 20) / g_fontWidth));
+    int cols = std::max(1, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
     int rows = std::max(1, (int)((termHeight - 20) / g_fontHeight));
     s->Resize(rows, cols);
 
@@ -597,17 +878,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED) return 0;
-        if (g_activeSessionIndex >= 0 && g_pty.ResizePseudoConsole) {
+        if (g_pty.ResizePseudoConsole) {
              RECT rc; GetClientRect(hwnd, &rc);
              int termHeight = rc.bottom - TAB_HEIGHT;
-             int cols = std::max(1, (int)((rc.right - 20) / g_fontWidth));
+             int cols = std::max(1, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
              int rows = std::max(1, (int)((termHeight - 20) / g_fontHeight));
-             if (g_activeSessionIndex < g_sessions.size()) {
-                 Session* s = g_sessions[g_activeSessionIndex];
-                 g_pty.ResizePseudoConsole(s->hPC, {(SHORT)cols, (SHORT)rows});
-                 s->Resize(rows, cols);
+             for (Session* s : g_sessions) {
+                 if (s && s->hPC) {
+                     g_pty.ResizePseudoConsole(s->hPC, {(SHORT)cols, (SHORT)rows});
+                     s->Resize(rows, cols);
+                 }
              }
         }
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_SETCURSOR:
@@ -744,6 +1027,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 std::lock_guard<std::mutex> lock(s->mutex); s->viewOffset = 0; InvalidateRect(hwnd, NULL, FALSE);
             }
             char c = (char)wParam;
+            if (c == '\b') return 0;
             WriteFile(s->hPipeIn, &c, 1, NULL, NULL);
         }
         return 0;

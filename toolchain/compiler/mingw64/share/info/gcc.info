@@ -28087,8 +28087,8 @@ These options are defined for the MSP430:
      will always be sent to stdout via the ‘write’ syscall.  The string
      is not buffered before it is sent to write.
 
-     This option requires Newlib Nano IO, so GCC must be configured with
-     ‘--enable-newlib-nano-formatted-io’.
+     This option requires Newlib Lino IO, so GCC must be configured with
+     ‘--enable-newlib-Lino-formatted-io’.
 
 ‘-mmax-inline-shift=’
      This option takes an integer between 0 and 64 inclusive, and sets
@@ -32292,33 +32292,33 @@ These ‘-m’ options are defined for the x86 family of computers.
           SSE4.1, SSE4.2, AVX and AVX2 instruction set support.  (No
           scheduling is implemented for this chip.)
 
-     ‘nano’
-          Generic VIA Nano CPU with x86-64, MMX, SSE, SSE2, SSE3 and
+     ‘Lino’
+          Generic VIA Lino CPU with x86-64, MMX, SSE, SSE2, SSE3 and
           SSSE3 instruction set support.  (No scheduling is implemented
           for this chip.)
 
-     ‘nano-1000’
-          VIA Nano 1xxx CPU with x86-64, MMX, SSE, SSE2, SSE3 and SSSE3
+     ‘Lino-1000’
+          VIA Lino 1xxx CPU with x86-64, MMX, SSE, SSE2, SSE3 and SSSE3
           instruction set support.  (No scheduling is implemented for
           this chip.)
 
-     ‘nano-2000’
-          VIA Nano 2xxx CPU with x86-64, MMX, SSE, SSE2, SSE3 and SSSE3
+     ‘Lino-2000’
+          VIA Lino 2xxx CPU with x86-64, MMX, SSE, SSE2, SSE3 and SSSE3
           instruction set support.  (No scheduling is implemented for
           this chip.)
 
-     ‘nano-3000’
-          VIA Nano 3xxx CPU with x86-64, MMX, SSE, SSE2, SSE3, SSSE3 and
+     ‘Lino-3000’
+          VIA Lino 3xxx CPU with x86-64, MMX, SSE, SSE2, SSE3, SSSE3 and
           SSE4.1 instruction set support.  (No scheduling is implemented
           for this chip.)
 
-     ‘nano-x2’
-          VIA Nano Dual Core CPU with x86-64, MMX, SSE, SSE2, SSE3,
+     ‘Lino-x2’
+          VIA Lino Dual Core CPU with x86-64, MMX, SSE, SSE2, SSE3,
           SSSE3 and SSE4.1 instruction set support.  (No scheduling is
           implemented for this chip.)
 
-     ‘nano-x4’
-          VIA Nano Quad Core CPU with x86-64, MMX, SSE, SSE2, SSE3,
+     ‘Lino-x4’
+          VIA Lino Quad Core CPU with x86-64, MMX, SSE, SSE2, SSE3,
           SSSE3 and SSE4.1 instruction set support.  (No scheduling is
           implemented for this chip.)
 

@@ -2,7 +2,6 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
-claude=C:\Users\patri\.local\bin\claude.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
 convert=C:\WINDOWS\system32\convert.exe
@@ -17,10 +16,10 @@ mysql=C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe
 nslookup=C:\WINDOWS\system32\nslookup.exe
+nvim=C:\Program Files\Neovim\bin\nvim.exe
 ping=C:\WINDOWS\system32\ping.exe
 pip=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip.exe
 pip3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip3.exe
-proj1=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\project.sh
 python=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python.exe
 python3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python3.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd

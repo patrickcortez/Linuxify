@@ -1459,10 +1459,10 @@ private:
         }
     }
 
-    void cmdNano(const std::vector<std::string>& args) {
+    void cmdLino(const std::vector<std::string>& args) {
         if (args.size() < 2) {
             setColor(NodeFS::getColorError());
-            std::cerr << "Usage: nano <file|number>\n";
+            std::cerr << "Usage: Lino <file|number>\n";
             resetColor();
             return;
         }
@@ -1485,7 +1485,7 @@ private:
         if (lines.empty()) lines.push_back("");
         
         setColor(NodeFS::getColorSuccess());
-        std::cout << "=== Node Nano Editor ===\n";
+        std::cout << "=== Node Lino Editor ===\n";
         std::cout << "Commands: :w (save), :q (quit), :wq (save&quit)\n";
         std::cout << "<n> to edit line, 'a' to append, 'i<n>' to insert before line, 'd<n>' to delete\n";
         resetColor();
@@ -1684,7 +1684,7 @@ private:
         std::cout << "  pwd                   Show logical path\n\n";
         std::cout << "File Operations:\n";
         std::cout << "  make <name> [content] Create new node\n";
-        std::cout << "  nano <file|number>    Edit node content (i<n> to insert)\n";
+        std::cout << "  Lino <file|number>    Edit node content (i<n> to insert)\n";
         std::cout << "  echo <text> [> file]  Print or redirect to file\n";
         std::cout << "  rm <name|number>      Remove link (alias: unlink)\n\n";
         std::cout << "Import/Export:\n";
@@ -1730,7 +1730,7 @@ public:
             else if (cmd == "unlink" || cmd == "rm" || cmd == "rmdir") cmdUnlink(tokens);
             else if (cmd == "cat") cmdCat(tokens);
             else if (cmd == "echo") cmdEcho(tokens);
-            else if (cmd == "nano") cmdNano(tokens);
+            else if (cmd == "Lino") cmdLino(tokens);
             else if (cmd == "import") cmdImport(tokens);
             else if (cmd == "export") cmdExport(tokens);
             else if (cmd == "pwd") std::cout << currentPath << "\n";

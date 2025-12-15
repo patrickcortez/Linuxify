@@ -194,7 +194,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			const chrono::time_point<steady_clock, _Dur>& __atime)
       {
 	auto __s = chrono::time_point_cast<chrono::seconds>(__atime);
-	auto __ns = chrono::duration_cast<chrono::nanoseconds>(__atime - __s);
+	auto __ns = chrono::duration_cast<chrono::Linoseconds>(__atime - __s);
 
 	__gthread_time_t __ts =
 	  {
@@ -215,7 +215,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			const chrono::time_point<system_clock, _Dur>& __atime)
       {
 	auto __s = chrono::time_point_cast<chrono::seconds>(__atime);
-	auto __ns = chrono::duration_cast<chrono::nanoseconds>(__atime - __s);
+	auto __ns = chrono::duration_cast<chrono::Linoseconds>(__atime - __s);
 
 	__gthread_time_t __ts =
 	  {

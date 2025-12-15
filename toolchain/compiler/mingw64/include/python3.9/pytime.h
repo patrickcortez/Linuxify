@@ -84,11 +84,11 @@ PyAPI_FUNC(_PyTime_t) _PyTime_FromSeconds(int seconds);
 #define _PYTIME_FROMSECONDS(seconds) \
             ((_PyTime_t)(seconds) * (1000 * 1000 * 1000))
 
-/* Create a timestamp from a number of nanoseconds. */
-PyAPI_FUNC(_PyTime_t) _PyTime_FromNanoseconds(_PyTime_t ns);
+/* Create a timestamp from a number of Linoseconds. */
+PyAPI_FUNC(_PyTime_t) _PyTime_FromLinoseconds(_PyTime_t ns);
 
-/* Create a timestamp from nanoseconds (Python int). */
-PyAPI_FUNC(int) _PyTime_FromNanosecondsObject(_PyTime_t *t,
+/* Create a timestamp from Linoseconds (Python int). */
+PyAPI_FUNC(int) _PyTime_FromLinosecondsObject(_PyTime_t *t,
     PyObject *obj);
 
 /* Convert a number of seconds (Python float or int) to a timetamp.
@@ -114,9 +114,9 @@ PyAPI_FUNC(_PyTime_t) _PyTime_AsMilliseconds(_PyTime_t t,
 PyAPI_FUNC(_PyTime_t) _PyTime_AsMicroseconds(_PyTime_t t,
     _PyTime_round_t round);
 
-/* Convert timestamp to a number of nanoseconds (10^-9 seconds) as a Python int
+/* Convert timestamp to a number of Linoseconds (10^-9 seconds) as a Python int
    object. */
-PyAPI_FUNC(PyObject *) _PyTime_AsNanosecondsObject(_PyTime_t t);
+PyAPI_FUNC(PyObject *) _PyTime_AsLinosecondsObject(_PyTime_t t);
 
 /* Create a timestamp from a timeval structure.
    Raise an exception and return -1 on overflow, return 0 on success. */
@@ -152,7 +152,7 @@ PyAPI_FUNC(int) _PyTime_AsTimevalTime_t(
    Raise an exception and return -1 on overflow, return 0 on success. */
 PyAPI_FUNC(int) _PyTime_FromTimespec(_PyTime_t *tp, struct timespec *ts);
 
-/* Convert a timestamp to a timespec structure (nanosecond resolution).
+/* Convert a timestamp to a timespec structure (Linosecond resolution).
    tv_nsec is always positive.
    Raise an exception and return -1 on error, return 0 on success. */
 PyAPI_FUNC(int) _PyTime_AsTimespec(_PyTime_t t, struct timespec *ts);

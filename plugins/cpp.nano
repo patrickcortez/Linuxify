@@ -1,15 +1,22 @@
-# C/C++ Syntax Highlighting Plugin for Nano
-# Place this file in the plugins/ folder
+# C/C++ Syntax Highlighting Plugin for Lino
 
 # Special character colors
 set `{}` = blue;
 set `()` = yellow;
 set `[]` = cyan;
 set `<>` = magenta;
+set `;:` = white;
+set `.,` = white;
+set `+-*/%` = red;
+set `&|^~!` = red;
+set `=` = red;
 
 # C++ file extension
 Section [.cpp]{
-    # Keywords
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    
+    # Fundamental types
     keyword: int, blue;
     keyword: float, blue;
     keyword: double, blue;
@@ -20,6 +27,24 @@ Section [.cpp]{
     keyword: short, blue;
     keyword: unsigned, blue;
     keyword: signed, blue;
+    keyword: wchar_t, blue;
+    keyword: char8_t, blue;
+    keyword: char16_t, blue;
+    keyword: char32_t, blue;
+    keyword: int8_t, blue;
+    keyword: int16_t, blue;
+    keyword: int32_t, blue;
+    keyword: int64_t, blue;
+    keyword: uint8_t, blue;
+    keyword: uint16_t, blue;
+    keyword: uint32_t, blue;
+    keyword: uint64_t, blue;
+    keyword: size_t, blue;
+    keyword: ptrdiff_t, blue;
+    keyword: intptr_t, blue;
+    keyword: uintptr_t, blue;
+    
+    # Storage and type qualifiers
     keyword: auto, blue;
     keyword: const, blue;
     keyword: static, blue;
@@ -28,6 +53,13 @@ Section [.cpp]{
     keyword: register, blue;
     keyword: mutable, blue;
     keyword: constexpr, blue;
+    keyword: consteval, blue;
+    keyword: constinit, blue;
+    keyword: inline, blue;
+    keyword: thread_local, blue;
+    keyword: decltype, blue;
+    keyword: typedef, blue;
+    keyword: using, blue;
     
     # Control flow
     keyword: if, magenta;
@@ -42,6 +74,9 @@ Section [.cpp]{
     keyword: continue, magenta;
     keyword: return, magenta;
     keyword: goto, magenta;
+    keyword: co_await, magenta;
+    keyword: co_return, magenta;
+    keyword: co_yield, magenta;
     
     # Classes and OOP
     keyword: class, cyan;
@@ -60,6 +95,12 @@ Section [.cpp]{
     keyword: friend, cyan;
     keyword: operator, cyan;
     keyword: this, cyan;
+    keyword: explicit, cyan;
+    keyword: concept, cyan;
+    keyword: requires, cyan;
+    keyword: export, cyan;
+    keyword: module, cyan;
+    keyword: import, cyan;
     
     # Memory and pointers
     keyword: new, red;
@@ -68,7 +109,13 @@ Section [.cpp]{
     keyword: NULL, red;
     keyword: sizeof, red;
     keyword: alignof, red;
+    keyword: alignas, red;
     keyword: typeid, red;
+    keyword: static_cast, red;
+    keyword: dynamic_cast, red;
+    keyword: const_cast, red;
+    keyword: reinterpret_cast, red;
+    keyword: offsetof, red;
     
     # Exception handling
     keyword: try, yellow;
@@ -76,61 +123,302 @@ Section [.cpp]{
     keyword: throw, yellow;
     keyword: noexcept, yellow;
     
-    # Standard library
+    # Standard library types
     keyword: std, green;
     keyword: cout, green;
     keyword: cin, green;
     keyword: cerr, green;
+    keyword: clog, green;
     keyword: endl, green;
     keyword: string, green;
+    keyword: string_view, green;
+    keyword: wstring, green;
     keyword: vector, green;
+    keyword: array, green;
+    keyword: deque, green;
+    keyword: list, green;
+    keyword: forward_list, green;
     keyword: map, green;
+    keyword: multimap, green;
+    keyword: unordered_map, green;
     keyword: set, green;
+    keyword: multiset, green;
+    keyword: unordered_set, green;
+    keyword: stack, green;
+    keyword: queue, green;
+    keyword: priority_queue, green;
     keyword: pair, green;
-    keyword: make_pair, green;
+    keyword: tuple, green;
+    keyword: optional, green;
+    keyword: variant, green;
+    keyword: any, green;
+    keyword: span, green;
+    keyword: bitset, green;
+    
+    # Smart pointers
     keyword: unique_ptr, green;
     keyword: shared_ptr, green;
+    keyword: weak_ptr, green;
+    keyword: make_unique, green;
+    keyword: make_shared, green;
+    
+    # Utility functions
     keyword: move, green;
     keyword: forward, green;
+    keyword: swap, green;
+    keyword: make_pair, green;
+    keyword: make_tuple, green;
+    keyword: get, green;
+    keyword: begin, green;
+    keyword: end, green;
+    keyword: size, green;
+    keyword: empty, green;
+    keyword: back, green;
+    keyword: front, green;
+    keyword: push_back, green;
+    keyword: pop_back, green;
+    keyword: push_front, green;
+    keyword: pop_front, green;
+    keyword: insert, green;
+    keyword: erase, green;
+    keyword: find, green;
+    keyword: count, green;
+    keyword: clear, green;
+    keyword: resize, green;
+    keyword: reserve, green;
+    keyword: emplace, green;
+    keyword: emplace_back, green;
     
-    # Boolean
+    # Algorithm functions
+    keyword: sort, green;
+    keyword: stable_sort, green;
+    keyword: partial_sort, green;
+    keyword: nth_element, green;
+    keyword: binary_search, green;
+    keyword: lower_bound, green;
+    keyword: upper_bound, green;
+    keyword: equal_range, green;
+    keyword: merge, green;
+    keyword: reverse, green;
+    keyword: rotate, green;
+    keyword: shuffle, green;
+    keyword: unique, green;
+    keyword: remove, green;
+    keyword: remove_if, green;
+    keyword: copy, green;
+    keyword: copy_if, green;
+    keyword: fill, green;
+    keyword: transform, green;
+    keyword: accumulate, green;
+    keyword: reduce, green;
+    keyword: for_each, green;
+    keyword: all_of, green;
+    keyword: any_of, green;
+    keyword: none_of, green;
+    keyword: min, green;
+    keyword: max, green;
+    keyword: min_element, green;
+    keyword: max_element, green;
+    keyword: clamp, green;
+    
+    # IO streams
+    keyword: ifstream, green;
+    keyword: ofstream, green;
+    keyword: fstream, green;
+    keyword: stringstream, green;
+    keyword: ostringstream, green;
+    keyword: istringstream, green;
+    keyword: istream, green;
+    keyword: ostream, green;
+    keyword: getline, green;
+    
+    # Thread / concurrency
+    keyword: thread, green;
+    keyword: mutex, green;
+    keyword: lock_guard, green;
+    keyword: unique_lock, green;
+    keyword: shared_lock, green;
+    keyword: condition_variable, green;
+    keyword: future, green;
+    keyword: promise, green;
+    keyword: async, green;
+    keyword: atomic, green;
+    keyword: jthread, green;
+    keyword: latch, green;
+    keyword: barrier, green;
+    keyword: semaphore, green;
+    
+    # Filesystem
+    keyword: filesystem, green;
+    keyword: path, green;
+    keyword: directory_iterator, green;
+    keyword: recursive_directory_iterator, green;
+    keyword: exists, green;
+    keyword: is_directory, green;
+    keyword: is_regular_file, green;
+    keyword: create_directory, green;
+    keyword: create_directories, green;
+    keyword: remove_all, green;
+    keyword: rename, green;
+    keyword: copy_file, green;
+    keyword: current_path, green;
+    
+    # Chrono
+    keyword: chrono, green;
+    keyword: duration, green;
+    keyword: time_point, green;
+    keyword: system_clock, green;
+    keyword: steady_clock, green;
+    keyword: high_resolution_clock, green;
+    keyword: milliseconds, green;
+    keyword: microseconds, green;
+    keyword: nanoseconds, green;
+    keyword: seconds, green;
+    keyword: minutes, green;
+    keyword: hours, green;
+    
+    # Regex
+    keyword: regex, green;
+    keyword: regex_match, green;
+    keyword: regex_search, green;
+    keyword: regex_replace, green;
+    keyword: smatch, green;
+    keyword: cmatch, green;
+    
+    # Function objects
+    keyword: function, green;
+    keyword: bind, green;
+    keyword: ref, green;
+    keyword: cref, green;
+    keyword: invoke, green;
+    keyword: mem_fn, green;
+    keyword: placeholders, green;
+    
+    # Memory
+    keyword: allocator, green;
+    keyword: allocator_traits, green;
+    keyword: addressof, green;
+    keyword: align, green;
+    keyword: uninitialized_copy, green;
+    keyword: uninitialized_fill, green;
+    keyword: destroy, green;
+    keyword: construct_at, green;
+    
+    # Type traits
+    keyword: is_same, green;
+    keyword: is_base_of, green;
+    keyword: is_convertible, green;
+    keyword: is_integral, green;
+    keyword: is_floating_point, green;
+    keyword: is_pointer, green;
+    keyword: is_array, green;
+    keyword: is_class, green;
+    keyword: is_enum, green;
+    keyword: is_const, green;
+    keyword: is_volatile, green;
+    keyword: remove_const, green;
+    keyword: remove_reference, green;
+    keyword: add_pointer, green;
+    keyword: decay, green;
+    keyword: enable_if, green;
+    keyword: conditional, green;
+    keyword: common_type, green;
+    
+    # Numeric limits
+    keyword: numeric_limits, green;
+    keyword: INT_MAX, orange;
+    keyword: INT_MIN, orange;
+    keyword: UINT_MAX, orange;
+    keyword: LONG_MAX, orange;
+    keyword: LONG_MIN, orange;
+    keyword: LLONG_MAX, orange;
+    keyword: LLONG_MIN, orange;
+    keyword: DBL_MAX, orange;
+    keyword: DBL_MIN, orange;
+    keyword: FLT_MAX, orange;
+    keyword: FLT_MIN, orange;
+    
+    # Boolean literals
     keyword: true, orange;
     keyword: false, orange;
     
-    # Preprocessor (handled specially but list common ones)
+    # Attributes
+    keyword: nodiscard, yellow;
+    keyword: deprecated, yellow;
+    keyword: fallthrough, yellow;
+    keyword: likely, yellow;
+    keyword: unlikely, yellow;
+    keyword: maybe_unused, yellow;
+    keyword: no_unique_address, yellow;
+    
+    # Windows types
+    keyword: DWORD, blue;
+    keyword: WORD, blue;
+    keyword: BYTE, blue;
+    keyword: BOOL, blue;
+    keyword: HANDLE, blue;
+    keyword: HWND, blue;
+    keyword: HINSTANCE, blue;
+    keyword: LPSTR, blue;
+    keyword: LPCSTR, blue;
+    keyword: LPWSTR, blue;
+    keyword: LPCWSTR, blue;
+    keyword: LPVOID, blue;
+    keyword: LRESULT, blue;
+    keyword: WPARAM, blue;
+    keyword: LPARAM, blue;
+    keyword: HRESULT, blue;
+    keyword: TRUE, orange;
+    keyword: FALSE, orange;
+    keyword: INVALID_HANDLE_VALUE, orange;
+    keyword: MAX_PATH, orange;
+    
+    # Preprocessor
     preprocessor: include, magenta;
     preprocessor: define, magenta;
+    preprocessor: undef, magenta;
     preprocessor: ifdef, magenta;
     preprocessor: ifndef, magenta;
+    preprocessor: if, magenta;
+    preprocessor: elif, magenta;
+    preprocessor: else, magenta;
     preprocessor: endif, magenta;
     preprocessor: pragma, magenta;
+    preprocessor: error, magenta;
+    preprocessor: warning, magenta;
+    preprocessor: line, magenta;
+    
+    # C++ Syntax Error Detection
+    # Validates words followed by ( are known functions/keywords
+    Context [cpp_functions](red) {
+        # Types (can be used as constructors)
+        Values: void, int, float, double, char, bool, long, short, unsigned, signed, wchar_t, auto, size_t, string, wstring, vector, array, deque, list, map, unordered_map, set, unordered_set, pair, tuple, optional, variant, unique_ptr, shared_ptr, weak_ptr, function, thread, mutex, atomic, future, promise, ifstream, ofstream, fstream, stringstream, ostringstream, istringstream, regex, path, duration, time_point;
+        
+        # Control flow with parens
+        keyword: if, else, for, while, do, switch, case, catch, sizeof, alignof, typeid, decltype, static_cast, dynamic_cast, const_cast, reinterpret_cast, noexcept, requires, co_await;
+        
+        # Common STL functions
+        keyword: std, cout, cin, cerr, endl, move, forward, swap, make_pair, make_tuple, make_unique, make_shared, get, begin, end, size, empty, back, front, push_back, pop_back, push_front, pop_front, insert, erase, find, count, clear, resize, reserve, emplace, emplace_back, sort, stable_sort, binary_search, lower_bound, upper_bound, merge, reverse, rotate, unique, remove, remove_if, copy, copy_if, fill, transform, accumulate, for_each, all_of, any_of, none_of, min, max, min_element, max_element, clamp, getline, printf, scanf, fprintf, fscanf, sprintf, snprintf, malloc, free, realloc, calloc, memcpy, memmove, memset, memcmp, strlen, strcpy, strcat, strcmp, fopen, fclose, fread, fwrite, exit, abort, assert;
+        
+        # Windows API functions
+        keyword: GetLastError, SetLastError, CreateFile, CloseHandle, ReadFile, WriteFile, GetModuleFileName, GetConsoleScreenBufferInfo, SetConsoleCursorPosition, WriteConsoleOutput, GetAsyncKeyState, CreateThread, WaitForSingleObject, Sleep, MessageBox, CreateWindow, RegisterClass, DefWindowProc, PostQuitMessage, GetMessage, TranslateMessage, DispatchMessage;
+    }
+
+    Context [IO](red){
+        keyword: cout,cin,cerr,endl;
+        special: '<<','>>',';';
+
+        Pattern [io]{
+            {cout << <freetext> << endl;},
+            {cout << <freetext> << (...);},
+        }   
+    }
 }
 
 # C header files
 Section [.h]{
-    keyword: int, blue;
-    keyword: float, blue;
-    keyword: double, blue;
-    keyword: char, blue;
-    keyword: void, blue;
-    keyword: struct, cyan;
-    keyword: typedef, cyan;
-    keyword: enum, cyan;
-    keyword: union, cyan;
-    keyword: const, blue;
-    keyword: static, blue;
-    keyword: extern, blue;
-    keyword: if, magenta;
-    keyword: else, magenta;
-    keyword: for, magenta;
-    keyword: while, magenta;
-    keyword: return, magenta;
-    keyword: NULL, red;
-    keyword: sizeof, red;
-}
-
-# C source files
-Section [.c]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
     keyword: int, blue;
     keyword: float, blue;
     keyword: double, blue;
@@ -140,11 +428,70 @@ Section [.c]{
     keyword: short, blue;
     keyword: unsigned, blue;
     keyword: signed, blue;
+    keyword: size_t, blue;
+    keyword: struct, cyan;
+    keyword: typedef, cyan;
+    keyword: enum, cyan;
+    keyword: union, cyan;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: extern, blue;
+    keyword: volatile, blue;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: do, magenta;
+    keyword: switch, magenta;
+    keyword: case, magenta;
+    keyword: default, magenta;
+    keyword: break, magenta;
+    keyword: continue, magenta;
+    keyword: return, magenta;
+    keyword: NULL, red;
+    keyword: sizeof, red;
+    keyword: malloc, red;
+    keyword: free, red;
+    keyword: realloc, red;
+    keyword: calloc, red;
+    preprocessor: include, magenta;
+    preprocessor: define, magenta;
+    preprocessor: ifdef, magenta;
+    preprocessor: ifndef, magenta;
+    preprocessor: endif, magenta;
+    preprocessor: pragma, magenta;
+    
+    # C Header Syntax Validation
+    Context [c_functions](red) {
+        Values: void, int, float, double, char, long, short, unsigned, signed, size_t, FILE;
+        keyword: if, for, while, do, switch, case, sizeof, malloc, free, realloc, calloc, printf, scanf, fprintf, fscanf, sprintf, snprintf, fopen, fclose, fread, fwrite, memcpy, memmove, memset, memcmp, strlen, strcpy, strcat, strcmp, exit, abort, assert;
+    }
+}
+
+# C source files
+Section [.c]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: void, blue;
+    keyword: long, blue;
+    keyword: short, blue;
+    keyword: unsigned, blue;
+    keyword: signed, blue;
+    keyword: size_t, blue;
     keyword: const, blue;
     keyword: static, blue;
     keyword: extern, blue;
     keyword: volatile, blue;
     keyword: register, blue;
+    keyword: inline, blue;
+    keyword: restrict, blue;
+    keyword: _Bool, blue;
+    keyword: _Complex, blue;
+    keyword: _Imaginary, blue;
     keyword: struct, cyan;
     keyword: typedef, cyan;
     keyword: enum, cyan;
@@ -167,20 +514,155 @@ Section [.c]{
     keyword: free, red;
     keyword: realloc, red;
     keyword: calloc, red;
+    keyword: memcpy, red;
+    keyword: memmove, red;
+    keyword: memset, red;
+    keyword: memcmp, red;
     keyword: printf, green;
     keyword: scanf, green;
     keyword: fprintf, green;
     keyword: fscanf, green;
     keyword: sprintf, green;
+    keyword: snprintf, green;
     keyword: sscanf, green;
+    keyword: puts, green;
+    keyword: gets, green;
+    keyword: fgets, green;
+    keyword: fputs, green;
     keyword: fopen, green;
     keyword: fclose, green;
     keyword: fread, green;
     keyword: fwrite, green;
+    keyword: fseek, green;
+    keyword: ftell, green;
+    keyword: rewind, green;
+    keyword: feof, green;
+    keyword: ferror, green;
+    keyword: fflush, green;
+    keyword: stdin, green;
+    keyword: stdout, green;
+    keyword: stderr, green;
+    keyword: FILE, cyan;
+    keyword: EOF, orange;
+    keyword: true, orange;
+    keyword: false, orange;
+    preprocessor: include, magenta;
+    preprocessor: define, magenta;
+    preprocessor: undef, magenta;
+    preprocessor: ifdef, magenta;
+    preprocessor: ifndef, magenta;
+    preprocessor: if, magenta;
+    preprocessor: elif, magenta;
+    preprocessor: else, magenta;
+    preprocessor: endif, magenta;
+    preprocessor: pragma, magenta;
+    
+    # C Source Syntax Validation
+    Context [c_functions](red) {
+        Values: void, int, float, double, char, long, short, unsigned, signed, size_t, FILE;
+        keyword: if, for, while, do, switch, case, sizeof, malloc, free, realloc, calloc, printf, scanf, fprintf, fscanf, sprintf, snprintf, sscanf, puts, gets, fgets, fputs, fopen, fclose, fread, fwrite, fseek, ftell, rewind, feof, ferror, fflush, memcpy, memmove, memset, memcmp, strlen, strcpy, strncpy, strcat, strncat, strcmp, strncmp, strchr, strstr, strtok, atoi, atof, atol, strtol, strtod, exit, abort, assert, qsort, bsearch, rand, srand, time, clock, getenv, system;
+    }
 }
 
 # C++ header files
 Section [.hpp]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: bool, blue;
+    keyword: void, blue;
+    keyword: long, blue;
+    keyword: short, blue;
+    keyword: unsigned, blue;
+    keyword: size_t, blue;
+    keyword: auto, blue;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: extern, blue;
+    keyword: constexpr, blue;
+    keyword: inline, blue;
+    keyword: class, cyan;
+    keyword: struct, cyan;
+    keyword: enum, cyan;
+    keyword: union, cyan;
+    keyword: namespace, cyan;
+    keyword: template, cyan;
+    keyword: typename, cyan;
+    keyword: typedef, cyan;
+    keyword: using, cyan;
+    keyword: public, cyan;
+    keyword: private, cyan;
+    keyword: protected, cyan;
+    keyword: virtual, cyan;
+    keyword: override, cyan;
+    keyword: final, cyan;
+    keyword: friend, cyan;
+    keyword: explicit, cyan;
+    keyword: operator, cyan;
+    keyword: this, cyan;
+    keyword: concept, cyan;
+    keyword: requires, cyan;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: do, magenta;
+    keyword: switch, magenta;
+    keyword: case, magenta;
+    keyword: default, magenta;
+    keyword: break, magenta;
+    keyword: continue, magenta;
+    keyword: return, magenta;
+    keyword: try, yellow;
+    keyword: catch, yellow;
+    keyword: throw, yellow;
+    keyword: noexcept, yellow;
+    keyword: new, red;
+    keyword: delete, red;
+    keyword: nullptr, red;
+    keyword: sizeof, red;
+    keyword: static_cast, red;
+    keyword: dynamic_cast, red;
+    keyword: const_cast, red;
+    keyword: reinterpret_cast, red;
+    keyword: std, green;
+    keyword: string, green;
+    keyword: string_view, green;
+    keyword: vector, green;
+    keyword: array, green;
+    keyword: map, green;
+    keyword: unordered_map, green;
+    keyword: set, green;
+    keyword: unordered_set, green;
+    keyword: optional, green;
+    keyword: variant, green;
+    keyword: unique_ptr, green;
+    keyword: shared_ptr, green;
+    keyword: weak_ptr, green;
+    keyword: function, green;
+    keyword: true, orange;
+    keyword: false, orange;
+    preprocessor: include, magenta;
+    preprocessor: define, magenta;
+    preprocessor: ifdef, magenta;
+    preprocessor: ifndef, magenta;
+    preprocessor: endif, magenta;
+    preprocessor: pragma, magenta;
+    
+    # C++ Header Syntax Validation
+    Context [cpp_functions](red) {
+        Values: void, int, float, double, char, bool, long, short, unsigned, signed, auto, size_t, string, string_view, vector, array, map, unordered_map, set, unordered_set, optional, variant, unique_ptr, shared_ptr, weak_ptr, function, thread, mutex, atomic;
+        keyword: if, else, for, while, do, switch, case, catch, sizeof, alignof, typeid, decltype, static_cast, dynamic_cast, const_cast, reinterpret_cast, noexcept, std, cout, cin, cerr, endl, move, forward, swap, make_pair, make_tuple, make_unique, make_shared, get, begin, end, size, empty, push_back, pop_back, insert, erase, find, count, clear, resize, emplace, emplace_back, sort, transform, accumulate;
+    }
+}
+
+# C++ inline implementation files
+Section [.inl]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
     keyword: int, blue;
     keyword: float, blue;
     keyword: double, blue;
@@ -190,23 +672,100 @@ Section [.hpp]{
     keyword: auto, blue;
     keyword: const, blue;
     keyword: static, blue;
-    keyword: class, cyan;
-    keyword: struct, cyan;
-    keyword: enum, cyan;
-    keyword: namespace, cyan;
+    keyword: constexpr, blue;
+    keyword: inline, blue;
     keyword: template, cyan;
     keyword: typename, cyan;
-    keyword: public, cyan;
-    keyword: private, cyan;
-    keyword: protected, cyan;
-    keyword: virtual, cyan;
+    keyword: class, cyan;
+    keyword: struct, cyan;
     keyword: if, magenta;
     keyword: else, magenta;
     keyword: for, magenta;
     keyword: while, magenta;
     keyword: return, magenta;
     keyword: std, green;
-    keyword: string, green;
-    keyword: vector, green;
-    keyword: map, green;
+    keyword: true, orange;
+    keyword: false, orange;
+}
+
+# C++ module interface
+Section [.ixx]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    keyword: module, cyan;
+    keyword: import, cyan;
+    keyword: export, cyan;
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: bool, blue;
+    keyword: void, blue;
+    keyword: auto, blue;
+    keyword: class, cyan;
+    keyword: struct, cyan;
+    keyword: namespace, cyan;
+    keyword: template, cyan;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: return, magenta;
+    keyword: std, green;
+    keyword: true, orange;
+    keyword: false, orange;
+}
+
+# CUDA C++ files
+Section [.cu]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: char, blue;
+    keyword: bool, blue;
+    keyword: void, blue;
+    keyword: auto, blue;
+    keyword: const, blue;
+    keyword: static, blue;
+    keyword: __global__, red;
+    keyword: __device__, red;
+    keyword: __host__, red;
+    keyword: __shared__, red;
+    keyword: __constant__, red;
+    keyword: dim3, blue;
+    keyword: threadIdx, cyan;
+    keyword: blockIdx, cyan;
+    keyword: blockDim, cyan;
+    keyword: gridDim, cyan;
+    keyword: cudaMalloc, green;
+    keyword: cudaFree, green;
+    keyword: cudaMemcpy, green;
+    keyword: cudaDeviceSynchronize, green;
+    keyword: if, magenta;
+    keyword: else, magenta;
+    keyword: for, magenta;
+    keyword: while, magenta;
+    keyword: return, magenta;
+    keyword: true, orange;
+    keyword: false, orange;
+}
+
+# CUDA header files
+Section [.cuh]{
+    comments: //,grey;
+    multiline_comment: /*,*/,grey;
+    keyword: int, blue;
+    keyword: float, blue;
+    keyword: double, blue;
+    keyword: void, blue;
+    keyword: __global__, red;
+    keyword: __device__, red;
+    keyword: __host__, red;
+    keyword: __shared__, red;
+    keyword: dim3, blue;
+    keyword: if, magenta;
+    keyword: for, magenta;
+    keyword: return, magenta;
 }

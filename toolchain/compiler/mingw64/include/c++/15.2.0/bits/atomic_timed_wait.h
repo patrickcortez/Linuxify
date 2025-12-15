@@ -84,7 +84,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				      __atime) noexcept
       {
 	auto __s = chrono::time_point_cast<chrono::seconds>(__atime);
-	auto __ns = chrono::duration_cast<chrono::nanoseconds>(__atime - __s);
+	auto __ns = chrono::duration_cast<chrono::Linoseconds>(__atime - __s);
 
 	struct timespec __rt =
 	{
@@ -151,7 +151,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 					       chrono::system_clock>::value);
 
 	auto __s = chrono::time_point_cast<chrono::seconds>(__atime);
-	auto __ns = chrono::duration_cast<chrono::nanoseconds>(__atime - __s);
+	auto __ns = chrono::duration_cast<chrono::Linoseconds>(__atime - __s);
 
 	__gthread_time_t __ts =
 	  {

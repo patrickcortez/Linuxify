@@ -151,8 +151,10 @@ const COLORREF FOLDER_COLOR = RGB(255, 200, 80);
 const COLORREF FILE_COLOR = RGB(100, 180, 255);
 const COLORREF HOVER_COLOR = RGB(50, 50, 50);
 
+const int PREVIEW_WIDTH = 350;
+
 HWND g_hwnd = NULL;
-HFONT g_hFont = NULL, g_hFontSmall = NULL;
+HFONT g_hFont = NULL, g_hFontSmall = NULL, g_hFontCode = NULL;
 bool g_mounted = false;
 std::string g_imagePath;
 Superblock g_superblock;
@@ -167,6 +169,7 @@ std::vector<LinkEntry> g_currentLinks;
 int g_selectedIndex = -1;
 int g_hoverIndex = -1;
 int g_scrollY = 0;
+int g_previewScrollY = 0;
 std::stack<uint32_t> g_history;
 std::string g_currentPath = "/";
 
@@ -203,6 +206,19 @@ std::vector<LinkEntry> readLinks(const GraphNode& node) {
         }
     }
     return links;
+}
+
+std::string readFileContent(const GraphNode& node) {
+    std::string content;
+    size_t totalRead = 0;
+    for (uint32_t i = 0; i < node.dataBlockCount && i < DATA_BLOCKS_COUNT; i++) {
+        if (totalRead >= node.size) break;
+        auto block = readBlock(node.dataBlocks[i]);
+        size_t toRead = std::min((size_t)g_superblock.blockSize, (size_t)node.size - totalRead);
+        content.append(reinterpret_cast<char*>(block.data()), toRead);
+        totalRead += toRead;
+    }
+    return content;
 }
 
 bool openNodeFile(const std::string& path, const std::string& password = "");
@@ -264,7 +280,8 @@ void drawFileIcon(HDC hdc, int x, int y, int size, bool selected) {
 
 int getItemAtPoint(int x, int y, RECT& clientRect) {
     if (y < TOOLBAR_HEIGHT) return -1;
-    int contentWidth = clientRect.right;
+    int contentWidth = clientRect.right - PREVIEW_WIDTH;
+    if (x > contentWidth) return -1;
     int cols = std::max(1, (contentWidth - ICON_SPACING) / (ITEM_WIDTH + ICON_SPACING));
     int ix = (x - ICON_SPACING) / (ITEM_WIDTH + ICON_SPACING);
     int iy = (y - TOOLBAR_HEIGHT + g_scrollY - ICON_SPACING) / (ITEM_HEIGHT + ICON_SPACING);
@@ -309,7 +326,7 @@ void PaintWindow(HWND hwnd, HDC hdc) {
             TextOutA(hdcMem, 12, 10, "<", 1);
         }
         
-        int contentWidth = rc.right;
+        int contentWidth = rc.right - PREVIEW_WIDTH;
         int cols = std::max(1, (contentWidth - ICON_SPACING) / (ITEM_WIDTH + ICON_SPACING));
         int startX = ICON_SPACING;
         int startY = TOOLBAR_HEIGHT + ICON_SPACING - g_scrollY;
@@ -351,8 +368,59 @@ void PaintWindow(HWND hwnd, HDC hdc) {
         if (g_currentLinks.empty()) {
             SetTextColor(hdcMem, RGB(100, 100, 100));
             SelectObject(hdcMem, g_hFont);
-            RECT rcEmpty = {0, TOOLBAR_HEIGHT, rc.right, rc.bottom};
+            RECT rcEmpty = {0, TOOLBAR_HEIGHT, contentWidth, rc.bottom};
             DrawTextA(hdcMem, "This node is empty", -1, &rcEmpty, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        // --- Preview Pane ---
+        int previewX = contentWidth;
+        RECT rcPreviewBg = {previewX, TOOLBAR_HEIGHT, rc.right, rc.bottom};
+        HBRUSH hPreviewBg = CreateSolidBrush(RGB(25, 25, 25));
+        FillRect(hdcMem, &rcPreviewBg, hPreviewBg);
+        DeleteObject(hPreviewBg);
+
+        HPEN hSepPen = CreatePen(PS_SOLID, 1, RGB(60, 60, 60));
+        SelectObject(hdcMem, hSepPen);
+        MoveToEx(hdcMem, previewX, TOOLBAR_HEIGHT, NULL);
+        LineTo(hdcMem, previewX, rc.bottom);
+        DeleteObject(hSepPen);
+
+        if (g_selectedIndex >= 0 && g_selectedIndex < (int)g_currentLinks.size()) {
+            const LinkEntry& link = g_currentLinks[g_selectedIndex];
+            GraphNode& node = g_nodes[link.targetNodeId];
+            bool isFolder = (node.edgeCount > 0);
+
+            RECT rcHeader = {previewX + 10, TOOLBAR_HEIGHT + 10, rc.right - 10, TOOLBAR_HEIGHT + 40};
+            SetTextColor(hdcMem, RGB(255, 255, 255));
+            SelectObject(hdcMem, g_hFont);
+            DrawTextA(hdcMem, link.name, -1, &rcHeader, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            RECT rcInfo = {previewX + 10, TOOLBAR_HEIGHT + 40, rc.right - 10, TOOLBAR_HEIGHT + 100};
+            SetTextColor(hdcMem, RGB(150, 150, 150));
+            SelectObject(hdcMem, g_hFontSmall);
+            std::string info = isFolder ? "Folder" : "File size: " + std::to_string(node.size) + " bytes";
+            DrawTextA(hdcMem, info.c_str(), -1, &rcInfo, DT_LEFT | DT_WORDBREAK);
+
+            if (!isFolder && node.size > 0) {
+                 SelectObject(hdcMem, g_hFontCode);
+                 SetTextColor(hdcMem, RGB(200, 200, 200));
+                 std::string content = readFileContent(node);
+                 RECT rcContent = {previewX + 15, TOOLBAR_HEIGHT + 70 - g_previewScrollY, rc.right - 15, rc.bottom - 10};
+                 
+                 // Clip to preview area
+                 HRGN hRgn = CreateRectRgn(previewX, TOOLBAR_HEIGHT + 70, rc.right, rc.bottom);
+                 SelectClipRgn(hdcMem, hRgn);
+                 
+                 DrawTextA(hdcMem, content.c_str(), -1, &rcContent, DT_LEFT | DT_NOPREFIX | DT_EXPANDTABS);
+                 
+                 SelectClipRgn(hdcMem, NULL);
+                 DeleteObject(hRgn);
+            }
+        } else {
+             RECT rcNoSel = {previewX, TOOLBAR_HEIGHT, rc.right, rc.bottom};
+             SetTextColor(hdcMem, RGB(80, 80, 80));
+             SelectObject(hdcMem, g_hFont);
+             DrawTextA(hdcMem, "Select an item to preview", -1, &rcNoSel, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
     
@@ -441,7 +509,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE:
         g_hwnd = hwnd;
         g_hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI");
-        g_hFontSmall = CreateFontA(12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI");
+        g_hFontSmall = CreateFontA(13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI");
+        g_hFontCode = CreateFontA(14, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Consolas");
         DragAcceptFiles(hwnd, TRUE);
         return 0;
     case WM_DROPFILES: {
@@ -457,6 +526,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         PaintWindow(hwnd, hdc);
         EndPaint(hwnd, &ps);
         } return 0;
+    case WM_SIZE:
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
     case WM_MOUSEMOVE:
         if (g_mounted) {
             RECT rc; GetClientRect(hwnd, &rc);
@@ -473,7 +545,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             } else {
                 RECT rc; GetClientRect(hwnd, &rc);
                 int idx = getItemAtPoint(x, y, rc);
-                if (idx >= 0) { g_selectedIndex = idx; InvalidateRect(hwnd, NULL, FALSE); }
+                if (idx >= 0) { 
+                    g_selectedIndex = idx; 
+                    g_previewScrollY = 0; // Reset preview scroll
+                    InvalidateRect(hwnd, NULL, FALSE); 
+                }
             }
         }
         return 0;
@@ -486,8 +562,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_MOUSEWHEEL:
         if (g_mounted) {
-            g_scrollY -= GET_WHEEL_DELTA_WPARAM(wParam) / 2;
-            if (g_scrollY < 0) g_scrollY = 0;
+            RECT rc; GetClientRect(hwnd, &rc);
+            POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+            int contentWidth = rc.right - PREVIEW_WIDTH;
+            
+            if (pt.x > contentWidth) {
+                // Preview scroll
+                g_previewScrollY -= GET_WHEEL_DELTA_WPARAM(wParam) / 2;
+                if (g_previewScrollY < 0) g_previewScrollY = 0;
+            } else {
+                // Main grid scroll
+                g_scrollY -= GET_WHEEL_DELTA_WPARAM(wParam) / 2;
+                if (g_scrollY < 0) g_scrollY = 0;
+            }
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
@@ -506,6 +593,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         closeNodeFile();
         if (g_hFont) DeleteObject(g_hFont);
         if (g_hFontSmall) DeleteObject(g_hFontSmall);
+        if (g_hFontCode) DeleteObject(g_hFontCode);
         PostQuitMessage(0);
         return 0;
     }

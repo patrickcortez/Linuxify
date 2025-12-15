@@ -39,7 +39,7 @@ Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupD
 [Files]
 ; Main executables
 Source: "{#SourcePath}\linuxify.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\nano.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\lino.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Assets (icons)
 Source: "{#SourcePath}\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -54,7 +54,7 @@ Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recu
 ; Bundled C++ Toolchain (MinGW-w64)
 Source: "{#SourcePath}\toolchain\*"; DestDir: "{app}\toolchain"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Nano syntax highlighting plugins
+; Lino syntax highlighting plugins
 Source: "{#SourcePath}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]

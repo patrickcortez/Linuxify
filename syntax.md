@@ -255,7 +255,7 @@ When running scripts with `#!default`, ALL Linuxify shell commands are available
 
 ```bash
 ls, cat, mkdir, rm, mv, cp, touch, chmod, chown, head, tail, grep, find,
-wc, sort, uniq, diff, tar, nano, whoami, hostname, date, uptime, df, ps,
+wc, sort, uniq, diff, tar, Lino, whoami, hostname, date, uptime, df, ps,
 kill, jobs, bg, fg, history, alias, unalias, source, man, clear, wget,
 curl, ssh, scp, ping, netstat, ifconfig, setup, registry, sudo, ...
 ```

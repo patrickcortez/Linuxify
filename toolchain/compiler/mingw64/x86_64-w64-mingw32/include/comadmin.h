@@ -258,7 +258,7 @@ typedef enum COMAdminAuthenticationLevelOptions {
     COMAdminAuthenticationPrivacy = 6
 } COMAdminAuthenticationLevelOptions;
 typedef enum COMAdminImpersonationLevelOptions {
-    COMAdminImpersonationAnonymous = 1,
+    COMAdminImpersonatioLinonymous = 1,
     COMAdminImpersonationIdentify = 2,
     COMAdminImpersonationImpersonate = 3,
     COMAdminImpersonationDelegate = 4

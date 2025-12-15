@@ -883,13 +883,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 # define _GLIBCXX_CHRONO_INT64_T __INT64_TYPE__
 #else
     static_assert(std::numeric_limits<unsigned long long>::digits >= 64,
-	"Representation type for nanoseconds must have at least 64 bits");
+	"Representation type for Linoseconds must have at least 64 bits");
 # define _GLIBCXX_CHRONO_INT64_T long long
 #endif
     /// @endcond
 
-    /// nanoseconds
-    using nanoseconds	= duration<_GLIBCXX_CHRONO_INT64_T, nano>;
+    /// Linoseconds
+    using Linoseconds	= duration<_GLIBCXX_CHRONO_INT64_T, Lino>;
 
     /// microseconds
     using microseconds	= duration<_GLIBCXX_CHRONO_INT64_T, micro>;
@@ -1203,9 +1203,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if _GLIBCXX_HOSTED
     // Clocks.
 
-    // Why nanosecond resolution as the default?
+    // Why Linosecond resolution as the default?
     // Why have std::system_clock always count in the highest
-    // resolution (ie nanoseconds), even if on some OSes the low 3
+    // resolution (ie Linoseconds), even if on some OSes the low 3
     // or 9 decimal digits will be always zero? This allows later
     // implementations to change the system_clock::now()
     // implementation any time to provide better resolution without
@@ -1229,7 +1229,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
     */
     struct system_clock
     {
-      typedef chrono::nanoseconds				duration;
+      typedef chrono::Linoseconds				duration;
       typedef duration::rep					rep;
       typedef duration::period					period;
       typedef chrono::time_point<system_clock, duration> 	time_point;
@@ -1271,7 +1271,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
     */
     struct steady_clock
     {
-      typedef chrono::nanoseconds				duration;
+      typedef chrono::Linoseconds				duration;
       typedef duration::rep					rep;
       typedef duration::period					period;
       typedef chrono::time_point<steady_clock, duration>	time_point;
@@ -1287,7 +1287,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
      *  @brief Highest-resolution clock
      *
      *  This is the clock "with the shortest tick period." Alias to
-     *  std::system_clock until higher-than-nanosecond definitions
+     *  std::system_clock until higher-than-Linosecond definitions
      *  become feasible.
      *  @ingroup chrono
     */
@@ -1335,7 +1335,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
    *
    * These suffixes can be used to create `chrono::duration` values with
    * tick periods of hours, minutes, seconds, milliseconds, microseconds
-   * or nanoseconds. For example, `std::chrono::seconds(5)` can be written
+   * or Linoseconds. For example, `std::chrono::seconds(5)` can be written
    * as `5s` after making the suffix visible in the current scope.
    * The suffixes can be made visible by a using-directive or
    * using-declaration such as:
@@ -1429,16 +1429,16 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
       operator""us()
       { return __check_overflow<chrono::microseconds, _Digits...>(); }
 
-    /// Literal suffix for durations representing non-integer nanoseconds
-    constexpr chrono::duration<long double, nano>
+    /// Literal suffix for durations representing non-integer Linoseconds
+    constexpr chrono::duration<long double, Lino>
     operator""ns(long double __nsecs)
-    { return chrono::duration<long double, nano>{__nsecs}; }
+    { return chrono::duration<long double, Lino>{__nsecs}; }
 
-    /// Literal suffix for durations of type `std::chrono::nanoseconds`
+    /// Literal suffix for durations of type `std::chrono::Linoseconds`
     template <char... _Digits>
-      constexpr chrono::nanoseconds
+      constexpr chrono::Linoseconds
       operator""ns()
-      { return __check_overflow<chrono::nanoseconds, _Digits...>(); }
+      { return __check_overflow<chrono::Linoseconds, _Digits...>(); }
 
 #pragma GCC diagnostic pop
     /// @}
@@ -1456,7 +1456,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
   {
     struct __file_clock
     {
-      using duration                  = chrono::nanoseconds;
+      using duration                  = chrono::Linoseconds;
       using rep                       = duration::rep;
       using period                    = duration::period;
       using time_point                = chrono::time_point<__file_clock>;
@@ -1485,7 +1485,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
       using __sys_clock = chrono::system_clock;
 
       // This clock's (unspecified) epoch is 2174-01-01 00:00:00 UTC.
-      // A signed 64-bit duration with nanosecond resolution gives roughly
+      // A signed 64-bit duration with Linosecond resolution gives roughly
       // +/- 292 years, which covers the 1901-2446 date range for ext4.
       static constexpr chrono::seconds _S_epoch_diff{6437664000};
 

@@ -27,7 +27,7 @@ def coding_checker(self, coder):
         self.assertEqual(coder(input), (expect, len(input)))
     return check
 
-# On small versions of Windows like Windows IoT or Windows Nano Server not all codepages are present
+# On small versions of Windows like Windows IoT or Windows Lino Server not all codepages are present
 def is_code_page_present(cp):
     from ctypes import POINTER, WINFUNCTYPE, WinDLL
     from ctypes.wintypes import BOOL, UINT, BYTE, WCHAR, UINT, DWORD

@@ -4,7 +4,7 @@ cd
 cd Test
 ls
 touch main.cpp
-nano main.cpp
+Lino main.cpp
 cat main.cpp
 g++ main.cpp -o main
 ls
@@ -225,7 +225,7 @@ lvc show 1.0
 lvc
 lvc versions
 ls
-nano folder/news.txt
+Lino folder/news.txt
 lvc status
 lvc add -A
 lvc commit -v 1.1
@@ -352,10 +352,10 @@ cd test
 cd test
 ls
 touch pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 which python
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 exit
 exit
 which lish
@@ -363,9 +363,9 @@ lish
 clear
 cd test
 ls
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
 registry show
 registry list
@@ -379,7 +379,7 @@ lish
 exit
 cd test
 ls
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
 lish
 lish
@@ -400,17 +400,17 @@ exit
 help
 cd test
 ls
-nano pythonic
-nano pythonic.sh
+Lino pythonic
+Lino pythonic.sh
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 ./pythonic.sh
-nano pythonic.sh
+Lino pythonic.sh
 lish
 clear
 help
@@ -431,7 +431,7 @@ cd test
 ls
 rm main.exe
 cc main.cpp -o main
-nano main.cpp
+Lino main.cpp
 help
 lvc
 lin
@@ -489,7 +489,7 @@ node mount test
 help
 cd test
 ls
-nano main.cpp
+Lino main.cpp
 cat main.cpp
 help
 exit
@@ -535,13 +535,13 @@ lvc init
 lvc status
 touch file.txt
 lvc status
-nano file.txt
+Lino file.txt
 ls
 lvc init
 lvc status
 lvc add -A
 lvc status
-nano file.txt
+Lino file.txt
 lvc status
 lvc add -A
 lvc commit -v 1.0
@@ -703,13 +703,13 @@ hello
 help
 help
 cd
-nano params
+Lino params
 help
 dasdasd
 help
 d
 help
-nano
+Lino
 help
 help
 ddddddadsdfds
@@ -726,20 +726,20 @@ help
 help
 cd
 clear
-nano
+Lino
 help
 help
 help
 help
-nano
+Lino
 cd
-nano
+Lino
 ls
 cd test
 ls
-nano main.pp
+Lino main.pp
 ls
-nano main.cpp
+Lino main.cpp
 cd
 help
 lsof
@@ -761,14 +761,14 @@ claude
 cd Test
 cd test
 ./pythonic.sh
-nano test.sh
+Lino test.sh
 ./test.sh
 ./test.sh
-nano
+Lino
 ./test.sh
-nano test.sh
+Lino test.sh
 ./test.sh
-nano test.sh
+Lino test.sh
 ./test.sh
 lish
 lish --help
@@ -779,19 +779,19 @@ claude
 cd test
 ls
 ./test.sh
-nano sample.sh
+Lino sample.sh
 cd
 cd test
-nano tesh.sh
+Lino tesh.sh
 ls
-nano test.sh
+Lino test.sh
 ./test.sh
-nano test.sh
+Lino test.sh
 cd test
 ./test.sh
-nano test.sh
+Lino test.sh
 ./test.sh
-nano test.sh
+Lino test.sh
 registry add proj1 "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\project.sh"
 proj1
 proj1 status
@@ -815,3 +815,81 @@ nexplore
 nexplore
 setup
 setup windux
+linmake
+ls
+which gcc
+++
+which cc
+++
+linmake init
+ls
+LinMake.lin
+Lino LinMake.lin
+Lino LMake
+Lino LMake
+ls
+help
+cd test
+ls
+chown
+net user Cortez 1125-- /add
+sudo exit
+ls
+chown Cortez robots.txt
+ls -la
+chmod
+chmod -w robots.txt
+nexplore
+node
+node mount main
+nexplore
+cd test
+ls
+Lino sample.py
+./sample.py
+Lino sample.py
+./sample.py
+Lino sample.py
+python sample.py
+Lino main.cpp
+ls
+cat main.cpp
+function
+if
+"function"
+"if"
+windux
+terminal
+Lino
+registry refresh
+nvim
+Lino
+Lino
+lino test.test
+lino test.test
+exit
+nano
+lino
+lino
+windux
+nano
+lino
+windux
+lino
+lino
+lino
+windux
+lino
+windux
+lino
+exit
+nano
+lino
+lino
+lino newfile.txt
+lino
+lino
+lino
+lino
+lino
+lino
