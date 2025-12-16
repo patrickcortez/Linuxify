@@ -25,6 +25,7 @@
 #include <thread>
 #include <chrono>
 #include <list>
+#include <set>
 
 #include "registry.hpp"
 #include "process_manager.hpp"
@@ -46,6 +47,9 @@ private:
     std::string currentDir;
     std::vector<std::string> commandHistory;
     std::map<std::string, std::string> sessionEnv;
+    std::map<std::string, std::vector<std::string>> sessionArrayEnv;
+    std::set<std::string> persistentVars;
+    std::set<std::string> persistentArrayVars;
     Bash::Interpreter interpreter;
     int lastExitCode = 0;
 
@@ -1348,7 +1352,181 @@ private:
         }
     }
 
-    // history - show command history
+    std::string getVarFilePath() {
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path exeDir = fs::path(exePath).parent_path();
+        fs::path linuxdbDir = exeDir / "linuxdb";
+        
+        if (!fs::exists(linuxdbDir)) {
+            fs::create_directories(linuxdbDir);
+        }
+        
+        return (linuxdbDir / "var.lin").string();
+    }
+
+    void loadPersistentVars() {
+        std::ifstream file(getVarFilePath());
+        if (!file) return;
+        
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            
+            size_t eqPos = line.find('=');
+            if (eqPos == std::string::npos) continue;
+            
+            std::string name = line.substr(0, eqPos);
+            std::string value = line.substr(eqPos + 1);
+            
+            name.erase(0, name.find_first_not_of(" \t"));
+            name.erase(name.find_last_not_of(" \t\r\n") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t\r\n") + 1);
+            
+            if (name.size() >= 2 && name.substr(name.size() - 2) == "[]") {
+                std::string arrName = name.substr(0, name.size() - 2);
+                std::vector<std::string> arr;
+                
+                if (value.size() >= 2 && value[0] == '{' && value[value.size() - 1] == '}') {
+                    std::string inner = value.substr(1, value.size() - 2);
+                    std::stringstream ss(inner);
+                    std::string item;
+                    while (std::getline(ss, item, ',')) {
+                        item.erase(0, item.find_first_not_of(" \t"));
+                        item.erase(item.find_last_not_of(" \t") + 1);
+                        arr.push_back(item);
+                    }
+                }
+                
+                sessionArrayEnv[arrName] = arr;
+                persistentArrayVars.insert(arrName);
+            } else {
+                sessionEnv[name] = value;
+                persistentVars.insert(name);
+                SetEnvironmentVariableA(name.c_str(), value.c_str());
+            }
+        }
+    }
+
+    void savePersistentVars() {
+        std::ofstream file(getVarFilePath());
+        if (!file) return;
+        
+        file << "# Linuxify Persistent Variables\n";
+        file << "# Format: VAR=value or ARR[]={val1,val2,val3}\n\n";
+        
+        for (const auto& varName : persistentVars) {
+            auto it = sessionEnv.find(varName);
+            if (it != sessionEnv.end()) {
+                file << it->first << "=" << it->second << "\n";
+            }
+        }
+        
+        for (const auto& arrName : persistentArrayVars) {
+            auto it = sessionArrayEnv.find(arrName);
+            if (it != sessionArrayEnv.end()) {
+                file << it->first << "[]={";
+                for (size_t i = 0; i < it->second.size(); ++i) {
+                    if (i > 0) file << ",";
+                    file << it->second[i];
+                }
+                file << "}\n";
+            }
+        }
+    }
+
+    std::string expandVariables(const std::string& input) {
+        std::string text = input;
+        size_t pos = 0;
+        
+        while ((pos = text.find('$', pos)) != std::string::npos) {
+            size_t end = pos + 1;
+            
+            if (end >= text.length()) break;
+            
+            if (text[end] == '(') {
+                size_t close = text.find(')', end + 1);
+                if (close != std::string::npos) {
+                    std::string inner = text.substr(end + 1, close - end - 1);
+                    std::string value;
+                    
+                    size_t bracket = inner.find('[');
+                    if (bracket != std::string::npos && inner.back() == ']') {
+                        std::string arrName = inner.substr(0, bracket);
+                        std::string idxStr = inner.substr(bracket + 1, inner.size() - bracket - 2);
+                        auto it = sessionArrayEnv.find(arrName);
+                        if (it != sessionArrayEnv.end()) {
+                            try {
+                                size_t idx = std::stoul(idxStr);
+                                if (idx < it->second.size()) {
+                                    value = it->second[idx];
+                                }
+                            } catch (...) {}
+                        }
+                    } else {
+                        auto it = sessionEnv.find(inner);
+                        if (it != sessionEnv.end()) {
+                            value = it->second;
+                        } else {
+                            char* envVal = nullptr;
+                            size_t len;
+                            _dupenv_s(&envVal, &len, inner.c_str());
+                            if (envVal) { value = envVal; free(envVal); }
+                        }
+                    }
+                    text = text.substr(0, pos) + value + text.substr(close + 1);
+                    continue;
+                }
+            } else if (text[end] == '{') {
+                size_t close = text.find('}', end + 1);
+                if (close != std::string::npos) {
+                    std::string varName = text.substr(end + 1, close - end - 1);
+                    std::string value;
+                    auto it = sessionEnv.find(varName);
+                    if (it != sessionEnv.end()) {
+                        value = it->second;
+                    } else {
+                        char* envVal = nullptr;
+                        size_t len;
+                        _dupenv_s(&envVal, &len, varName.c_str());
+                        if (envVal) { value = envVal; free(envVal); }
+                    }
+                    text = text.substr(0, pos) + value + text.substr(close + 1);
+                    continue;
+                }
+            } else if (isalnum(text[end]) || text[end] == '_') {
+                while (end < text.length() && (isalnum(text[end]) || text[end] == '_')) {
+                    end++;
+                }
+                std::string varName = text.substr(pos + 1, end - pos - 1);
+                std::string value;
+                auto it = sessionEnv.find(varName);
+                if (it != sessionEnv.end()) {
+                    value = it->second;
+                } else {
+                    char* envVal = nullptr;
+                    size_t len;
+                    _dupenv_s(&envVal, &len, varName.c_str());
+                    if (envVal) { value = envVal; free(envVal); }
+                }
+                text = text.substr(0, pos) + value + text.substr(end);
+                continue;
+            }
+            pos++;
+        }
+        
+        return text;
+    }
+
+    std::vector<std::string> expandTokens(const std::vector<std::string>& tokens) {
+        std::vector<std::string> expanded;
+        for (const auto& token : tokens) {
+            expanded.push_back(expandVariables(token));
+        }
+        return expanded;
+    }
+
     void cmdHistory(const std::vector<std::string>& args) {
         bool showNumbers = true;
         int limit = -1;  // -1 means show all
@@ -1468,7 +1646,40 @@ private:
             while ((pos = text.find('$', pos)) != std::string::npos) {
                 size_t end = pos + 1;
                 
-                if (end < text.length() && text[end] == '{') {
+                if (end < text.length() && text[end] == '(') {
+                    size_t close = text.find(')', end + 1);
+                    if (close != std::string::npos) {
+                        std::string inner = text.substr(end + 1, close - end - 1);
+                        std::string value;
+                        
+                        size_t bracket = inner.find('[');
+                        if (bracket != std::string::npos && inner.back() == ']') {
+                            std::string arrName = inner.substr(0, bracket);
+                            std::string idxStr = inner.substr(bracket + 1, inner.size() - bracket - 2);
+                            auto it = sessionArrayEnv.find(arrName);
+                            if (it != sessionArrayEnv.end()) {
+                                try {
+                                    size_t idx = std::stoul(idxStr);
+                                    if (idx < it->second.size()) {
+                                        value = it->second[idx];
+                                    }
+                                } catch (...) {}
+                            }
+                        } else {
+                            auto it = sessionEnv.find(inner);
+                            if (it != sessionEnv.end()) {
+                                value = it->second;
+                            } else {
+                                char* envVal = nullptr;
+                                size_t len;
+                                _dupenv_s(&envVal, &len, inner.c_str());
+                                if (envVal) { value = envVal; free(envVal); }
+                            }
+                        }
+                        text = text.substr(0, pos) + value + text.substr(close + 1);
+                        continue;
+                    }
+                } else if (end < text.length() && text[end] == '{') {
                     size_t close = text.find('}', end + 1);
                     if (close != std::string::npos) {
                         std::string varName = text.substr(end + 1, close - end - 1);
@@ -1566,38 +1777,91 @@ private:
         }
     }
 
-    // export - set environment variable
     void cmdExport(const std::vector<std::string>& args) {
         if (args.size() < 2) {
-            // Show exported session variables
             for (const auto& pair : sessionEnv) {
-                std::cout << "export " << pair.first << "=\"" << pair.second << "\"" << std::endl;
+                bool isPersistent = persistentVars.find(pair.first) != persistentVars.end();
+                std::cout << "export " << (isPersistent ? "-p " : "") << pair.first << "=\"" << pair.second << "\"" << std::endl;
+            }
+            for (const auto& pair : sessionArrayEnv) {
+                bool isPersistent = persistentArrayVars.find(pair.first) != persistentArrayVars.end();
+                std::cout << "export " << (isPersistent ? "-p " : "") << "-arr " << pair.first << "={";
+                for (size_t i = 0; i < pair.second.size(); ++i) {
+                    if (i > 0) std::cout << ",";
+                    std::cout << pair.second[i];
+                }
+                std::cout << "}" << std::endl;
             }
             return;
         }
         
+        bool persistent = false;
+        bool isArray = false;
+        
         for (size_t i = 1; i < args.size(); ++i) {
             std::string arg = args[i];
+            
+            if (arg == "-p") {
+                persistent = true;
+                continue;
+            }
+            
+            if (arg == "-arr") {
+                isArray = true;
+                continue;
+            }
+            
             size_t eqPos = arg.find('=');
             
-            if (eqPos != std::string::npos) {
-                std::string name = arg.substr(0, eqPos);
-                std::string value = arg.substr(eqPos + 1);
+            if (eqPos == std::string::npos) {
+                printError("export: invalid format. Use: export [-p] [-arr] NAME=value");
+                continue;
+            }
+            
+            std::string name = arg.substr(0, eqPos);
+            std::string value = arg.substr(eqPos + 1);
+            
+            if (value.length() >= 2 && 
+                ((value.front() == '"' && value.back() == '"') ||
+                 (value.front() == '\'' && value.back() == '\''))) {
+                value = value.substr(1, value.length() - 2);
+            }
+            
+            if (isArray) {
+                std::vector<std::string> arr;
                 
-                // Remove quotes if present
-                if (value.length() >= 2 && 
-                    ((value.front() == '"' && value.back() == '"') ||
-                     (value.front() == '\'' && value.back() == '\''))) {
-                    value = value.substr(1, value.length() - 2);
+                if (value.size() >= 2 && value[0] == '{' && value[value.size() - 1] == '}') {
+                    std::string inner = value.substr(1, value.size() - 2);
+                    std::stringstream ss(inner);
+                    std::string item;
+                    while (std::getline(ss, item, ',')) {
+                        item.erase(0, item.find_first_not_of(" \t"));
+                        item.erase(item.find_last_not_of(" \t") + 1);
+                        arr.push_back(item);
+                    }
+                } else {
+                    printError("export: array format must be VARNAME={val1,val2,...}");
+                    isArray = false;
+                    continue;
                 }
                 
-                // Set in session and system environment
+                sessionArrayEnv[name] = arr;
+                if (persistent) {
+                    persistentArrayVars.insert(name);
+                    savePersistentVars();
+                }
+                printSuccess("Exported array: " + name + " (" + std::to_string(arr.size()) + " elements)" + (persistent ? " [persistent]" : ""));
+            } else {
                 sessionEnv[name] = value;
                 SetEnvironmentVariableA(name.c_str(), value.c_str());
-                printSuccess("Exported: " + name + "=" + value);
-            } else {
-                printError("export: invalid format. Use: export NAME=value");
+                if (persistent) {
+                    persistentVars.insert(name);
+                    savePersistentVars();
+                }
+                printSuccess("Exported: " + name + "=" + value + (persistent ? " [persistent]" : ""));
             }
+            
+            isArray = false;
         }
     }
 
@@ -5204,7 +5468,12 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  export";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "        Set environment variable (NAME=value)\n";
+        std::cout << "        Set env var ([-p] persist, [-arr] array)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  var";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Manage persistent variables (list, mod, insert, purge, del)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  which";
@@ -5991,49 +6260,50 @@ private:
             return;
         }
 
-        const std::string& cmd = tokens[0];
+        std::vector<std::string> expandedTokens = expandTokens(tokens);
+        const std::string& cmd = expandedTokens[0];
         lastExitCode = 0;
 
         try {
         if (cmd == "pwd") {
-            cmdPwd(tokens);
+            cmdPwd(expandedTokens);
         } else if (cmd == "cd") {
-            cmdCd(tokens);
+            cmdCd(expandedTokens);
         } else if (cmd == "ls" || cmd == "dir") {
-            cmdLs(tokens);
+            cmdLs(expandedTokens);
         } else if (cmd == "mkdir") {
-            cmdMkdir(tokens);
+            cmdMkdir(expandedTokens);
         } else if (cmd == "rm" || cmd == "rmdir") {
-            cmdRm(tokens);
+            cmdRm(expandedTokens);
         } else if (cmd == "mv") {
-            cmdMv(tokens);
+            cmdMv(expandedTokens);
         } else if (cmd == "cp" || cmd == "copy") {
-            cmdCp(tokens);
+            cmdCp(expandedTokens);
         } else if (cmd == "cat" || cmd == "type") {
-            cmdCat(tokens);
+            cmdCat(expandedTokens);
         } else if (cmd == "touch") {
-            cmdTouch(tokens);
+            cmdTouch(expandedTokens);
         } else if (cmd == "chmod") {
-            cmdChmod(tokens);
+            cmdChmod(expandedTokens);
         } else if (cmd == "chown") {
-            cmdChown(tokens);
+            cmdChown(expandedTokens);
         } else if (cmd == "clear" || cmd == "cls") {
-            cmdClear(tokens);
+            cmdClear(expandedTokens);
         } else if (cmd == "help") {
-            cmdHelp(tokens);
+            cmdHelp(expandedTokens);
         } else if (cmd == "lino") {
             std::string linoCmd = "lino.exe";
-            if (tokens.size() > 1) {
-                linoCmd += " \"" + resolvePath(tokens[1]) + "\"";
+            if (expandedTokens.size() > 1) {
+                linoCmd += " \"" + resolvePath(expandedTokens[1]) + "\"";
             }
             runProcess(linoCmd);
         } else if (cmd == "lin") {
-            cmdLin(tokens);
+            cmdLin(expandedTokens);
         } else if (cmd == "setup") {
-            cmdSetup(tokens);
+            cmdSetup(expandedTokens);
         } else if (cmd == "registry") {
             // Registry management commands
-            if (tokens.size() > 1 && tokens[1] == "refresh") {
+            if (expandedTokens.size() > 1 && expandedTokens[1] == "refresh") {
                 HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
                 SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
                 std::cout << "Scanning for installed commands...";
@@ -6042,7 +6312,7 @@ private:
                 int found = g_registry.refreshRegistry();
                 std::cout << " found " << found << " commands.\n";
                 printSuccess("Registry updated! Use 'registry list' to see all commands.");
-            } else if (tokens.size() > 1 && tokens[1] == "list") {
+            } else if (expandedTokens.size() > 1 && expandedTokens[1] == "list") {
                 const auto& commands = g_registry.getAllCommands();
                 HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
                 SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
@@ -6056,94 +6326,105 @@ private:
                     SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
                     std::cout << " -> " << pair.second << "\n";
                 }
-            } else if (tokens.size() > 3 && tokens[1] == "add") {
-                g_registry.addCommand(tokens[2], tokens[3]);
-                printSuccess("Added: " + tokens[2] + " -> " + tokens[3]);
+            } else if (expandedTokens.size() > 3 && expandedTokens[1] == "add") {
+                g_registry.addCommand(expandedTokens[2], expandedTokens[3]);
+                printSuccess("Added: " + expandedTokens[2] + " -> " + expandedTokens[3]);
                 std::cout << "Saved to: " << g_registry.getDbPath() << std::endl;
-            } else if (tokens.size() > 2 && (tokens[1] == "delete" || tokens[1] == "remove" || tokens[1] == "rm")) {
-                g_registry.removeCommand(tokens[2]);
-                printSuccess("Removed: " + tokens[2]);
+            } else if (expandedTokens.size() > 2 && (expandedTokens[1] == "delete" || expandedTokens[1] == "remove" || expandedTokens[1] == "rm")) {
+                g_registry.removeCommand(expandedTokens[2]);
+                printSuccess("Removed: " + expandedTokens[2]);
+            } else if (expandedTokens.size() > 3 && expandedTokens[1] == "switch") {
+                std::string cmdName = expandedTokens[2];
+                std::string newPath = resolvePath(expandedTokens[3]);
+                
+                if (!g_registry.isRegistered(cmdName)) {
+                    printError("registry: command '" + cmdName + "' not found in registry");
+                } else if (!fs::exists(newPath)) {
+                    printError("registry: path '" + newPath + "' does not exist");
+                } else {
+                    g_registry.addCommand(cmdName, newPath);
+                    printSuccess("Switched: " + cmdName + " -> " + newPath);
+                }
             } else {
                 std::cout << "Registry Commands:\n";
-                std::cout << "  registry refresh          Scan system for installed commands\n";
-                std::cout << "  registry list             Show all registered commands\n";
-                std::cout << "  registry add <cmd> <path> Add custom command\n";
-                std::cout << "  registry delete <cmd>     Remove a command\n";
+                std::cout << "  registry refresh              Scan system for installed commands\n";
+                std::cout << "  registry list                 Show all registered commands\n";
+                std::cout << "  registry add <cmd> <path>     Add custom command\n";
+                std::cout << "  registry delete <cmd>         Remove a command\n";
+                std::cout << "  registry switch <cmd> <path>  Change path of existing command\n";
             }
         } else if (cmd == "history") {
-            cmdHistory(tokens);
+            cmdHistory(expandedTokens);
         } else if (cmd == "whoami") {
-            cmdWhoami(tokens);
+            cmdWhoami(expandedTokens);
         } else if (cmd == "echo") {
-            cmdEcho(tokens);
+            cmdEcho(expandedTokens);
         } else if (cmd == "env" || cmd == "printenv") {
-            cmdEnv(tokens);
+            cmdEnv(expandedTokens);
         } else if (cmd == "export") {
-            cmdExport(tokens);
+            cmdExport(expandedTokens);
         } else if (cmd == "which" || cmd == "where") {
-            cmdWhich(tokens);
+            cmdWhich(expandedTokens);
         } else if (cmd == "ps") {
-            cmdPs(tokens);
+            cmdPs(expandedTokens);
         } else if (cmd == "kill") {
-            cmdKill(tokens);
+            cmdKill(expandedTokens);
         } else if (cmd == "top" || cmd == "htop") {
-            cmdTop(tokens);
+            cmdTop(expandedTokens);
         } else if (cmd == "jobs") {
-            cmdJobs(tokens);
+            cmdJobs(expandedTokens);
         } else if (cmd == "fg") {
-            cmdFg(tokens);
+            cmdFg(expandedTokens);
         } else if (cmd == "grep") {
-            cmdGrep(tokens);
+            cmdGrep(expandedTokens);
         } else if (cmd == "head") {
-            cmdHead(tokens);
+            cmdHead(expandedTokens);
         } else if (cmd == "tail") {
-            cmdTail(tokens);
+            cmdTail(expandedTokens);
         } else if (cmd == "wc") {
-            cmdWc(tokens);
+            cmdWc(expandedTokens);
         } else if (cmd == "sort") {
-            cmdSort(tokens);
+            cmdSort(expandedTokens);
         } else if (cmd == "uniq") {
-            cmdUniq(tokens);
+            cmdUniq(expandedTokens);
         } else if (cmd == "find") {
-            cmdFind(tokens);
-        // Text Processing Commands
+            cmdFind(expandedTokens);
         } else if (cmd == "less" || cmd == "more") {
-            cmdLess(tokens);
+            cmdLess(expandedTokens);
         } else if (cmd == "cut") {
-            cmdCut(tokens);
+            cmdCut(expandedTokens);
         } else if (cmd == "tr") {
-            cmdTr(tokens);
+            cmdTr(expandedTokens);
         } else if (cmd == "sed") {
-            cmdSed(tokens);
+            cmdSed(expandedTokens);
         } else if (cmd == "awk") {
-            cmdAwk(tokens);
+            cmdAwk(expandedTokens);
         } else if (cmd == "diff") {
-            cmdDiff(tokens);
+            cmdDiff(expandedTokens);
         } else if (cmd == "tee") {
-            cmdTee(tokens);
+            cmdTee(expandedTokens);
         } else if (cmd == "xargs") {
-            cmdXargs(tokens);
+            cmdXargs(expandedTokens);
         } else if (cmd == "rev") {
-            cmdRev(tokens);
-        // File Operations Commands
+            cmdRev(expandedTokens);
         } else if (cmd == "ln") {
-            cmdLn(tokens);
+            cmdLn(expandedTokens);
         } else if (cmd == "stat") {
-            cmdStat(tokens);
+            cmdStat(expandedTokens);
         } else if (cmd == "file") {
-            cmdFile(tokens);
+            cmdFile(expandedTokens);
         } else if (cmd == "readlink") {
-            cmdReadlink(tokens);
+            cmdReadlink(expandedTokens);
         } else if (cmd == "realpath") {
-            cmdRealpath(tokens);
+            cmdRealpath(expandedTokens);
         } else if (cmd == "basename") {
-            cmdBasename(tokens);
+            cmdBasename(expandedTokens);
         } else if (cmd == "dirname") {
-            cmdDirname(tokens);
+            cmdDirname(expandedTokens);
         } else if (cmd == "tree") {
-            cmdTree(tokens);
+            cmdTree(expandedTokens);
         } else if (cmd == "du") {
-            cmdDu(tokens);
+            cmdDu(expandedTokens);
         } else if (cmd == "lsmem" || cmd == "free") {
             SystemInfo::listMemory();
         } else if (cmd == "lscpu") {
@@ -6159,50 +6440,48 @@ private:
         } else if (cmd == "lsof") {
             SystemInfo::listOpenFiles();
         } else if (cmd == "ip") {
-            Networking::showIP(tokens);
+            Networking::showIP(expandedTokens);
         } else if (cmd == "ping") {
-            Networking::ping(tokens);
+            Networking::ping(expandedTokens);
         } else if (cmd == "traceroute" || cmd == "tracert") {
-            Networking::traceroute(tokens);
+            Networking::traceroute(expandedTokens);
         } else if (cmd == "nslookup") {
-            Networking::nslookup(tokens);
+            Networking::nslookup(expandedTokens);
         } else if (cmd == "dig" || cmd == "host") {
-            Networking::dig(tokens);
-        } else if (cmd == "curl") {
-            Networking::curl(tokens);
+            Networking::dig(expandedTokens);
         } else if (cmd == "wget") {
-            Networking::wget(tokens, currentDir);
+            Networking::wget(expandedTokens, currentDir);
         } else if (cmd == "net") {
-            Networking::netCommand(tokens);
+            Networking::netCommand(expandedTokens);
         } else if (cmd == "netstat") {
-            Networking::netstat(tokens);
+            Networking::netstat(expandedTokens);
         } else if (cmd == "ifconfig" || cmd == "ipconfig") {
-            Networking::ifconfig(tokens);
+            Networking::ifconfig(expandedTokens);
         } else if (cmd == "ss") {
-            Networking::ss(tokens);
+            Networking::ss(expandedTokens);
         } else if (cmd == "hostname") {
-            Networking::hostname(tokens);
+            Networking::hostname(expandedTokens);
         } else if (cmd == "arp") {
-            Networking::arp(tokens);
+            Networking::arp(expandedTokens);
         } else if (cmd == "nc" || cmd == "netcat") {
-            Networking::nc(tokens);
+            Networking::nc(expandedTokens);
         } else if (cmd == "pstree") {
             DWORD pid = 0;
-            if (tokens.size() > 1) { try { pid = std::stoul(tokens[1]); } catch (...) {} }
+            if (expandedTokens.size() > 1) { try { pid = std::stoul(expandedTokens[1]); } catch (...) {} }
             ProcessManager::pstree(pid);
         } else if (cmd == "renice" || cmd == "nice") {
-            if (tokens.size() < 3) {
+            if (expandedTokens.size() < 3) {
                 printError("Usage: renice <priority> -p <pid>");
             } else {
                 int priority = 0;
                 DWORD pid = 0;
-                for (size_t i = 1; i < tokens.size(); i++) {
-                    if (tokens[i] == "-p" && i + 1 < tokens.size()) {
-                        try { pid = std::stoul(tokens[++i]); } catch (...) {}
-                    } else if (tokens[i] == "-n" && i + 1 < tokens.size()) {
-                        try { priority = std::stoi(tokens[++i]); } catch (...) {}
+                for (size_t i = 1; i < expandedTokens.size(); i++) {
+                    if (expandedTokens[i] == "-p" && i + 1 < expandedTokens.size()) {
+                        try { pid = std::stoul(expandedTokens[++i]); } catch (...) {}
+                    } else if (expandedTokens[i] == "-n" && i + 1 < expandedTokens.size()) {
+                        try { priority = std::stoi(expandedTokens[++i]); } catch (...) {}
                     } else {
-                        try { priority = std::stoi(tokens[i]); } catch (...) {}
+                        try { priority = std::stoi(expandedTokens[i]); } catch (...) {}
                     }
                 }
                 if (pid > 0 && ProcessManager::setProcessPriority(pid, priority)) {
@@ -6216,12 +6495,10 @@ private:
                    cmd == "objdump" || cmd == "objcopy" || cmd == "strip" || cmd == "windres" ||
                    cmd == "as" || cmd == "nm" || cmd == "ranlib" || cmd == "size" ||
                    cmd == "strings" || cmd == "addr2line" || cmd == "c++filt") {
-            // Handle bundled toolchain commands
             char exePath[MAX_PATH];
             GetModuleFileNameA(NULL, exePath, MAX_PATH);
             fs::path toolchainBin = fs::path(exePath).parent_path() / "toolchain" / "compiler" / "mingw64" / "bin";
             
-            // Map cc -> gcc, c++ -> g++
             std::string actualCmd = cmd;
             if (cmd == "cc") actualCmd = "gcc";
             else if (cmd == "c++") actualCmd = "g++";
@@ -6230,8 +6507,8 @@ private:
             
             if (fs::exists(cmdPath)) {
                 std::string cmdLine = "\"" + cmdPath.string() + "\"";
-                for (size_t i = 1; i < tokens.size(); i++) {
-                    cmdLine += " \"" + tokens[i] + "\"";
+                for (size_t i = 1; i < expandedTokens.size(); i++) {
+                    cmdLine += " \"" + expandedTokens[i] + "\"";
                 }
                 
                 STARTUPINFOA si;
@@ -6266,8 +6543,7 @@ private:
                 printError("Please reinstall Linuxify or check toolchain installation.");
             }
         } else if (cmd == "sudo") {
-            // Use Windows 11 native sudo
-            if (tokens.size() < 2) {
+            if (expandedTokens.size() < 2) {
                 std::cout << "Usage: sudo <command> [arguments]\n";
                 std::cout << "Run a command with administrator privileges.\n";
                 std::cout << "\nNote: Requires Windows 11 24H2+ with sudo enabled.\n";
@@ -6277,11 +6553,9 @@ private:
                 std::cout << "  sudo netsh wlan show profiles\n";
                 std::cout << "  sudo ln -s source.txt link.txt\n";
             } else {
-                // Check if the command is a Linuxify builtin
-                std::string targetCmd = tokens[1];
+                std::string targetCmd = expandedTokens[1];
                 bool isBuiltin = isBuiltinCommand(targetCmd);
                 
-                // Also check if it's in our cmds folder
                 char exePath[MAX_PATH];
                 GetModuleFileNameA(NULL, exePath, MAX_PATH);
                 fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
@@ -6296,14 +6570,11 @@ private:
                 
                 std::string sudoCmd;
                 if (isBuiltin || isInCmds) {
-                    // For Linuxify commands, wrap with: sudo linuxify.exe -c "command args"
                     sudoCmd = "sudo \"" + std::string(exePath) + "\" -c \"";
-                    for (size_t i = 1; i < tokens.size(); i++) {
+                    for (size_t i = 1; i < expandedTokens.size(); i++) {
                         if (i > 1) sudoCmd += " ";
-                        // Escape quotes in arguments
-                        std::string arg = tokens[i];
+                        std::string arg = expandedTokens[i];
                         if (arg.find(' ') != std::string::npos || arg.find('"') != std::string::npos) {
-                            // Simple escaping for nested quotes
                             sudoCmd += "'" + arg + "'";
                         } else {
                             sudoCmd += arg;
@@ -6311,19 +6582,17 @@ private:
                     }
                     sudoCmd += "\"";
                 } else {
-                    // For system commands, pass directly to Windows sudo
                     sudoCmd = "sudo";
-                    for (size_t i = 1; i < tokens.size(); i++) {
+                    for (size_t i = 1; i < expandedTokens.size(); i++) {
                         sudoCmd += " ";
-                        if (tokens[i].find(' ') != std::string::npos) {
-                            sudoCmd += "\"" + tokens[i] + "\"";
+                        if (expandedTokens[i].find(' ') != std::string::npos) {
+                            sudoCmd += "\"" + expandedTokens[i] + "\"";
                         } else {
-                            sudoCmd += tokens[i];
+                            sudoCmd += expandedTokens[i];
                         }
                     }
                 }
                 
-                // Run the sudo command
                 int result = runProcess(sudoCmd);
                 if (result != 0) {
                     printError("sudo command failed. Make sure sudo is enabled:");
@@ -6331,7 +6600,6 @@ private:
                 }
             }
         } else if (cmd == "crontab") {
-            // Crontab - edit scheduled tasks (communicates with crond daemon via IPC)
             auto sendToCrond = [](const char* command) -> std::string {
                 HANDLE hPipe = CreateFileA(
                     CROND_PIPE_NAME,
@@ -6340,7 +6608,7 @@ private:
                 );
                 
                 if (hPipe == INVALID_HANDLE_VALUE) {
-                    return "";  // Daemon not running
+                    return "";
                 }
                 
                 DWORD bytesWritten;
@@ -6364,7 +6632,7 @@ private:
                 return (fs::path(exePath).parent_path() / "linuxdb" / "crontab").string();
             };
             
-            if (tokens.size() < 2) {
+            if (expandedTokens.size() < 2) {
                 std::cout << "Usage: crontab [-l | -e | -r]\n";
                 std::cout << "  -l    List crontab entries\n";
                 std::cout << "  -e    Edit crontab in lino\n";
@@ -6376,7 +6644,7 @@ private:
                 std::cout << "  @daily C:\\backup\\daily.bat\n";
                 std::cout << "  @reboot echo System started\n";
             } else {
-                std::string arg = tokens[1];
+                std::string arg = expandedTokens[1];
                 std::string crontabPath = getCrontabPath();
                 
                 if (arg == "-l") {
@@ -6456,11 +6724,10 @@ private:
                 }
             }
         } else if (cmd == "uninstall") {
-            cmdUninstall(tokens);
+            cmdUninstall(expandedTokens);
         } else if (cmd == "exit" || cmd == "quit") {
             running = false;
         } else {
-            // 1. First check the cmds folder for a binary
             char exePath[MAX_PATH];
             GetModuleFileNameA(NULL, exePath, MAX_PATH);
             fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
@@ -6471,10 +6738,9 @@ private:
             for (const auto& ext : extensions) {
                 fs::path cmdPath = cmdsDir / (cmd + ext);
                 if (fs::exists(cmdPath)) {
-                    // Execute from cmds folder using CreateProcessA with proper working directory
                     std::string cmdLine = "\"" + cmdPath.string() + "\"";
-                    for (size_t i = 1; i < tokens.size(); i++) {
-                        cmdLine += " \"" + tokens[i] + "\"";
+                    for (size_t i = 1; i < expandedTokens.size(); i++) {
+                        cmdLine += " \"" + expandedTokens[i] + "\"";
                     }
                     
                     STARTUPINFOA si;
@@ -6494,7 +6760,7 @@ private:
                         TRUE,
                         0,
                         NULL,
-                        currentDir.c_str(),  // Execute in shell's current directory
+                        currentDir.c_str(),
                         &si,
                         &pi
                     )) {
@@ -6509,9 +6775,7 @@ private:
             }
             
             if (!foundInCmds) {
-                // 2. Try to find and execute as registered external command
-                if (!g_registry.executeRegisteredCommand(cmd, tokens, currentDir)) {
-                    // 3. Command not found anywhere
+                if (!g_registry.executeRegisteredCommand(cmd, expandedTokens, currentDir)) {
                     printError("Command not found: " + cmd + ". Type 'help' for available commands.");
                 }
             }
@@ -6710,7 +6974,8 @@ public:
         SetEnvironmentVariableA("LINUXIFY", "1");
         SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
 
-        // Link interpreter to this shell
+        loadPersistentVars();
+
         interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) {
             this->executeCommand(args);
             return 0;

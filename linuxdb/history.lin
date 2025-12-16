@@ -1202,3 +1202,69 @@ ls
 ls -l | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
 ls -l | grep -n ".http" | wc -l || echo "Found some .cpp files!"
 ls -l | grep -n ".http" | wc -l || echo "No http files!"
+help
+ss
+ss --help
+cls
+wipe
+help
+lsusb
+arp
+windux
+Funux
+curl
+curl https://youtube.com
+curl
+curl https://youtube.com
+clear
+curl https://youtube.com
+clear
+curl https://youtube.com
+clear
+curl --help
+curl -#
+curl -# https://google.com
+clear
+curl -# https://google.com
+curl https://google.com
+curl -T file.txt ftp://example.com/
+curl https://youtube.com
+curl -x 127.0.0.1:33210 https://api.openai.com/v1/chat/completions^
+-H "Content-Type: application/json" ^
+-H "Authorization: Bearer %OPENAI_API_KEY%" ^
+curl -x 127.0.0.1:33210 https://api.openai.com/v1/chat/completions^
+clear
+registry
+export
+export -p HOME="C:\Users\patri"
+cd $HOME
+cd $(HOME)
+cd HOME
+env
+cd $HOME
+env
+clear
+cd $HOME
+echo $HOME
+export -arr -p dirs={"C:\Users\patri\OneDrive\Documents\Projects\Linuxify\","C:\Users\patri\OneDrive\Documents\Projects"}
+echo $(dirs[0])
+echo $(dirs[1])
+var
+var list
+var insert dirs "C:\Users"
+var list
+var list
+var
+help
+export -arr -p words={"status","connect","mysql"}
+$(words[3])
+$(words[2])
+git $(words[0])
+git $(words[1])
+which ssh
+fs
+clear
+fs
+fs
+fs
+sudo fs

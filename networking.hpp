@@ -772,11 +772,6 @@ public:
         ss(args);
     }
 
-    static void curl(const std::vector<std::string>& args) {
-        std::cout << "Use standalone curl.exe for HTTP requests." << std::endl;
-        std::cout << "Run: curl --help for usage information." << std::endl;
-    }
-
     static void wget(const std::vector<std::string>& args, const std::string& currentDir = "") {
         if (args.size() < 2) {
             printError("wget: missing URL");

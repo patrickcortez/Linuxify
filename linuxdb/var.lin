@@ -1,0 +1,6 @@
+# Linuxify Persistent Variables
+# Format: VAR=value or ARR[]={val1,val2,val3}
+
+HOME=C:\Users\patri
+dirs[]={C:\Users\patri\OneDrive\Documents\Projects\Linuxify\,C:\Users\patri\OneDrive\Documents\Projects,C:\Users}
+words[]={status,connect,mysql}
