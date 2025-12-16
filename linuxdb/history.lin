@@ -893,3 +893,312 @@ lino
 lino
 lino
 lino
+ls
+windux
+lino
+windux
+windux
+lino
+Funux
+Funux
+windux
+lino
+funux
+Funux
+clear
+Lino
+Funux
+Funux
+Funux
+Lunux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+Funux
+clear
+Funux
+Funux
+clear
+Funux
+Funux
+clear
+Funux
+Funux
+Funux
+Funux
+clear
+clear
+clear
+Funux
+exit
+Funux
+Funux
+Funux
+Funux
+clear
+Funux
+clear
+Funux
+clear
+Funux
+clear
+Funux
+exit
+Funux
+Funux
+Funux
+Funux
+clear
+Funux
+Funux
+clear
+Lunux
+Funux
+help
+ls
+cat test.txt
+ls
+cat untitled.txt
+export target="C:\Users\patri"
+echo "hello world" | tr a-z A-Z
+ps -f
+help
+mkdir --help
+mkdir -h
+echo
+help
+tree
+help
+windux
+help
+clear
+exit
+Fundux
+Funux
+Funux
+Funux
+funux
+asds
+dddddddddddddd
+funux
+dwdsda
+dwad
+help
+nano
+clear
+help
+funux
+Funux
+sss
+sdws
+nano
+lino
+Funux
+clear
+Funux
+Funux
+2
+ls
+git
+clear
+cls
+Funux
+help
+dss
+exit
+clear
+ls
+ls
+help
+curl
+curl --help
+curl --help
+cd test
+mkdir
+mkdir --help
+mkdir -p File/Texts
+ls
+ls -la File
+ls -la File/Texts
+touch File/MyFile.fi File/Texts/MyText.txt
+ls -la File/Texts
+exit
+ls
+clear
+ls
+help
+ping 8.8.8.8
+cls
+ls -l
+ls -la
+ls -lh
+help
+lsmem
+lscpu
+lsof
+lsof --help
+clear
+help
+netshow
+net show
+net show
+net show
+lsof
+net
+net status
+clear
+help
+traceroute
+tracerout 8.8.8.8 20
+traceroute 8.8.8.8 20
+exit
+net show
+netshow
+net show
+net disconnect
+net connect "PCortez 5G"
+net connect "PCortez 5G"
+help
+nslookup youtube.com
+dig
+dig 8.8.8.8
+dig youtube.com
+dig wha.wtf
+nslookup 46.250.249.102
+traceroute 46.250.249.102 20
+exit
+help
+nslookup pornhub.com
+nslookup pornhub.com
+net show
+net connect PCortez Einstein460
+net connect
+net connect PCortez
+net status
+net connect "PCortez 5G"
+ls
+ls > test/result.txt
+ls
+cd test
+ls
+cat resut.txt
+EOF
+cat result.txt
+cd
+ls -la
+which git
+where git
+where
+where tailscale
+exit
+help
+which gcc
+which g++
+T_T
+echo a
+echo who am i
+echo am i who?
+echo -d "HEllo"
+echo -a "HEllo"
+echo  "HEllo" t
+echo  "Hello" t
+help
+pstree
+pstree
+exit
+pstree
+pstree
+crond
+crontab
+ls
+tree
+ls
+help
+lsof
+realpath
+realpath git
+realpath tailscale
+git
+clear
+tailscale
+clear
+cd test
+ls
+lino test.sh
+./test.sh
+cd test
+lino test.sh
+ls || ls
+ls || echo "LS FAILED"
+ls | grep -n ".hpp" || echo "Failed"
+exit
+echo "hello" & echo "Params"
+echo "hello" | echo "Params"
+ls | grep -n ".hpp" || echo "Failed"
+echo "Hello"
+echo "Hello"
+grep -n ".txt"
+grep -n ".txt"
+ls | !!
+clear
+ls | grep -n ".txt"
+grep -n ".txt"
+ls | !!
+clear
+cd test
+grep -n "test"
+grep -i "test"
+grep -i "test"
+ls | !!
+echo text << EOF
+echo text > test.txt << EOF
+echo text > test.txt
+test.txt << EOF
+ls | grep ".cpp" && echo "Found cpp files"
+echo "test1" && echo "test2"
+ls | grep ".cpp" && echo "Found cpp files"
+ls
+echo hello
+ls | grep -n ".txt" && echo "Found txt files"
+ls | grep -n ".cpp" && echo "Found cpp files"
+cd Ondrive
+cd Onedrive
+cd Documents
+cd Linuxify
+ls
+cd ..
+ls
+cd Documents
+cd Projects\Linuxify
+ls
+ls | grep -n ".cpp" && echo "Found cpp files"
+ls | grep -n ".cpp" | head -2 || echo "No matches found"
+ls | grep "nonexistent_file_xyz" | wc -l || echo "No matches - running fallback!"
+ls | grep "nonexistent_file_xyz" | wc -l || echo "No matches - running fallback!"
+ls | grep "nonexistent_file_xyz" | wc -l || echo "No matches - running fallback!"
+exit
+ls | grep "nonexistent" | wc -l || echo "No matches - fallback ran"
+ls | grep -n "nonexistent" | wc -l || echo "No matches - fallback ran"
+ls | grep -n "nonexistent" | wc -l || echo "No matches - fallback ran"
+ls | grep -n "nonexistent" | wc -l || echo "No matches - fallback ran"
+cd Onedrive
+cd Documents
+cd Projects\Linuxify
+ls | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
+ls | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
+ls -1 | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
+ls -l | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxif"
+cd "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+clear
+ls
+ls -l | grep -n ".cpp" | head -2 && echo "Found some .cpp files!"
+ls -l | grep -n ".http" | wc -l || echo "Found some .cpp files!"
+ls -l | grep -n ".http" | wc -l || echo "No http files!"

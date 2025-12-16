@@ -1,5 +1,4 @@
-// Linuxify Process Manager - Background Job Tracking
-// Manages background processes and provides process utilities
+// g++ -std=c++17 -static -o linuxify main.cpp registry.cpp -lpsapi
 
 #ifndef LINUXIFY_PROCESS_MANAGER_HPP
 #define LINUXIFY_PROCESS_MANAGER_HPP
@@ -9,9 +8,13 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
+#include <functional>
 #include <iostream>
 #include <iomanip>
 #include <psapi.h>
+#include <algorithm>
+#include <conio.h>
 
 struct BackgroundJob {
     int jobId;
@@ -20,6 +23,7 @@ struct BackgroundJob {
     std::string command;
     bool running;
     DWORD startTime;
+    int priority;
 };
 
 class ProcessManager {
@@ -28,7 +32,6 @@ private:
     int nextJobId = 1;
 
 public:
-    // Add a new background job
     int addJob(HANDLE hProcess, DWORD pid, const std::string& cmd) {
         BackgroundJob job;
         job.jobId = nextJobId++;
@@ -37,11 +40,11 @@ public:
         job.command = cmd;
         job.running = true;
         job.startTime = GetTickCount();
+        job.priority = 0;
         jobs.push_back(job);
         return job.jobId;
     }
 
-    // Update status of all jobs
     void updateJobStatus() {
         for (auto& job : jobs) {
             if (job.running && job.hProcess != NULL) {
@@ -57,7 +60,6 @@ public:
         }
     }
 
-    // List all jobs
     void listJobs() {
         updateJobStatus();
         
@@ -65,18 +67,25 @@ public:
         for (const auto& job : jobs) {
             if (job.running) {
                 hasJobs = true;
+                DWORD elapsed = (GetTickCount() - job.startTime) / 1000;
                 std::cout << "[" << job.jobId << "] " 
-                          << "Running    PID:" << job.pid << "  " 
+                          << "Running    PID:" << std::setw(6) << job.pid 
+                          << "  " << std::setw(4) << elapsed << "s  "
                           << job.command << std::endl;
             }
         }
         
-        if (!hasJobs) {
+        for (const auto& job : jobs) {
+            if (!job.running) {
+                std::cout << "[" << job.jobId << "] Done       " << job.command << std::endl;
+            }
+        }
+        
+        if (!hasJobs && jobs.empty()) {
             std::cout << "No background jobs." << std::endl;
         }
     }
 
-    // Kill a job by job ID
     bool killJob(int jobId) {
         for (auto& job : jobs) {
             if (job.jobId == jobId && job.running) {
@@ -91,14 +100,12 @@ public:
         return false;
     }
 
-    // Kill by PID
-    bool killByPid(DWORD pid) {
+    bool killByPid(DWORD pid, int signal = 15) {
         HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
         if (hProcess != NULL) {
-            bool result = TerminateProcess(hProcess, 1) != 0;
+            bool result = TerminateProcess(hProcess, signal) != 0;
             CloseHandle(hProcess);
             
-            // Update our job list if this was one of ours
             for (auto& job : jobs) {
                 if (job.pid == pid) {
                     job.running = false;
@@ -113,7 +120,6 @@ public:
         return false;
     }
 
-    // Get job by ID
     BackgroundJob* getJob(int jobId) {
         for (auto& job : jobs) {
             if (job.jobId == jobId) {
@@ -123,7 +129,6 @@ public:
         return nullptr;
     }
 
-    // Wait for a job to complete (bring to foreground)
     bool waitForJob(int jobId) {
         BackgroundJob* job = getJob(jobId);
         if (job && job->running && job->hProcess) {
@@ -136,7 +141,6 @@ public:
         return false;
     }
 
-    // Clean up completed jobs
     void cleanupCompletedJobs() {
         updateJobStatus();
         jobs.erase(
@@ -146,7 +150,35 @@ public:
         );
     }
 
-    // List all system processes (ps command)
+    static bool setProcessPriority(DWORD pid, int niceValue) {
+        HANDLE hProcess = OpenProcess(PROCESS_SET_INFORMATION, FALSE, pid);
+        if (hProcess == NULL) return false;
+        
+        DWORD priorityClass;
+        if (niceValue <= -15) priorityClass = REALTIME_PRIORITY_CLASS;
+        else if (niceValue <= -10) priorityClass = HIGH_PRIORITY_CLASS;
+        else if (niceValue <= -5) priorityClass = ABOVE_NORMAL_PRIORITY_CLASS;
+        else if (niceValue < 5) priorityClass = NORMAL_PRIORITY_CLASS;
+        else if (niceValue < 10) priorityClass = BELOW_NORMAL_PRIORITY_CLASS;
+        else priorityClass = IDLE_PRIORITY_CLASS;
+        
+        bool result = SetPriorityClass(hProcess, priorityClass) != 0;
+        CloseHandle(hProcess);
+        return result;
+    }
+
+    static std::string getPriorityString(DWORD priorityClass) {
+        switch (priorityClass) {
+            case REALTIME_PRIORITY_CLASS: return "RT";
+            case HIGH_PRIORITY_CLASS: return "high";
+            case ABOVE_NORMAL_PRIORITY_CLASS: return "above";
+            case NORMAL_PRIORITY_CLASS: return "normal";
+            case BELOW_NORMAL_PRIORITY_CLASS: return "below";
+            case IDLE_PRIORITY_CLASS: return "idle";
+            default: return "?";
+        }
+    }
+
     static void listProcesses() {
         HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (hSnapshot == INVALID_HANDLE_VALUE) {
@@ -159,15 +191,15 @@ public:
 
         std::cout << std::setw(8) << "PID" << "  "
                   << std::setw(8) << "PPID" << "  "
-                  << std::setw(10) << "THREADS" << "  "
+                  << std::setw(6) << "THR" << "  "
                   << "NAME" << std::endl;
-        std::cout << std::string(60, '-') << std::endl;
+        std::cout << std::string(50, '-') << std::endl;
 
         if (Process32First(hSnapshot, &pe32)) {
             do {
                 std::cout << std::setw(8) << pe32.th32ProcessID << "  "
                           << std::setw(8) << pe32.th32ParentProcessID << "  "
-                          << std::setw(10) << pe32.cntThreads << "  "
+                          << std::setw(6) << pe32.cntThreads << "  "
                           << pe32.szExeFile << std::endl;
             } while (Process32Next(hSnapshot, &pe32));
         }
@@ -175,7 +207,6 @@ public:
         CloseHandle(hSnapshot);
     }
 
-    // List processes with memory info (detailed ps)
     static void listProcessesDetailed() {
         HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (hSnapshot == INVALID_HANDLE_VALUE) {
@@ -187,8 +218,10 @@ public:
         pe32.dwSize = sizeof(PROCESSENTRY32);
 
         std::cout << std::setw(8) << "PID" << "  "
-                  << std::setw(10) << "MEM(KB)" << "  "
-                  << std::setw(8) << "THREADS" << "  "
+                  << std::setw(8) << "PPID" << "  "
+                  << std::setw(10) << "RSS(KB)" << "  "
+                  << std::setw(6) << "THR" << "  "
+                  << std::setw(6) << "PRI" << "  "
                   << "NAME" << std::endl;
         std::cout << std::string(70, '-') << std::endl;
 
@@ -197,18 +230,22 @@ public:
                 HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 
                                               FALSE, pe32.th32ProcessID);
                 SIZE_T memUsage = 0;
+                std::string priority = "?";
                 
                 if (hProcess) {
                     PROCESS_MEMORY_COUNTERS pmc;
                     if (GetProcessMemoryInfo(hProcess, &pmc, sizeof(pmc))) {
                         memUsage = pmc.WorkingSetSize / 1024;
                     }
+                    priority = getPriorityString(GetPriorityClass(hProcess));
                     CloseHandle(hProcess);
                 }
 
                 std::cout << std::setw(8) << pe32.th32ProcessID << "  "
+                          << std::setw(8) << pe32.th32ParentProcessID << "  "
                           << std::setw(10) << memUsage << "  "
-                          << std::setw(8) << pe32.cntThreads << "  "
+                          << std::setw(6) << pe32.cntThreads << "  "
+                          << std::setw(6) << priority << "  "
                           << pe32.szExeFile << std::endl;
             } while (Process32Next(hSnapshot, &pe32));
         }
@@ -216,42 +253,150 @@ public:
         CloseHandle(hSnapshot);
     }
 
-    // Simple top-like display
+    static void pstree(DWORD rootPid = 0) {
+        HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnapshot == INVALID_HANDLE_VALUE) return;
+
+        PROCESSENTRY32 pe32;
+        pe32.dwSize = sizeof(PROCESSENTRY32);
+
+        std::map<DWORD, std::vector<DWORD>> children;
+        std::map<DWORD, std::string> names;
+        std::map<DWORD, DWORD> parents;
+
+        if (Process32First(hSnapshot, &pe32)) {
+            do {
+                DWORD pid = pe32.th32ProcessID;
+                DWORD ppid = pe32.th32ParentProcessID;
+                
+                if (pid != ppid) {
+                    children[ppid].push_back(pid);
+                }
+                names[pid] = pe32.szExeFile;
+                parents[pid] = ppid;
+            } while (Process32Next(hSnapshot, &pe32));
+        }
+        CloseHandle(hSnapshot);
+
+        for (auto& pair : children) {
+            std::sort(pair.second.begin(), pair.second.end(), [&](DWORD a, DWORD b) {
+                return names[a] < names[b];
+            });
+        }
+
+        std::set<DWORD> visited;
+        std::function<void(DWORD, const std::string&, bool, int)> printTree;
+        printTree = [&](DWORD pid, const std::string& prefix, bool isLast, int depth) {
+            if (visited.count(pid)) return;
+            visited.insert(pid);
+            
+            auto it = names.find(pid);
+            if (it == names.end()) return;
+
+            std::string name = it->second;
+            if (name.length() > 4 && name.substr(name.length() - 4) == ".exe") {
+                name = name.substr(0, name.length() - 4);
+            }
+
+            if (depth == 0) {
+                std::cout << name << "(" << pid << ")" << std::endl;
+            } else {
+                std::cout << prefix << (isLast ? "`-" : "|-") << name << "(" << pid << ")" << std::endl;
+            }
+
+            auto cit = children.find(pid);
+            if (cit != children.end()) {
+                std::string newPrefix;
+                if (depth == 0) {
+                    newPrefix = "";
+                } else {
+                    newPrefix = prefix + (isLast ? "  " : "| ");
+                }
+                
+                for (size_t i = 0; i < cit->second.size(); i++) {
+                    bool last = (i == cit->second.size() - 1);
+                    printTree(cit->second[i], newPrefix, last, depth + 1);
+                }
+            }
+        };
+
+        if (rootPid != 0) {
+            printTree(rootPid, "", true, 0);
+        } else {
+            std::set<DWORD> roots;
+            for (const auto& pair : names) {
+                DWORD pid = pair.first;
+                DWORD ppid = parents[pid];
+                
+                if (names.find(ppid) == names.end() || ppid == 0 || ppid == pid) {
+                    roots.insert(pid);
+                }
+            }
+
+            for (DWORD root : roots) {
+                printTree(root, "", true, 0);
+            }
+        }
+    }
+
     static void topView() {
         std::cout << "Press 'q' to quit, any other key to refresh...\n\n";
         
         while (true) {
-            system("cls");
+            HANDLE hCon = GetStdHandle(STD_OUTPUT_HANDLE);
+            COORD topLeft = {0, 0};
+            CONSOLE_SCREEN_BUFFER_INFO csbi;
+            DWORD written;
+            GetConsoleScreenBufferInfo(hCon, &csbi);
+            DWORD size = csbi.dwSize.X * csbi.dwSize.Y;
+            FillConsoleOutputCharacterA(hCon, ' ', size, topLeft, &written);
+            FillConsoleOutputAttribute(hCon, csbi.wAttributes, size, topLeft, &written);
+            SetConsoleCursorPosition(hCon, topLeft);
             
-            // Get system info
             MEMORYSTATUSEX memInfo;
             memInfo.dwLength = sizeof(MEMORYSTATUSEX);
             GlobalMemoryStatusEx(&memInfo);
             
+            FILETIME idleTime, kernelTime, userTime;
+            GetSystemTimes(&idleTime, &kernelTime, &userTime);
+            
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
             std::cout << "=== Linuxify Top ===" << std::endl;
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
             std::cout << "Memory: " << (memInfo.ullTotalPhys - memInfo.ullAvailPhys) / (1024*1024) 
                       << " MB used / " << memInfo.ullTotalPhys / (1024*1024) << " MB total ("
                       << memInfo.dwMemoryLoad << "% used)" << std::endl;
-            std::cout << std::endl;
             
+            HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (hSnapshot != INVALID_HANDLE_VALUE) {
+                PROCESSENTRY32 pe32;
+                pe32.dwSize = sizeof(PROCESSENTRY32);
+                int procCount = 0;
+                if (Process32First(hSnapshot, &pe32)) {
+                    do { procCount++; } while (Process32Next(hSnapshot, &pe32));
+                }
+                CloseHandle(hSnapshot);
+                std::cout << "Processes: " << procCount << std::endl;
+            }
+            
+            std::cout << std::endl;
             listProcessesDetailed();
             
             std::cout << "\nPress 'q' to quit..." << std::endl;
             
-            // Check for keypress
             if (_kbhit()) {
                 char c = _getch();
-                if (c == 'q' || c == 'Q') {
-                    break;
-                }
+                if (c == 'q' || c == 'Q') break;
             }
             
-            Sleep(2000);  // Refresh every 2 seconds
+            Sleep(2000);
         }
     }
 };
 
-// Global process manager
 extern ProcessManager g_procMgr;
 
-#endif // LINUXIFY_PROCESS_MANAGER_HPP
+#endif
+

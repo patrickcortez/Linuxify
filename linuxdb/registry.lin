@@ -2,6 +2,7 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
+Lino=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\Lino.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
 convert=C:\WINDOWS\system32\convert.exe
@@ -25,6 +26,7 @@ python3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python3.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
+tailscale=C:\Program Files\Tailscale\tailscale.exe
 tar=C:\WINDOWS\system32\tar.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com

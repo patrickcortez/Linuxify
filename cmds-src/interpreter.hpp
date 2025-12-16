@@ -1,4 +1,4 @@
-﻿// Linuxify Bash Interpreter - Lexer, Parser, Executor
+// Linuxify Bash Interpreter - Lexer, Parser, Executor
 // A modular shell script interpreter
 // Compile: g++ -std=c++17 -static -o bash.exe bash.cpp
 
@@ -63,6 +63,9 @@ enum class TokenType {
     KW_CASE,        // case
     KW_ESAC,        // esac
     KW_FUNCTION,    // function
+    KW_BREAK,       // break
+    KW_CONTINUE,    // continue
+    KW_RETURN,      // return
     
     // Special
     NEWLINE,        // \n
@@ -139,6 +142,9 @@ private:
         {"case", TokenType::KW_CASE},
         {"esac", TokenType::KW_ESAC},
         {"function", TokenType::KW_FUNCTION},
+        {"break", TokenType::KW_BREAK},
+        {"continue", TokenType::KW_CONTINUE},
+        {"return", TokenType::KW_RETURN},
     };
     
     char current() const {
@@ -484,12 +490,65 @@ struct FunctionNode : ASTNode {
     std::string type() const override { return "Function"; }
 };
 
-// Case statement (switch/case)
 struct CaseNode : ASTNode {
     std::string expression;  // The value to match against
     std::vector<std::pair<std::vector<std::string>, std::vector<std::shared_ptr<ASTNode>>>> branches;  // patterns -> body
     
     std::string type() const override { return "Case"; }
+};
+
+struct ErrorBlockNode : ASTNode {
+    std::shared_ptr<ASTNode> command;
+    std::vector<std::shared_ptr<ASTNode>> errorHandler;
+    
+    std::string type() const override { return "ErrorBlock"; }
+};
+
+struct OrChainNode : ASTNode {
+    std::shared_ptr<ASTNode> left;
+    std::shared_ptr<ASTNode> right;
+    
+    std::string type() const override { return "OrChain"; }
+};
+
+struct AndChainNode : ASTNode {
+    std::shared_ptr<ASTNode> left;
+    std::shared_ptr<ASTNode> right;
+    
+    std::string type() const override { return "AndChain"; }
+};
+
+struct BreakNode : ASTNode {
+    int levels = 1;
+    std::string type() const override { return "Break"; }
+};
+
+struct ContinueNode : ASTNode {
+    int levels = 1;
+    std::string type() const override { return "Continue"; }
+};
+
+struct ReturnNode : ASTNode {
+    int value = 0;
+    std::string type() const override { return "Return"; }
+};
+
+class BreakException : public std::exception {
+public:
+    int levels;
+    BreakException(int n = 1) : levels(n) {}
+};
+
+class ContinueException : public std::exception {
+public:
+    int levels;
+    ContinueException(int n = 1) : levels(n) {}
+};
+
+class ReturnException : public std::exception {
+public:
+    int value;
+    ReturnException(int v = 0) : value(v) {}
 };
 
 // ============================================================================
@@ -853,6 +912,66 @@ private:
         return node;
     }
     
+    std::vector<std::shared_ptr<ASTNode>> parseBlock() {
+        std::vector<std::shared_ptr<ASTNode>> body;
+        
+        if (!match(TokenType::LBRACE)) {
+            return body;
+        }
+        skipNewlines();
+        
+        while (!check(TokenType::RBRACE) && !check(TokenType::END_OF_FILE)) {
+            auto stmt = parseStatement();
+            if (stmt) body.push_back(stmt);
+            
+            while (check(TokenType::NEWLINE) || check(TokenType::SEMICOLON) || check(TokenType::COMMENT)) {
+                advance();
+            }
+        }
+        
+        match(TokenType::RBRACE);
+        return body;
+    }
+    
+    std::shared_ptr<ASTNode> parseChainExpr() {
+        auto left = parsePipeline();
+        if (left->commands.empty()) {
+            return nullptr;
+        }
+        
+        std::shared_ptr<ASTNode> result = left;
+        
+        while (check(TokenType::OR) || check(TokenType::AND)) {
+            TokenType op = current().type;
+            advance();
+            skipNewlines();
+            
+            if (op == TokenType::OR && check(TokenType::LBRACE)) {
+                auto errBlock = std::make_shared<ErrorBlockNode>();
+                errBlock->command = result;
+                errBlock->errorHandler = parseBlock();
+                result = errBlock;
+            } else {
+                auto right = parsePipeline();
+                if (!right->commands.empty()) {
+                    if (op == TokenType::OR) {
+                        auto orNode = std::make_shared<OrChainNode>();
+                        orNode->left = result;
+                        orNode->right = right;
+                        result = orNode;
+                    } else {
+                        auto andNode = std::make_shared<AndChainNode>();
+                        andNode->left = result;
+                        andNode->right = right;
+                        result = andNode;
+                    }
+                }
+            }
+        }
+        
+        return result;
+    }
+    
     std::shared_ptr<ASTNode> parseStatement() {
         skipNewlines();
         
@@ -876,16 +995,14 @@ private:
             return parseFunction();
         }
         
-        // Check for name() { style function definition
         if (check(TokenType::WORD) && peek().type == TokenType::LPAREN) {
-            // Look ahead for ()
             size_t savedPos = pos;
-            advance();  // skip name
+            advance();
             if (check(TokenType::LPAREN)) {
-                pos = savedPos;  // restore
+                pos = savedPos;
                 return parseFunction();
             }
-            pos = savedPos;  // restore for normal processing
+            pos = savedPos;
         }
         
         if (check(TokenType::ASSIGNMENT)) {
@@ -896,13 +1013,10 @@ private:
             node->value = val.substr(eq + 1);
             advance();
             
-            // If value is empty and next token is STRING, use that as value
-            // This handles: NAME="value" where NAME= is one token and "value" is next
             if (node->value.empty() && check(TokenType::STRING)) {
                 node->value = current().value;
                 advance();
             }
-            // Also handle unquoted value after =
             else if (node->value.empty() && (check(TokenType::WORD) || check(TokenType::NUMBER))) {
                 node->value = current().value;
                 advance();
@@ -911,17 +1025,42 @@ private:
             return node;
         }
         
+        if (check(TokenType::KW_BREAK)) {
+            advance();
+            auto node = std::make_shared<BreakNode>();
+            if (check(TokenType::NUMBER)) {
+                node->levels = std::stoi(current().value);
+                advance();
+            }
+            return node;
+        }
+        
+        if (check(TokenType::KW_CONTINUE)) {
+            advance();
+            auto node = std::make_shared<ContinueNode>();
+            if (check(TokenType::NUMBER)) {
+                node->levels = std::stoi(current().value);
+                advance();
+            }
+            return node;
+        }
+        
+        if (check(TokenType::KW_RETURN)) {
+            advance();
+            auto node = std::make_shared<ReturnNode>();
+            if (check(TokenType::NUMBER)) {
+                node->value = std::stoi(current().value);
+                advance();
+            }
+            return node;
+        }
+        
         if (check(TokenType::COMMENT)) {
             advance();
             return nullptr;
         }
         
-        auto pipeline = parsePipeline();
-        if (!pipeline->commands.empty()) {
-            return pipeline;
-        }
-        
-        return nullptr;
+        return parseChainExpr();
     }
 
 public:
@@ -1015,6 +1154,54 @@ private:
         builtins["true"] = [](const std::vector<std::string>&) { return 0; };
         builtins["false"] = [](const std::vector<std::string>&) { return 1; };
         
+        builtins["read"] = [this](const std::vector<std::string>& args) {
+            std::string varName = args.size() > 1 ? args[1] : "REPLY";
+            std::string line;
+            if (std::getline(std::cin, line)) {
+                variables[varName] = line;
+                return 0;
+            }
+            return 1;
+        };
+        
+        builtins["sleep"] = [](const std::vector<std::string>& args) {
+            if (args.size() > 1) {
+                try {
+                    double secs = std::stod(args[1]);
+                    Sleep((DWORD)(secs * 1000));
+                } catch (...) {}
+            }
+            return 0;
+        };
+        
+        builtins["shift"] = [this](const std::vector<std::string>& args) {
+            int n = args.size() > 1 ? std::stoi(args[1]) : 1;
+            if (!positionalArgsStack.empty()) {
+                auto& posArgs = positionalArgsStack.back();
+                for (int i = 0; i < n && posArgs.size() > 1; i++) {
+                    posArgs.erase(posArgs.begin() + 1);
+                }
+            }
+            return 0;
+        };
+        
+        builtins["source"] = [this](const std::vector<std::string>& args) {
+            if (args.size() < 2) return 1;
+            std::ifstream file(args[1]);
+            if (!file) return 1;
+            std::stringstream buf;
+            buf << file.rdbuf();
+            Lexer lex(buf.str());
+            Parser parser(lex.tokenize());
+            auto prog = parser.parse();
+            for (auto& stmt : prog) {
+                execute(stmt);
+            }
+            return lastExitCode;
+        };
+        
+        builtins["."] = builtins["source"];
+        
         builtins["["] = [this](const std::vector<std::string>& args) {
             return executeTest(args);
         };
@@ -1054,7 +1241,24 @@ private:
             std::cout << "  For Loop          for i in 1 2 3; do ... done\n";
             std::cout << "  While Loop        while [ cond ]; do ... done\n";
             std::cout << "  Pipes             cmd1 | cmd2\n";
+            std::cout << "  AND Chain         cmd1 && cmd2 (run if success)\n";
+            std::cout << "  OR Chain          cmd1 || cmd2 (run if fail)\n";
+            std::cout << "  Error Block       cmd ||{ error; handling; }\n";
+            std::cout << "  Functions         name() { ... }; name\n";
             std::cout << "  Comments          # comment\n";
+            std::cout << "\n";
+            
+            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Flow Control:\n";
+            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            std::cout << "  break [n]         Break out of n loops\n";
+            std::cout << "  continue [n]      Continue next iteration\n";
+            std::cout << "  return [n]        Return from function with code n\n";
+            std::cout << "  read VAR          Read line into variable\n";
+            std::cout << "  sleep N           Sleep for N seconds\n";
+            std::cout << "  shift [n]         Shift positional parameters\n";
+            std::cout << "  source FILE       Execute script in current shell\n";
             std::cout << "\n";
             
             SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
@@ -1408,16 +1612,17 @@ public:
                 return lastExitCode;
             }
             
-            // Check functions (user-defined)
             if (functions.count(cmdName)) {
-                // Push function arguments onto positional args stack
                 positionalArgsStack.push_back(expandedArgs);
                 
-                for (auto& stmt : functions[cmdName]) {
-                    lastExitCode = execute(stmt);
+                try {
+                    for (auto& stmt : functions[cmdName]) {
+                        lastExitCode = execute(stmt);
+                    }
+                } catch (ReturnException& e) {
+                    lastExitCode = e.value;
                 }
                 
-                // Pop args when function returns
                 positionalArgsStack.pop_back();
                 return lastExitCode;
             }
@@ -1461,22 +1666,46 @@ public:
             return lastExitCode;
         }
         
-        // For loop
         if (auto forNode = std::dynamic_pointer_cast<ForNode>(node)) {
+            bool breakLoop = false;
             for (const auto& value : forNode->values) {
+                if (breakLoop) break;
                 variables[forNode->variable] = expandVariables(value);
-                for (auto& stmt : forNode->body) {
-                    lastExitCode = execute(stmt);
+                try {
+                    for (auto& stmt : forNode->body) {
+                        lastExitCode = execute(stmt);
+                    }
+                } catch (BreakException& e) {
+                    if (e.levels <= 1) {
+                        breakLoop = true;
+                    } else {
+                        throw BreakException(e.levels - 1);
+                    }
+                } catch (ContinueException& e) {
+                    if (e.levels > 1) {
+                        throw ContinueException(e.levels - 1);
+                    }
                 }
             }
             return lastExitCode;
         }
         
-        // While loop
         if (auto whileNode = std::dynamic_pointer_cast<WhileNode>(node)) {
             while (execute(whileNode->condition) == 0) {
-                for (auto& stmt : whileNode->body) {
-                    lastExitCode = execute(stmt);
+                try {
+                    for (auto& stmt : whileNode->body) {
+                        lastExitCode = execute(stmt);
+                    }
+                } catch (BreakException& e) {
+                    if (e.levels <= 1) {
+                        break;
+                    } else {
+                        throw BreakException(e.levels - 1);
+                    }
+                } catch (ContinueException& e) {
+                    if (e.levels > 1) {
+                        throw ContinueException(e.levels - 1);
+                    }
                 }
             }
             return lastExitCode;
@@ -1532,14 +1761,51 @@ public:
                 }
                 
                 if (matched) {
-                    // Execute body for this branch
                     for (auto& stmt : branch.second) {
                         lastExitCode = execute(stmt);
                     }
-                    return lastExitCode;  // Only first matching branch executes
+                    return lastExitCode;
                 }
             }
             return 0;
+        }
+        
+        if (auto orNode = std::dynamic_pointer_cast<OrChainNode>(node)) {
+            lastExitCode = execute(orNode->left);
+            if (lastExitCode != 0) {
+                lastExitCode = execute(orNode->right);
+            }
+            return lastExitCode;
+        }
+        
+        if (auto andNode = std::dynamic_pointer_cast<AndChainNode>(node)) {
+            lastExitCode = execute(andNode->left);
+            if (lastExitCode == 0) {
+                lastExitCode = execute(andNode->right);
+            }
+            return lastExitCode;
+        }
+        
+        if (auto errBlock = std::dynamic_pointer_cast<ErrorBlockNode>(node)) {
+            lastExitCode = execute(errBlock->command);
+            if (lastExitCode != 0) {
+                for (auto& stmt : errBlock->errorHandler) {
+                    lastExitCode = execute(stmt);
+                }
+            }
+            return lastExitCode;
+        }
+        
+        if (auto breakNode = std::dynamic_pointer_cast<BreakNode>(node)) {
+            throw BreakException(breakNode->levels);
+        }
+        
+        if (auto contNode = std::dynamic_pointer_cast<ContinueNode>(node)) {
+            throw ContinueException(contNode->levels);
+        }
+        
+        if (auto retNode = std::dynamic_pointer_cast<ReturnNode>(node)) {
+            throw ReturnException(retNode->value);
         }
         
         return 0;

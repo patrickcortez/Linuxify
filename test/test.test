@@ -1,0 +1,6 @@
+out("Hello World");
+var name = in("Enter your name");
+out("Welcome");
+
+ouy("This should error");
+var x = inn("This should error too");

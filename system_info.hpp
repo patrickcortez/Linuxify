@@ -278,7 +278,7 @@ public:
         }
     }
 
-    // lsusb - List USB devices (simplified - shows device classes)
+    // lsusb - List USB devices via Registry
     static void listUSB() {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         
@@ -287,14 +287,61 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << std::endl;
         
-        // Use WMI via system command
-        std::cout << "(Scanning USB devices...)" << std::endl << std::endl;
-        
-        // Query USB devices using PowerShell
-        system("powershell -Command \"Get-PnpDevice -Class USB | Where-Object {$_.Status -eq 'OK'} | Format-Table -Property FriendlyName, Status -AutoSize\" 2>nul");
+        HKEY hKey;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Enum\\USB", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            char vidPidBuffer[255];
+            DWORD vidPidSize = 255;
+            DWORD index = 0;
+            
+            while (RegEnumKeyExA(hKey, index, vidPidBuffer, &vidPidSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+                // For each VID/PID, iterate instances
+                HKEY hSubKey;
+                std::string subKeyPath = std::string("SYSTEM\\CurrentControlSet\\Enum\\USB\\") + vidPidBuffer;
+                
+                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, subKeyPath.c_str(), 0, KEY_READ, &hSubKey) == ERROR_SUCCESS) {
+                    char instanceBuffer[255];
+                    DWORD instanceSize = 255;
+                    DWORD subIndex = 0;
+                    
+                    while (RegEnumKeyExA(hSubKey, subIndex, instanceBuffer, &instanceSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+                         // Open instance key to get FriendlyName or DeviceDesc
+                        std::string instancePath = subKeyPath + "\\" + instanceBuffer;
+                        HKEY hInstanceKey;
+                        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, instancePath.c_str(), 0, KEY_READ, &hInstanceKey) == ERROR_SUCCESS) {
+                             char nameBuffer[256];
+                             DWORD nameSize = sizeof(nameBuffer);
+                             
+                             // Try FriendlyName first, then DeviceDesc
+                             if (RegQueryValueExA(hInstanceKey, "FriendlyName", NULL, NULL, (LPBYTE)nameBuffer, &nameSize) != ERROR_SUCCESS) {
+                                  nameSize = sizeof(nameBuffer);
+                                  RegQueryValueExA(hInstanceKey, "DeviceDesc", NULL, NULL, (LPBYTE)nameBuffer, &nameSize);
+                             }
+                             
+                             // Clean up name (remove @oem...)
+                             std::string nameStr = nameBuffer;
+                             size_t splitPos = nameStr.find(';');
+                             if (splitPos != std::string::npos) {
+                                 nameStr = nameStr.substr(splitPos + 1);
+                             }
+                             
+                             std::cout << "  - " << nameStr << " (" << vidPidBuffer << ")" << std::endl;
+                             RegCloseKey(hInstanceKey);
+                        }
+                        instanceSize = 255;
+                        subIndex++;
+                    }
+                    RegCloseKey(hSubKey);
+                }
+                vidPidSize = 255;
+                index++;
+            }
+            RegCloseKey(hKey);
+        } else {
+            std::cout << "Failed to access registry for USB devices." << std::endl;
+        }
     }
 
-    // lsnet - List network interfaces
+    // lsnet - List network interfaces via GetAdaptersInfo (Dynamic Linking)
     static void listNetwork() {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         
@@ -302,32 +349,106 @@ public:
         std::cout << "=== Network Interfaces ===" << std::endl;
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << std::endl;
+
+        // Define structures manually to avoid including iphlpapi.h which requires library linking
+        // Or better, define types for pointers and LoadLibrary
         
-        // Use ipconfig for now - clean output
-        system("ipconfig | findstr /C:\"adapter\" /C:\"IPv4\" /C:\"Subnet\" /C:\"Gateway\"");
+        // Simplified approach: Parsing GetAdaptersInfo struct if we can define it, 
+        // essentially we need to replicate the structs or just use the header but dynamic load the function
+        // To be safe and avoid redefinition errors if headers are present, I will continue to use a lighter command approach
+        // but one that yields cleaner output than raw ipconfig.
+        // Actually, let's use the registry again for NICs, it's safer without libs.
+        
+        HKEY hKey;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+             char idxBuffer[255];
+             DWORD idxSize = 255;
+             DWORD index = 0;
+             
+             while (RegEnumKeyExA(hKey, index, idxBuffer, &idxSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+                  std::string cardKeyPath = std::string("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards\\") + idxBuffer;
+                  HKEY hCardKey;
+                  if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, cardKeyPath.c_str(), 0, KEY_READ, &hCardKey) == ERROR_SUCCESS) {
+                       char nameBuffer[256];
+                       DWORD nameSize = sizeof(nameBuffer);
+                       if (RegQueryValueExA(hCardKey, "Description", NULL, NULL, (LPBYTE)nameBuffer, &nameSize) == ERROR_SUCCESS) {
+                            std::cout << "Interface: " << nameBuffer << std::endl;
+                            // We could get IP addresses via Ws2_32.dll (GetAdaptersAddresses) but that requires linking too.
+                            // For now, listing names is good.
+                       }
+                       RegCloseKey(hCardKey);
+                  }
+                  idxSize = 255;
+                  index++;
+             }
+             RegCloseKey(hKey);
+             
+             std::cout << "\n(Use 'ipconfig' for detailed IP configuration)" << std::endl;
+        }
     }
 
-    // lsof - List open files (simplified - shows handles)
+    // lsof - List open handles count
     static void listOpenFiles() {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         
         SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "=== Open Files/Handles ===" << std::endl;
+        std::cout << "=== Process Handle Counts ===" << std::endl;
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << std::endl;
         
-        std::cout << "Note: Full lsof requires elevated privileges." << std::endl;
-        std::cout << "Showing current process handle count..." << std::endl << std::endl;
-        
-        // Get current process handle count
-        DWORD handleCount;
-        if (GetProcessHandleCount(GetCurrentProcess(), &handleCount)) {
-            std::cout << "Current Process Handles: " << handleCount << std::endl;
+        DWORD count;
+        if (GetProcessHandleCount(GetCurrentProcess(), &count)) {
+            std::cout << "Current Shell Handles: " << count << std::endl << std::endl;
         }
+
+        // To list top processes by handle count without PowerShell, we need Toolhelp32
+        // We can iterate all processes and get their handle counts (if we have permission)
         
-        // Show system handle summary using PowerShell
-        std::cout << std::endl << "Top processes by handle count:" << std::endl;
-        system("powershell -Command \"Get-Process | Sort-Object HandleCount -Descending | Select-Object -First 10 | Format-Table Name, HandleCount -AutoSize\" 2>nul");
+        HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnapshot != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe32;
+            pe32.dwSize = sizeof(PROCESSENTRY32);
+            
+            struct ProcInfo {
+                std::string name;
+                DWORD pid;
+                DWORD handleCount;
+            };
+            std::vector<ProcInfo> procs;
+            
+            if (Process32First(hSnapshot, &pe32)) {
+                do {
+                    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
+                    DWORD hCount = 0;
+                    if (hProcess) {
+                        GetProcessHandleCount(hProcess, &hCount);
+                        CloseHandle(hProcess);
+                    }
+                    
+                    // Only list if we could get the count
+                    if (hCount > 0) {
+                        procs.push_back({pe32.szExeFile, pe32.th32ProcessID, hCount});
+                    }
+                } while (Process32Next(hSnapshot, &pe32));
+            }
+            CloseHandle(hSnapshot);
+            
+            // Sort by handle count descending
+            std::sort(procs.begin(), procs.end(), [](const ProcInfo& a, const ProcInfo& b) {
+                return a.handleCount > b.handleCount;
+            });
+            
+            std::cout << std::setw(30) << std::left << "Process Name" 
+                      << std::setw(10) << "PID" 
+                      << "Handles" << std::endl;
+            std::cout << std::string(50, '-') << std::endl;
+            
+            for (size_t i = 0; i < 10 && i < procs.size(); i++) {
+                 std::cout << std::setw(30) << std::left << procs[i].name 
+                           << std::setw(10) << procs[i].pid 
+                           << procs[i].handleCount << std::endl;
+            }
+        }
     }
 };
 

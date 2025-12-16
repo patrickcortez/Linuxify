@@ -185,8 +185,7 @@ private:
             return itInsert->second;
         }
         
-        // Check if deleted
-        if (deletedLines.count(lineNum)) return "";
+
         
         // Adjust for virtual line numbers after insertions/deletions
         int realLine = lineNum;
@@ -2041,7 +2040,15 @@ private:
             if (itInsert != insertedLines.end()) {
                 insertedLines.erase(itInsert);  // Just remove from inserted
             } else {
-                deletedLines.insert(cursorY);  // Mark original line as deleted
+                // Calculate real line index to delete
+                int realLine = cursorY;
+                for (const auto& ins : insertedLines) {
+                    if (ins.first <= cursorY) realLine--;
+                }
+                for (int del : deletedLines) {
+                    if (del <= realLine) realLine++;
+                }
+                deletedLines.insert(realLine);  // Mark original line as deleted
             }
             lineCache.erase(cursorY);
             shiftLinesDown(deletedLineNum);  // Renumber remaining lines
@@ -2081,7 +2088,15 @@ private:
             if (itInsert != insertedLines.end()) {
                 insertedLines.erase(itInsert);  // Just remove from inserted
             } else {
-                deletedLines.insert(cursorY + 1);  // Mark original line as deleted
+                // Calculate real line index to delete
+                int realLine = cursorY + 1;
+                for (const auto& ins : insertedLines) {
+                    if (ins.first <= cursorY + 1) realLine--;
+                }
+                for (int del : deletedLines) {
+                    if (del <= realLine) realLine++;
+                }
+                deletedLines.insert(realLine);  // Mark original line as deleted
             }
             lineCache.erase(cursorY + 1);
             shiftLinesDown(deletedLineNum);  // Renumber remaining lines
@@ -2102,7 +2117,15 @@ private:
         if (itInsert != insertedLines.end()) {
             insertedLines.erase(itInsert);  // Just remove from inserted
         } else {
-            deletedLines.insert(cursorY);  // Mark original line as deleted
+            // Calculate real line index to delete
+            int realLine = cursorY;
+            for (const auto& ins : insertedLines) {
+                if (ins.first <= cursorY) realLine--;
+            }
+            for (int del : deletedLines) {
+                if (del <= realLine) realLine++;
+            }
+            deletedLines.insert(realLine);  // Mark original line as deleted
         }
         lineCache.erase(cursorY);
         shiftLinesDown(deletedLineNum);  // Renumber remaining lines

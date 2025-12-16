@@ -1,5 +1,5 @@
 // Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
-// Alternate compile: g++ -std=c++17 -static -o linuxify main.cpp registry.cpp
+// Alternate compile: g++ -std=c++17 -static -o linuxify main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet
 
 #include <iostream>
 #include <string>
@@ -7,6 +7,8 @@
 #include <sstream>
 #include <filesystem>
 #include <fstream>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <psapi.h>
@@ -18,6 +20,11 @@
 #include <map>
 #include <functional>
 #include <sys/utime.h>
+#include <regex>
+#include <deque>
+#include <thread>
+#include <chrono>
+#include <list>
 
 #include "registry.hpp"
 #include "process_manager.hpp"
@@ -38,8 +45,9 @@ private:
     bool running;
     std::string currentDir;
     std::vector<std::string> commandHistory;
-    std::map<std::string, std::string> sessionEnv;  // Session-specific environment variables
+    std::map<std::string, std::string> sessionEnv;
     Bash::Interpreter interpreter;
+    int lastExitCode = 0;
 
     std::vector<std::string> tokenize(const std::string& input) {
         std::vector<std::string> tokens;
@@ -465,176 +473,286 @@ private:
     void cmdLs(const std::vector<std::string>& args) {
         bool showAll = false;
         bool longFormat = false;
-        std::string targetPath = currentDir;
+        bool recursive = false;
+        bool humanReadable = false;
+        bool reverse = false;
+        bool timeSort = false;
+        bool sizeSort = false;
+        bool color = true;
+        bool oneColumn = false;
+        std::vector<std::string> paths;
 
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-a" || args[i] == "--all") {
-                showAll = true;
-            } else if (args[i] == "-l") {
-                longFormat = true;
-            } else if (args[i] == "-la" || args[i] == "-al") {
-                showAll = true;
-                longFormat = true;
-            } else if (args[i][0] != '-') {
-                targetPath = resolvePath(args[i]);
+            std::string arg = args[i];
+            if (arg == "-a" || arg == "--all") showAll = true;
+            else if (arg == "-l") longFormat = true;
+            else if (arg == "-R" || arg == "--recursive") recursive = true;
+            else if (arg == "-h" || arg == "--human-readable") humanReadable = true;
+            else if (arg == "-r" || arg == "--reverse") reverse = true;
+            else if (arg == "-t") timeSort = true;
+            else if (arg == "-S") sizeSort = true;
+            else if (arg == "-1") oneColumn = true;
+            else if (arg == "--color=never") color = false;
+            else if (arg == "--color=auto" || arg == "--color=always") color = true;
+            else if (arg.length() > 1 && arg[0] == '-') {
+                for (size_t k = 1; k < arg.length(); ++k) {
+                    if (arg[k] == 'a') showAll = true;
+                    else if (arg[k] == 'l') longFormat = true;
+                    else if (arg[k] == 'R') recursive = true;
+                    else if (arg[k] == 'h') humanReadable = true;
+                    else if (arg[k] == 'r') reverse = true;
+                    else if (arg[k] == 't') timeSort = true;
+                    else if (arg[k] == 'S') sizeSort = true;
+                    else if (arg[k] == '1') oneColumn = true;
+                }
             }
+            else paths.push_back(arg);
         }
 
-        try {
-            if (!fs::exists(targetPath)) {
-                printError("ls: cannot access '" + targetPath + "': No such file or directory");
-                return;
+        if (paths.empty()) paths.push_back(currentDir);
+
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        int termWidth = csbi.dwSize.X;
+        if (termWidth <= 0) termWidth = 80;
+
+        auto formatSize = [&](uintmax_t size) -> std::string {
+            if (!humanReadable) return std::to_string(size);
+            const char* units[] = {"B", "K", "M", "G", "T"};
+            int unit = 0;
+            double s = static_cast<double>(size);
+            while (s >= 1024 && unit < 4) {
+                s /= 1024;
+                unit++;
             }
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(1) << s << units[unit];
+            return ss.str();
+        };
 
-            if (!fs::is_directory(targetPath)) {
-                std::cout << targetPath << std::endl;
-                return;
+        auto printEntryLong = [&](const fs::directory_entry& entry) {
+             std::string perms;
+             if (fs::is_directory(entry)) perms = "d";
+             else if (fs::is_symlink(entry)) perms = "l";
+             else perms = "-";
+             
+             try {
+                 auto status = fs::status(entry);
+                 auto p = status.permissions();
+                 perms += (p & fs::perms::owner_read) != fs::perms::none ? "r" : "-";
+                 perms += (p & fs::perms::owner_write) != fs::perms::none ? "w" : "-";
+                 perms += (p & fs::perms::owner_exec) != fs::perms::none ? "x" : "-";
+                 perms += (p & fs::perms::group_read) != fs::perms::none ? "r" : "-";
+                 perms += (p & fs::perms::group_write) != fs::perms::none ? "w" : "-";
+                 perms += (p & fs::perms::group_exec) != fs::perms::none ? "x" : "-";
+                 perms += (p & fs::perms::others_read) != fs::perms::none ? "r" : "-";
+                 perms += (p & fs::perms::others_write) != fs::perms::none ? "w" : "-";
+                 perms += (p & fs::perms::others_exec) != fs::perms::none ? "x" : "-";
+             } catch(...) { perms += "---------"; }
+
+             uintmax_t size = 0;
+             if (!fs::is_directory(entry)) {
+                 try { size = fs::file_size(entry); } catch(...) {}
+             }
+             
+             char timeBuf[64] = "Unknown";
+             try {
+                 auto ftime = fs::last_write_time(entry);
+                 auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                     ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+                 std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
+                 std::tm* tm = std::localtime(&cftime);
+                 if (tm) std::strftime(timeBuf, sizeof(timeBuf), "%b %d %H:%M", tm);
+             } catch(...) {}
+
+             std::cout << perms << " " << std::setw(humanReadable ? 6 : 10) << formatSize(size) << " " << timeBuf << " ";
+
+             if (color) {
+                 if (fs::is_directory(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                 else if (fs::is_symlink(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                 else {
+                     std::string ext = entry.path().extension().string();
+                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                     if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".sh") 
+                         SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                     else if (ext == ".zip" || ext == ".tar" || ext == ".gz")
+                         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                     else if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
+                         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                 }
+             }
+             
+             std::cout << entry.path().filename().string();
+             if (color) SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+             std::cout << std::endl;
+        };
+
+        auto printEntriesColumnar = [&](const std::vector<fs::directory_entry>& entries) {
+            if (entries.empty()) return;
+
+            size_t maxLen = 0;
+            for (const auto& entry : entries) {
+                size_t len = entry.path().filename().string().length();
+                if (len > maxLen) maxLen = len;
             }
+            
+            int colWidth = (int)maxLen + 2;
+            if (colWidth < 1) colWidth = 1;
+            int numCols = termWidth / colWidth;
+            if (numCols < 1) numCols = 1;
 
-            std::vector<fs::directory_entry> entries;
-            for (const auto& entry : fs::directory_iterator(targetPath)) {
-                std::string filename = entry.path().filename().string();
-                if (!showAll && filename[0] == '.') {
-                    continue;
-                }
-                entries.push_back(entry);
-            }
-
-            std::sort(entries.begin(), entries.end(), [](const fs::directory_entry& a, const fs::directory_entry& b) {
-                return a.path().filename().string() < b.path().filename().string();
-            });
-
-            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-
-            if (longFormat) {
-                for (const auto& entry : entries) {
-                    std::string perms;
-                    if (fs::is_directory(entry)) {
-                        perms = "d";
-                    } else if (fs::is_symlink(entry)) {
-                        perms = "l";
-                    } else {
-                        perms = "-";
-                    }
-                    
-                    auto status = fs::status(entry);
-                    auto p = status.permissions();
-                    perms += (p & fs::perms::owner_read) != fs::perms::none ? "r" : "-";
-                    perms += (p & fs::perms::owner_write) != fs::perms::none ? "w" : "-";
-                    perms += (p & fs::perms::owner_exec) != fs::perms::none ? "x" : "-";
-                    perms += (p & fs::perms::group_read) != fs::perms::none ? "r" : "-";
-                    perms += (p & fs::perms::group_write) != fs::perms::none ? "w" : "-";
-                    perms += (p & fs::perms::group_exec) != fs::perms::none ? "x" : "-";
-                    perms += (p & fs::perms::others_read) != fs::perms::none ? "r" : "-";
-                    perms += (p & fs::perms::others_write) != fs::perms::none ? "w" : "-";
-                    perms += (p & fs::perms::others_exec) != fs::perms::none ? "x" : "-";
-
-                    uintmax_t size = 0;
-                    if (fs::is_regular_file(entry)) {
-                        size = fs::file_size(entry);
-                    }
-
-                    auto ftime = fs::last_write_time(entry);
-                    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                        ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
-                    std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
-                    std::tm* tm = std::localtime(&cftime);
-                    char timeBuf[64];
-                    std::strftime(timeBuf, sizeof(timeBuf), "%b %d %H:%M", tm);
-
-                    std::cout << perms << " ";
-                    std::cout << std::setw(10) << size << " ";
-                    std::cout << timeBuf << " ";
-
-                    if (fs::is_directory(entry)) {
-                        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-                    } else {
-                        // Check for executable extensions
+            int col = 0;
+            for (const auto& entry : entries) {
+                std::string name = entry.path().filename().string();
+                
+                if (color) {
+                    if (fs::is_directory(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                    else if (fs::is_symlink(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                    else {
                         std::string ext = entry.path().extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || 
-                            ext == ".com" || ext == ".sh" || ext == ".ps1") {
+                        if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".sh") 
                             SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-                        }
+                        else if (ext == ".zip" || ext == ".tar" || ext == ".gz")
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                        else if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                        else
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
                     }
-
-                    std::cout << entry.path().filename().string();
-                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                    std::cout << std::endl;
-                }
-            } else {
-                CONSOLE_SCREEN_BUFFER_INFO csbi;
-                int termWidth = 80;
-                if (GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-                    termWidth = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-                }
-
-                size_t maxLen = 0;
-                for (const auto& entry : entries) {
-                    size_t len = entry.path().filename().string().length();
-                    if (len > maxLen) maxLen = len;
                 }
                 
-                int colWidth = static_cast<int>(maxLen) + 2;
-                int numCols = (std::max)(1, termWidth / colWidth);
-
-                int count = 0;
-                for (const auto& entry : entries) {
-                    if (fs::is_directory(entry)) {
-                        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-                    } else {
-                        // Check for executable extensions
-                        std::string ext = entry.path().extension().string();
-                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || 
-                            ext == ".com" || ext == ".sh" || ext == ".ps1") {
-                            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-                        }
-                    }
-                    
-                    std::cout << std::setw(colWidth) << std::left << entry.path().filename().string();
-                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                    
-                    count++;
-                    if (count % numCols == 0) {
-                        std::cout << std::endl;
-                    }
-                }
-                if (count % numCols != 0) {
+                std::cout << name;
+                if (color) SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                
+                col++;
+                if (col >= numCols) {
                     std::cout << std::endl;
+                    col = 0;
+                } else {
+                    int padding = colWidth - (int)name.length();
+                    for (int i = 0; i < padding; i++) std::cout << ' ';
                 }
             }
-        } catch (const std::exception& e) {
-            printError("ls: " + std::string(e.what()));
+            if (col != 0) std::cout << std::endl;
+        };
+
+        auto listDir = [&](auto&& self, const std::string& p) -> void {
+             if (!fs::exists(p)) {
+                 printError("ls: cannot access '" + p + "': No such file or directory");
+                 return;
+             }
+             if (!fs::is_directory(p)) {
+                 fs::directory_entry entry(p);
+                 if (longFormat) {
+                     printEntryLong(entry);
+                 } else {
+                     std::vector<fs::directory_entry> single = {entry};
+                     printEntriesColumnar(single);
+                 }
+                 return;
+             }
+             
+             if (recursive && paths.size() > 1) std::cout << p << ":" << std::endl;
+             
+             std::vector<fs::directory_entry> entries;
+             try {
+                 for (const auto& entry : fs::directory_iterator(p)) {
+                     std::string name = entry.path().filename().string();
+                     if (!showAll && name[0] == '.') continue;
+                     entries.push_back(entry);
+                 }
+             } catch (const std::exception& e) {
+                 printError("ls: " + std::string(e.what()));
+                 return;
+             }
+             
+             std::sort(entries.begin(), entries.end(), [&](const fs::directory_entry& a, const fs::directory_entry& b) {
+                 if (timeSort) return fs::last_write_time(a) > fs::last_write_time(b);
+                 if (sizeSort) {
+                     uintmax_t sa = 0, sb = 0;
+                     if (!fs::is_directory(a)) sa = fs::file_size(a);
+                     if (!fs::is_directory(b)) sb = fs::file_size(b);
+                     return sa > sb;
+                 }
+                 return a.path().filename().string() < b.path().filename().string();
+             });
+             
+             if (reverse) std::reverse(entries.begin(), entries.end());
+             
+             if (longFormat) {
+                 for (const auto& entry : entries) {
+                     printEntryLong(entry);
+                 }
+             } else if (oneColumn) {
+                 for (const auto& entry : entries) {
+                     if (color) {
+                         if (fs::is_directory(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                         else if (fs::is_symlink(entry)) SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                         else {
+                             std::string ext = entry.path().extension().string();
+                             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                             if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".sh") 
+                                 SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                             else if (ext == ".zip" || ext == ".tar" || ext == ".gz")
+                                 SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                             else if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
+                                 SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                             else
+                                 SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                         }
+                     }
+                     std::cout << entry.path().filename().string();
+                     if (color) SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                     std::cout << std::endl;
+                 }
+             } else {
+                 printEntriesColumnar(entries);
+             }
+             
+             if (recursive) {
+                 for (const auto& entry : entries) {
+                     if (fs::is_directory(entry)) {
+                         std::string name = entry.path().filename().string();
+                         if (name != "." && name != "..") {
+                             std::cout << std::endl << entry.path().string() << ":" << std::endl;
+                             self(self, entry.path().string());
+                         }
+                     }
+                 }
+             }
+        };
+
+        for (const auto& path : paths) {
+             listDir(listDir, resolvePath(path));
         }
     }
 
     void cmdMkdir(const std::vector<std::string>& args) {
-        if (args.size() < 2) {
+        bool parents = false;
+        bool verbose = false;
+        std::vector<std::string> dirs;
+        
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-p" || args[i] == "--parents") parents = true;
+            else if (args[i] == "-v" || args[i] == "--verbose") verbose = true;
+            else if (args[i][0] != '-') dirs.push_back(args[i]);
+        }
+        
+        if (dirs.empty()) {
             printError("mkdir: missing operand");
             return;
-        }
-
-        bool parents = false;
-        std::vector<std::string> dirs;
-
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-p" || args[i] == "--parents") {
-                parents = true;
-            } else {
-                dirs.push_back(args[i]);
-            }
         }
 
         for (const auto& dir : dirs) {
             try {
                 std::string fullPath = resolvePath(dir);
-                if (parents) {
-                    fs::create_directories(fullPath);
-                } else {
-                    fs::create_directory(fullPath);
-                }
-                printSuccess("Created directory: " + dir);
+                bool created = false;
+                if (parents) created = fs::create_directories(fullPath);
+                else created = fs::create_directory(fullPath);
+                
+                if (verbose && created) std::cout << "mkdir: created directory '" << dir << "'" << std::endl;
             } catch (const std::exception& e) {
                 printError("mkdir: cannot create directory '" + dir + "': " + e.what());
             }
@@ -642,130 +760,218 @@ private:
     }
 
     void cmdRm(const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            printError("rm: missing operand");
-            return;
-        }
-
         bool recursive = false;
-        bool force = false;
+        bool force = false; 
+        bool interactive = false; 
+        bool verbose = false; 
         std::vector<std::string> targets;
 
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-r" || args[i] == "-R" || args[i] == "--recursive") {
-                recursive = true;
-            } else if (args[i] == "-f" || args[i] == "--force") {
-                force = true;
-            } else if (args[i] == "-rf" || args[i] == "-fr") {
-                recursive = true;
-                force = true;
-            } else {
-                targets.push_back(args[i]);
-            }
+             std::string arg = args[i];
+             if (arg == "-r" || arg == "-R" || arg == "--recursive") recursive = true;
+             else if (arg == "-f" || arg == "--force") force = true;
+             else if (arg == "-i" || arg == "--interactive") interactive = true;
+             else if (arg == "-v" || arg == "--verbose") verbose = true;
+             else if (arg.length() > 1 && arg[0] == '-') {
+                  for (size_t k = 1; k < arg.length(); ++k) {
+                       if (arg[k] == 'r' || arg[k] == 'R') recursive = true;
+                       else if (arg[k] == 'f') force = true;
+                       else if (arg[k] == 'i') interactive = true;
+                       else if (arg[k] == 'v') verbose = true;
+                  }
+             }
+             else targets.push_back(args[i]);
+        }
+        
+        if (targets.empty()) {
+             printError("rm: missing operand");
+             return;
         }
 
         for (const auto& target : targets) {
-            try {
-                std::string fullPath = resolvePath(target);
-                
-                if (!fs::exists(fullPath)) {
-                    if (!force) {
-                        printError("rm: cannot remove '" + target + "': No such file or directory");
-                    }
-                    continue;
-                }
+             std::string fullPath = resolvePath(target);
+             if (!fs::exists(fullPath)) {
+                 if (!force) printError("rm: cannot remove '" + target + "': No such file or directory");
+                 continue;
+             }
+             
+             if (interactive) {
+                 std::cout << "rm: remove " << (fs::is_directory(fullPath) ? "directory" : "regular file") << " '" << target << "'? ";
+                 std::string answer;
+                 std::getline(std::cin, answer);
+                 if (answer.empty() || (answer[0] != 'y' && answer[0] != 'Y')) continue;
+             }
 
-                if (fs::is_directory(fullPath)) {
-                    if (!recursive) {
-                        printError("rm: cannot remove '" + target + "': Is a directory");
-                        continue;
-                    }
-                    fs::remove_all(fullPath);
-                } else {
-                    fs::remove(fullPath);
-                }
-            } catch (const std::exception& e) {
-                if (!force) {
-                    printError("rm: cannot remove '" + target + "': " + e.what());
-                }
-            }
+             try {
+                 if (fs::is_directory(fullPath)) {
+                     if (!recursive) {
+                         printError("rm: cannot remove '" + target + "': Is a directory");
+                         continue;
+                     }
+                     fs::remove_all(fullPath);
+                     if (verbose) std::cout << "removed directory '" << target << "'" << std::endl;
+                 } else {
+                     fs::remove(fullPath);
+                     if (verbose) std::cout << "removed '" << target << "'" << std::endl;
+                 }
+             } catch (const std::exception& e) {
+                 if (!force) printError("rm: cannot remove '" + target + "': " + e.what());
+             }
         }
     }
 
     void cmdMv(const std::vector<std::string>& args) {
-        if (args.size() < 3) {
-            printError("mv: missing operand");
-            std::cout << "Usage: mv <source> <destination>" << std::endl;
-            return;
-        }
-
-        try {
-            std::string source = resolvePath(args[1]);
-            std::string dest = resolvePath(args[2]);
-
-            if (!fs::exists(source)) {
-                printError("mv: cannot stat '" + args[1] + "': No such file or directory");
-                return;
-            }
-
-            if (fs::is_directory(dest)) {
-                dest = (fs::path(dest) / fs::path(source).filename()).string();
-            }
-
-            fs::rename(source, dest);
-        } catch (const std::exception& e) {
-            printError("mv: " + std::string(e.what()));
-        }
+         bool interactive = false;
+         bool noClobber = false; 
+         bool update = false;
+         bool verbose = false;
+         std::vector<std::string> operands;
+         
+         for (size_t i = 1; i < args.size(); ++i) {
+             std::string arg = args[i];
+             if (arg == "-i" || arg == "--interactive") interactive = true;
+             else if (arg == "-n" || arg == "--no-clobber") noClobber = true;
+             else if (arg == "-u" || arg == "--update") update = true;
+             else if (arg == "-v" || arg == "--verbose") verbose = true;
+             else if (arg[0] != '-') operands.push_back(arg);
+         }
+         
+         if (operands.size() < 2) {
+             printError("mv: missing operand");
+             return;
+         }
+         
+         std::string destPath = resolvePath(operands.back());
+         bool destIsDir = fs::exists(destPath) && fs::is_directory(destPath);
+         
+         if (operands.size() > 2 && !destIsDir) {
+              printError("mv: target '" + operands.back() + "' is not a directory");
+              return;
+         }
+         
+         for (size_t i = 0; i < operands.size() - 1; ++i) {
+              std::string sourcePath = resolvePath(operands[i]);
+              if (!fs::exists(sourcePath)) {
+                  printError("mv: cannot stat '" + operands[i] + "': No such file or directory");
+                  continue;
+              }
+              
+              std::string actualDest = destPath;
+              if (destIsDir) {
+                  actualDest = (fs::path(destPath) / fs::path(sourcePath).filename()).string();
+              }
+              
+              if (fs::exists(actualDest)) {
+                   if (noClobber) continue;
+                   if (update) {
+                       try {
+                           if (fs::last_write_time(sourcePath) <= fs::last_write_time(actualDest)) continue;
+                       } catch(...) {}
+                   }
+                   if (interactive) {
+                       std::cout << "mv: overwrite '" << actualDest << "'? ";
+                       std::string ans;
+                       std::getline(std::cin, ans);
+                       if (ans.empty() || (ans[0] != 'y' && ans[0] != 'Y')) continue;
+                   }
+                   fs::remove_all(actualDest); 
+              }
+              
+              try {
+                  fs::rename(sourcePath, actualDest);
+                  if (verbose) std::cout << "renamed '" << operands[i] << "' -> '" << actualDest << "'" << std::endl;
+              } catch (const std::exception& e) {
+                  printError("mv: cannot move '" + operands[i] + "' to '" + actualDest + "': " + e.what());
+              }
+         }
     }
 
     void cmdCp(const std::vector<std::string>& args) {
-        if (args.size() < 3) {
-            printError("cp: missing operand");
-            std::cout << "Usage: cp [-r] <source> <destination>" << std::endl;
-            return;
-        }
-
-        bool recursive = false;
-        std::vector<std::string> operands;
-
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-r" || args[i] == "-R" || args[i] == "--recursive") {
-                recursive = true;
-            } else {
-                operands.push_back(args[i]);
-            }
-        }
-
-        if (operands.size() < 2) {
-            printError("cp: missing destination operand");
-            return;
-        }
-
-        try {
-            std::string source = resolvePath(operands[0]);
-            std::string dest = resolvePath(operands[1]);
-
-            if (!fs::exists(source)) {
-                printError("cp: cannot stat '" + operands[0] + "': No such file or directory");
-                return;
-            }
-
-            if (fs::is_directory(source)) {
-                if (!recursive) {
-                    printError("cp: -r not specified; omitting directory '" + operands[0] + "'");
-                    return;
-                }
-                
-                fs::copy(source, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-            } else {
-                if (fs::is_directory(dest)) {
-                    dest = (fs::path(dest) / fs::path(source).filename()).string();
-                }
-                fs::copy_file(source, dest, fs::copy_options::overwrite_existing);
-            }
-        } catch (const std::exception& e) {
-            printError("cp: " + std::string(e.what()));
-        }
+         bool recursive = false;
+         bool interactive = false;
+         bool noClobber = false;
+         bool update = false;
+         bool verbose = false;
+         std::vector<std::string> operands;
+         
+         for (size_t i = 1; i < args.size(); ++i) {
+             std::string arg = args[i];
+             if (arg == "-r" || arg == "-R" || arg == "--recursive") recursive = true;
+             else if (arg == "-i" || arg == "--interactive") interactive = true;
+             else if (arg == "-n" || arg == "--no-clobber") noClobber = true;
+             else if (arg == "-u" || arg == "--update") update = true;
+             else if (arg == "-v" || arg == "--verbose") verbose = true;
+             else if (arg.length() > 1 && arg[0] == '-') {
+                  for (size_t k = 1; k < arg.length(); ++k) {
+                       if (arg[k] == 'r' || arg[k] == 'R') recursive = true;
+                       else if (arg[k] == 'i') interactive = true;
+                       else if (arg[k] == 'n') noClobber = true;
+                       else if (arg[k] == 'u') update = true;
+                       else if (arg[k] == 'v') verbose = true;
+                  }
+             }
+             else operands.push_back(arg);
+         }
+         
+         if (operands.size() < 2) {
+             printError("cp: missing operand");
+             return;
+         }
+         
+         std::string destPath = resolvePath(operands.back());
+         bool destIsDir = fs::exists(destPath) && fs::is_directory(destPath);
+         
+         if (operands.size() > 2 && !destIsDir) {
+              printError("cp: target '" + operands.back() + "' is not a directory");
+              return;
+         }
+         
+         for (size_t i = 0; i < operands.size() - 1; ++i) {
+              std::string sourcePath = resolvePath(operands[i]);
+              if (!fs::exists(sourcePath)) {
+                   printError("cp: cannot stat '" + operands[i] + "': No such file or directory");
+                   continue;
+              }
+              
+              if (fs::is_directory(sourcePath) && !recursive) {
+                   printError("cp: -r not specified; omitting directory '" + operands[i] + "'");
+                   continue;
+              }
+              
+              std::string actualDest = destPath;
+              if (destIsDir) {
+                   actualDest = (fs::path(destPath) / fs::path(sourcePath).filename()).string();
+              }
+              
+              if (fs::exists(actualDest)) {
+                   if (noClobber) continue;
+                   if (update) {
+                        try {
+                             if (fs::last_write_time(sourcePath) <= fs::last_write_time(actualDest)) continue;
+                        } catch(...) {}
+                   }
+                   if (interactive) {
+                        std::cout << "cp: overwrite '" << actualDest << "'? ";
+                        std::string ans;
+                        std::getline(std::cin, ans);
+                        if (ans.empty() || (ans[0] != 'y' && ans[0] != 'Y')) continue;
+                   }
+              }
+              
+              try {
+                   auto options = fs::copy_options::overwrite_existing;
+                   if (recursive) options |= fs::copy_options::recursive;
+                   
+                   if (fs::is_directory(sourcePath)) {
+                       fs::copy(sourcePath, actualDest, options);
+                   } else {
+                       fs::copy_file(sourcePath, actualDest, options);
+                   }
+                   if (verbose) std::cout << "'" << operands[i] << "' -> '" << actualDest << "'" << std::endl;
+              } catch (const std::exception& e) {
+                   printError("cp: cannot copy: " + std::string(e.what()));
+              }
+         }
     }
 
     void cmdCat(const std::vector<std::string>& args) {
@@ -785,6 +991,9 @@ private:
             }
         }
 
+        constexpr size_t BUFFER_SIZE = 65536; 
+        std::vector<char> buffer(BUFFER_SIZE);
+
         for (const auto& file : files) {
             try {
                 std::string fullPath = resolvePath(file);
@@ -799,20 +1008,42 @@ private:
                     continue;
                 }
 
-                std::ifstream ifs(fullPath);
+                std::ifstream ifs(fullPath, std::ios::binary);
                 if (!ifs) {
                     printError("cat: " + file + ": Cannot open file");
                     continue;
                 }
 
-                std::string line;
-                int lineNum = 1;
-                while (std::getline(ifs, line)) {
-                    if (showNumbers) {
-                        std::cout << std::setw(6) << lineNum << "  ";
+                if (!showNumbers) {
+                    while (ifs.read(buffer.data(), BUFFER_SIZE) || ifs.gcount() > 0) {
+                        std::cout.write(buffer.data(), ifs.gcount());
+                        if (!ifs) break; 
                     }
-                    std::cout << line << std::endl;
-                    lineNum++;
+                    std::cout.flush();
+                } else {
+                    long long lineNum = 1;
+                    bool newLine = true; 
+
+                    while (ifs.read(buffer.data(), BUFFER_SIZE) || ifs.gcount() > 0) {
+                        std::streamsize count = ifs.gcount();
+                        for (std::streamsize i = 0; i < count; ++i) {
+                            if (newLine) {
+                                std::cout << std::setw(6) << lineNum << "  ";
+                                lineNum++;
+                                newLine = false;
+                            }
+                            char c = buffer[i];
+                            std::cout.put(c);
+                            if (c == '\n') {
+                                newLine = true;
+                            }
+                        }
+                        if (!ifs) break;
+                    }
+                    if (newLine && lineNum > 1) { 
+                    } else if (!newLine) {
+                        std::cout << std::endl; 
+                    }
                 }
             } catch (const std::exception& e) {
                 printError("cat: " + std::string(e.what()));
@@ -826,166 +1057,257 @@ private:
 
     // touch - create files or update timestamps
     void cmdTouch(const std::vector<std::string>& args) {
-        if (args.size() < 2) {
+        bool noCreate = false;
+        bool updateAccess = false;
+        bool updateMod = false;
+        std::string refFile;
+        std::string dateStr;
+        std::vector<std::string> files;
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string arg = args[i];
+            if (arg == "-c" || arg == "--no-create") noCreate = true;
+            else if (arg == "-a") updateAccess = true;
+            else if (arg == "-m") updateMod = true;
+            else if (arg == "-r" && i + 1 < args.size()) refFile = args[++i];
+            else if (arg == "-t" && i + 1 < args.size()) dateStr = args[++i];
+            else if (arg[0] != '-') files.push_back(arg);
+        }
+
+        if (!updateAccess && !updateMod) {
+            updateAccess = updateMod = true;
+        }
+
+        if (files.empty()) {
             printError("touch: missing file operand");
             return;
         }
 
-        for (size_t i = 1; i < args.size(); ++i) {
-            try {
-                std::string fullPath = resolvePath(args[i]);
-                
-                if (fs::exists(fullPath)) {
-                    // Update modification time using _utime
-                    if (_utime(fullPath.c_str(), nullptr) == 0) {
-                        printSuccess("Updated: " + args[i]);
-                    } else {
-                        printError("touch: cannot touch '" + args[i] + "'");
-                    }
-                } else {
-                    // Create new empty file
-                    std::ofstream file(fullPath);
-                    if (file) {
-                        file.close();
-                        printSuccess("Created: " + args[i]);
-                    } else {
-                        printError("touch: cannot create '" + args[i] + "'");
-                    }
+        FILETIME ft = {0, 0};
+        SYSTEMTIME st = {0};
+        GetSystemTime(&st);
+        
+        if (!dateStr.empty()) {
+            int year = st.wYear;
+            int month = st.wMonth;
+            int day = st.wDay;
+            int hour = st.wHour;
+            int min = st.wMinute;
+            int sec = 0;
+            
+            size_t dotPos = dateStr.find('.');
+            if (dotPos != std::string::npos) {
+                if (dotPos + 1 < dateStr.length()) {
+                    try { sec = std::stoi(dateStr.substr(dotPos + 1)); } catch(...) {}
                 }
-            } catch (const std::exception& e) {
-                printError("touch: " + std::string(e.what()));
+                dateStr = dateStr.substr(0, dotPos);
+            }
+            
+            bool valid = true;
+            try {
+                if (dateStr.length() == 8) {
+                    month = std::stoi(dateStr.substr(0, 2));
+                    day = std::stoi(dateStr.substr(2, 2));
+                    hour = std::stoi(dateStr.substr(4, 2));
+                    min = std::stoi(dateStr.substr(6, 2));
+                } else if (dateStr.length() == 10) {
+                    int yy = std::stoi(dateStr.substr(0, 2));
+                    year = (yy < 69) ? (2000 + yy) : (1900 + yy); 
+                    month = std::stoi(dateStr.substr(2, 2));
+                    day = std::stoi(dateStr.substr(4, 2));
+                    hour = std::stoi(dateStr.substr(6, 2));
+                    min = std::stoi(dateStr.substr(8, 2));
+                } else if (dateStr.length() == 12) {
+                    year = std::stoi(dateStr.substr(0, 4));
+                    month = std::stoi(dateStr.substr(4, 2));
+                    day = std::stoi(dateStr.substr(6, 2));
+                    hour = std::stoi(dateStr.substr(8, 2));
+                    min = std::stoi(dateStr.substr(10, 2));
+                } else {
+                    valid = false;
+                }
+            } catch(...) { valid = false; }
+            
+            if (valid) {
+                st.wYear = year;
+                st.wMonth = month;
+                st.wDay = day;
+                st.wHour = hour;
+                st.wMinute = min;
+                st.wSecond = sec;
+                st.wMilliseconds = 0;
+                SystemTimeToFileTime(&st, &ft);
+            } else {
+                printError("touch: invalid date format '" + dateStr + "'");
+                return;
+            }
+        } else if (!refFile.empty()) {
+            HANDLE hRef = CreateFileA(resolvePath(refFile).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hRef != INVALID_HANDLE_VALUE) {
+                GetFileTime(hRef, NULL, NULL, &ft);
+                CloseHandle(hRef);
+            } else {
+                printError("touch: failed to get attributes of '" + refFile + "'");
+                return;
+            }
+        } else {
+            SystemTimeToFileTime(&st, &ft);
+        }
+
+        for (const auto& file : files) {
+            std::string fullPath = resolvePath(file);
+            
+            if (!fs::exists(fullPath)) {
+                if (noCreate) continue;
+                HANDLE h = CreateFileA(fullPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (h != INVALID_HANDLE_VALUE) {
+                    CloseHandle(h);
+                } else {
+                    printError("touch: cannot touch '" + file + "': " + std::to_string(GetLastError()));
+                    continue;
+                }
+            }
+
+            HANDLE hFile = CreateFileA(fullPath.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                FILETIME* pAccess = updateAccess ? &ft : NULL;
+                FILETIME* pWrite = updateMod ? &ft : NULL;
+                if (!SetFileTime(hFile, NULL, pAccess, pWrite)) {
+                     printError("touch: setting times of '" + file + "': " + std::to_string(GetLastError()));
+                }
+                CloseHandle(hFile);
+            } else {
+                printError("touch: cannot touch '" + file + "'");
             }
         }
     }
 
-    // chmod - change file permissions (Windows adaptation)
     void cmdChmod(const std::vector<std::string>& args) {
         if (args.size() < 3) {
             printError("chmod: missing operand");
-            std::cout << "Usage: chmod <mode> <file>..." << std::endl;
-            std::cout << "  Modes: +x (executable), -x (not executable)" << std::endl;
-            std::cout << "         +w (writable), -w (read-only)" << std::endl;
-            std::cout << "         +r (readable), -r (hidden)" << std::endl;
+            std::cout << "Usage: chmod [-R] <mode> <file>..." << std::endl;
             return;
         }
 
-        std::string mode = args[1];
+        bool recursive = false;
+        bool verbose = false;
+        std::string mode;
+        std::vector<std::string> files;
         
-        for (size_t i = 2; i < args.size(); ++i) {
-            try {
-                std::string fullPath = resolvePath(args[i]);
-                
-                if (!fs::exists(fullPath)) {
-                    printError("chmod: cannot access '" + args[i] + "': No such file or directory");
-                    continue;
-                }
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string arg = args[i];
+            if (arg == "-R" || arg == "--recursive") recursive = true;
+            else if (arg == "-v" || arg == "--verbose") verbose = true;
+            else if (mode.empty() && arg[0] != '-') mode = arg;
+            else if (arg[0] != '-') files.push_back(arg);
+        }
 
-                DWORD attrs = GetFileAttributesA(fullPath.c_str());
-                if (attrs == INVALID_FILE_ATTRIBUTES) {
-                    printError("chmod: cannot access '" + args[i] + "'");
-                    continue;
-                }
+        if (mode.empty() || files.empty()) {
+             printError("chmod: missing mode or file operand");
+             return;
+        }
 
-                bool success = false;
-                
-                if (mode == "+w") {
-                    // Remove read-only attribute
-                    attrs &= ~FILE_ATTRIBUTE_READONLY;
-                    success = SetFileAttributesA(fullPath.c_str(), attrs);
-                    if (success) printSuccess("Made writable: " + args[i]);
-                } else if (mode == "-w") {
-                    // Set read-only attribute
-                    attrs |= FILE_ATTRIBUTE_READONLY;
-                    success = SetFileAttributesA(fullPath.c_str(), attrs);
-                    if (success) printSuccess("Made read-only: " + args[i]);
-                } else if (mode == "+r") {
-                    // Remove hidden attribute (make visible/readable)
-                    attrs &= ~FILE_ATTRIBUTE_HIDDEN;
-                    success = SetFileAttributesA(fullPath.c_str(), attrs);
-                    if (success) printSuccess("Made visible: " + args[i]);
-                } else if (mode == "-r") {
-                    // Set hidden attribute
-                    attrs |= FILE_ATTRIBUTE_HIDDEN;
-                    success = SetFileAttributesA(fullPath.c_str(), attrs);
-                    if (success) printSuccess("Made hidden: " + args[i]);
-                } else if (mode == "+x") {
-                    // Windows doesn't have execute bit, but we can note it
-                    // Check if it's a valid executable extension
-                    std::string ext = fs::path(fullPath).extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".exe" || ext == ".cmd" || ext == ".bat" || ext == ".ps1") {
-                        printSuccess("File is already executable: " + args[i]);
-                    } else {
-                        std::cout << "Note: Windows executability is determined by file extension (.exe, .cmd, .bat)" << std::endl;
-                        printSuccess("Marked as executable: " + args[i]);
-                    }
-                    success = true;
-                } else if (mode == "-x") {
-                    std::cout << "Note: Windows executability is determined by file extension" << std::endl;
-                    success = true;
-                } else if (mode.length() == 3 && std::all_of(mode.begin(), mode.end(), ::isdigit)) {
-                    // Numeric mode like 755, 644
-                    std::cout << "Note: Numeric permissions (" << mode << ") mapped to Windows attributes" << std::endl;
-                    int ownerPerms = mode[0] - '0';
-                    if ((ownerPerms & 2) == 0) {
-                        // No write permission - make read-only
-                        attrs |= FILE_ATTRIBUTE_READONLY;
-                    } else {
-                        attrs &= ~FILE_ATTRIBUTE_READONLY;
-                    }
-                    success = SetFileAttributesA(fullPath.c_str(), attrs);
-                    if (success) printSuccess("Applied permissions to: " + args[i]);
-                } else {
-                    printError("chmod: invalid mode '" + mode + "'");
-                    continue;
-                }
+        auto applyMode = [&](const std::string& path) {
+             DWORD attrs = GetFileAttributesA(path.c_str());
+             if (attrs == INVALID_FILE_ATTRIBUTES) return;
+             
+             DWORD newAttrs = attrs;
+             
+             if (isdigit(mode[0])) {
+                 int m = mode[0] - '0';
+                 if ((m & 2) == 0) newAttrs |= FILE_ATTRIBUTE_READONLY;
+                 else newAttrs &= ~FILE_ATTRIBUTE_READONLY;
+             } else {
+                 bool add = false;
+                 bool remove = false;
+                 
+                 for (char c : mode) {
+                     if (c == '+') { add = true; remove = false; }
+                     else if (c == '-') { add = false; remove = true; }
+                     else if (c == 'w') {
+                         if (add) newAttrs &= ~FILE_ATTRIBUTE_READONLY;
+                         if (remove) newAttrs |= FILE_ATTRIBUTE_READONLY;
+                     }
+                     else if (c == 'h') {
+                         if (add) newAttrs |= FILE_ATTRIBUTE_HIDDEN;
+                         if (remove) newAttrs &= ~FILE_ATTRIBUTE_HIDDEN;
+                     }
+                 }
+             }
+             
+             if (newAttrs != attrs) {
+                 if (SetFileAttributesA(path.c_str(), newAttrs)) {
+                     if (verbose) std::cout << "mode of '" << path << "' changed" << std::endl;
+                 } else {
+                     printError("chmod: changing permissions of '" + path + "': failed");
+                 }
+             }
+        };
 
-                if (!success && mode != "+x" && mode != "-x") {
-                    printError("chmod: failed to change permissions for '" + args[i] + "'");
-                }
-            } catch (const std::exception& e) {
-                printError("chmod: " + std::string(e.what()));
-            }
+        for (const auto& file : files) {
+             std::string root = resolvePath(file);
+             if (!fs::exists(root)) {
+                 printError("chmod: cannot access '" + file + "': No such file or directory");
+                 continue;
+             }
+             
+             applyMode(root);
+             
+             if (recursive && fs::is_directory(root)) {
+                 try {
+                     for (const auto& entry : fs::recursive_directory_iterator(root)) {
+                         applyMode(entry.path().string());
+                     }
+                 } catch(...) {}
+             }
         }
     }
 
-    // chown - change file ownership (Windows adaptation)
     void cmdChown(const std::vector<std::string>& args) {
         if (args.size() < 3) {
             printError("chown: missing operand");
-            std::cout << "Usage: chown <owner> <file>..." << std::endl;
+            std::cout << "Usage: chown [-R] <owner> <file>..." << std::endl;
             return;
         }
 
-        std::string owner = args[1];
-        
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "Note: Windows file ownership changes require elevated privileges." << std::endl;
-        std::cout << "      Attempting to use icacls to grant permissions..." << std::endl;
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        
-        for (size_t i = 2; i < args.size(); ++i) {
-            try {
-                std::string fullPath = resolvePath(args[i]);
-                
-                if (!fs::exists(fullPath)) {
-                    printError("chown: cannot access '" + args[i] + "': No such file or directory");
-                    continue;
-                }
+        bool recursive = false;
+        bool verbose = false;
+        std::string owner;
+        std::vector<std::string> files;
 
-                // Use icacls to grant full control to the specified user
-                std::string cmd = "icacls \"" + fullPath + "\" /grant " + owner + ":F 2>nul";
-                int result = system(cmd.c_str());
-                
-                if (result == 0) {
-                    printSuccess("Granted permissions to " + owner + " for: " + args[i]);
-                } else {
-                    printError("chown: permission change failed for '" + args[i] + "' (may need admin rights)");
-                }
-            } catch (const std::exception& e) {
-                printError("chown: " + std::string(e.what()));
-            }
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string arg = args[i];
+            if (arg == "-R" || arg == "--recursive") recursive = true;
+            else if (arg == "-v" || arg == "--verbose") verbose = true;
+            else if (owner.empty() && arg[0] != '-') owner = arg;
+            else if (arg[0] != '-') files.push_back(arg);
+        }
+
+        if (owner.empty() || files.empty()) {
+             printError("chown: missing owner or file operand");
+             return;
+        }
+
+        size_t colon = owner.find(':');
+        if (colon != std::string::npos) {
+            owner = owner.substr(0, colon);
+        }
+
+        for (const auto& file : files) {
+             std::string root = resolvePath(file);
+             if (!fs::exists(root)) {
+                 printError("chown: cannot access '" + file + "': No such file or directory");
+                 continue;
+             }
+             
+             std::string cmd = "cmd /c icacls \"" + root + "\" /setowner " + owner + (recursive ? " /T" : "") + " /C /Q >nul 2>&1";
+             int res = runProcess(cmd);
+             
+             if (res == 0) {
+                 if (verbose) std::cout << "ownership of '" + file + "' retained as " + owner << std::endl;
+             } else {
+                 printError("chown: changing ownership of '" + file + "': Operation not permitted (or user invalid)");
+             }
         }
     }
 
@@ -1079,33 +1401,77 @@ private:
         }
     }
 
-    // echo - print text
     void cmdEcho(const std::vector<std::string>& args) {
         bool newline = true;
+        bool interpretEscapes = false;
         size_t start = 1;
         
-        if (args.size() > 1 && args[1] == "-n") {
-            newline = false;
-            start = 2;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-n") { newline = false; start = i + 1; }
+            else if (args[i] == "-e") { interpretEscapes = true; start = i + 1; }
+            else if (args[i] == "-E") { interpretEscapes = false; start = i + 1; }
+            else if (args[i] == "-ne" || args[i] == "-en") { newline = false; interpretEscapes = true; start = i + 1; }
+            else break;
         }
+        
+        auto processEscapes = [](const std::string& input) -> std::string {
+            std::string result;
+            for (size_t i = 0; i < input.length(); ++i) {
+                if (input[i] == '\\' && i + 1 < input.length()) {
+                    char next = input[i + 1];
+                    if (next == 'n') { result += '\n'; i++; }
+                    else if (next == 't') { result += '\t'; i++; }
+                    else if (next == 'r') { result += '\r'; i++; }
+                    else if (next == 'a') { result += '\a'; i++; }
+                    else if (next == 'b') { result += '\b'; i++; }
+                    else if (next == 'v') { result += '\v'; i++; }
+                    else if (next == 'f') { result += '\f'; i++; }
+                    else if (next == '\\') { result += '\\'; i++; }
+                    else if (next == '0') {
+                        int val = 0;
+                        size_t j = i + 2;
+                        while (j < input.length() && j < i + 5 && input[j] >= '0' && input[j] <= '7') {
+                            val = val * 8 + (input[j] - '0');
+                            j++;
+                        }
+                        result += (char)val;
+                        i = j - 1;
+                    }
+                    else if (next == 'x') {
+                        int val = 0;
+                        size_t j = i + 2;
+                        while (j < input.length() && j < i + 4) {
+                            char c = input[j];
+                            if (c >= '0' && c <= '9') val = val * 16 + (c - '0');
+                            else if (c >= 'a' && c <= 'f') val = val * 16 + (c - 'a' + 10);
+                            else if (c >= 'A' && c <= 'F') val = val * 16 + (c - 'A' + 10);
+                            else break;
+                            j++;
+                        }
+                        result += (char)val;
+                        i = j - 1;
+                    }
+                    else if (next == 'e' || next == 'E') { result += '\033'; i++; }
+                    else if (next == 'c') { return result; }
+                    else { result += input[i]; }
+                } else {
+                    result += input[i];
+                }
+            }
+            return result;
+        };
         
         for (size_t i = start; i < args.size(); ++i) {
             std::string text = args[i];
             
-            // Expand environment variables ($VAR or ${VAR})
             size_t pos = 0;
             while ((pos = text.find('$', pos)) != std::string::npos) {
                 size_t end = pos + 1;
-                bool braced = false;
                 
                 if (end < text.length() && text[end] == '{') {
-                    braced = true;
-                    end++;
-                    size_t close = text.find('}', end);
+                    size_t close = text.find('}', end + 1);
                     if (close != std::string::npos) {
-                        std::string varName = text.substr(end, close - end);
-                        
-                        // Check session env first, then system
+                        std::string varName = text.substr(end + 1, close - end - 1);
                         std::string value;
                         auto it = sessionEnv.find(varName);
                         if (it != sessionEnv.end()) {
@@ -1114,20 +1480,16 @@ private:
                             char* envVal = nullptr;
                             size_t len;
                             _dupenv_s(&envVal, &len, varName.c_str());
-                            if (envVal) {
-                                value = envVal;
-                                free(envVal);
-                            }
+                            if (envVal) { value = envVal; free(envVal); }
                         }
-                        
                         text = text.substr(0, pos) + value + text.substr(close + 1);
+                        continue;
                     }
                 } else {
                     while (end < text.length() && (isalnum(text[end]) || text[end] == '_')) {
                         end++;
                     }
                     std::string varName = text.substr(pos + 1, end - pos - 1);
-                    
                     std::string value;
                     auto it = sessionEnv.find(varName);
                     if (it != sessionEnv.end()) {
@@ -1136,15 +1498,16 @@ private:
                         char* envVal = nullptr;
                         size_t len;
                         _dupenv_s(&envVal, &len, varName.c_str());
-                        if (envVal) {
-                            value = envVal;
-                            free(envVal);
-                        }
+                        if (envVal) { value = envVal; free(envVal); }
                     }
-                    
                     text = text.substr(0, pos) + value + text.substr(end);
+                    continue;
                 }
                 pos++;
+            }
+            
+            if (interpretEscapes) {
+                text = processEscapes(text);
             }
             
             if (i > start) std::cout << " ";
@@ -1336,8 +1699,8 @@ private:
         
         // Try to remove from PATH using PowerShell
         std::cout << "Removing from system PATH..." << std::endl;
-        std::string removePathCmd = "powershell -Command \"$path = [Environment]::GetEnvironmentVariable('PATH', 'User'); $newPath = ($path -split ';' | Where-Object { $_ -notlike '*Linuxify*' }) -join ';'; [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')\" 2>nul";
-        system(removePathCmd.c_str());
+        std::string removePathCmd = "cmd /c powershell -Command \"$path = [Environment]::GetEnvironmentVariable('PATH', 'User'); $newPath = ($path -split ';' | Where-Object { $_ -notlike '*Linuxify*' }) -join ';'; [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')\" 2>nul";
+        runProcess(removePathCmd);
         
         // Create a batch script to delete the folder after we exit
         std::string tempPath = std::getenv("TEMP") ? std::string(std::getenv("TEMP")) : "C:\\Windows\\Temp";
@@ -1355,8 +1718,8 @@ private:
             batch.close();
             
             // Start the batch file in a new window
-            std::string startCmd = "start \"\" cmd /c \"" + batchFile + "\"";
-            system(startCmd.c_str());
+            std::string startCmd = "cmd /c start \"\" cmd /c \"" + batchFile + "\"";
+            runProcess(startCmd, "", false);
         }
         
         std::cout << std::endl;
@@ -1372,56 +1735,173 @@ private:
         running = false;
     }
 
-    // ps - list processes
     void cmdPs(const std::vector<std::string>& args) {
-        bool detailed = false;
+        bool allProcesses = false;
+        bool fullFormat = false;
+        bool extendedFormat = false;
+        std::string filterUser;
+        DWORD filterPid = 0;
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-l" || args[i] == "--long" || args[i] == "-aux") {
-                detailed = true;
+            if (args[i] == "-e" || args[i] == "-A" || args[i] == "aux" || args[i] == "-aux") {
+                allProcesses = true;
+                fullFormat = true;
+            } else if (args[i] == "-f" || args[i] == "--full") {
+                fullFormat = true;
+            } else if (args[i] == "-l" || args[i] == "--long") {
+                extendedFormat = true;
+            } else if ((args[i] == "-u" || args[i] == "-U") && i + 1 < args.size()) {
+                filterUser = args[++i];
+                allProcesses = true;
+            } else if (args[i] == "-p" && i + 1 < args.size()) {
+                try { filterPid = std::stoul(args[++i]); } catch (...) {}
             }
         }
-        
-        if (detailed) {
-            ProcessManager::listProcessesDetailed();
+
+        HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnap == INVALID_HANDLE_VALUE) {
+            printError("ps: failed to enumerate processes");
+            return;
+        }
+
+        struct ProcInfo {
+            DWORD pid;
+            DWORD ppid;
+            std::string name;
+            size_t memoryKB;
+            DWORD threads;
+        };
+        std::vector<ProcInfo> procs;
+
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe)) {
+            do {
+                if (filterPid != 0 && pe.th32ProcessID != filterPid) continue;
+                
+                ProcInfo info;
+                info.pid = pe.th32ProcessID;
+                info.ppid = pe.th32ParentProcessID;
+                info.name = pe.szExeFile;
+                info.threads = pe.cntThreads;
+                info.memoryKB = 0;
+
+                HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+                if (hProc) {
+                    PROCESS_MEMORY_COUNTERS pmc;
+                    if (GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc))) {
+                        info.memoryKB = pmc.WorkingSetSize / 1024;
+                    }
+                    CloseHandle(hProc);
+                }
+                
+                procs.push_back(info);
+            } while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+
+        if (extendedFormat || fullFormat) {
+            std::cout << std::left << std::setw(8) << "PID" 
+                      << std::setw(8) << "PPID"
+                      << std::setw(8) << "THR"
+                      << std::setw(12) << "RSS(KB)"
+                      << "COMMAND" << std::endl;
+            
+            for (const auto& p : procs) {
+                std::cout << std::left << std::setw(8) << p.pid
+                          << std::setw(8) << p.ppid
+                          << std::setw(8) << p.threads
+                          << std::setw(12) << p.memoryKB
+                          << p.name << std::endl;
+            }
         } else {
-            ProcessManager::listProcesses();
+            std::cout << std::left << std::setw(8) << "PID" << "COMMAND" << std::endl;
+            for (const auto& p : procs) {
+                if (!allProcesses && p.pid == 0) continue;
+                std::cout << std::left << std::setw(8) << p.pid << p.name << std::endl;
+            }
         }
     }
 
-    // kill - terminate a process
     void cmdKill(const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            printError("kill: missing PID or job ID");
-            std::cout << "Usage: kill <PID> or kill %<job_id>" << std::endl;
+        static const std::map<std::string, int> signalMap = {
+            {"SIGHUP", 1}, {"HUP", 1}, {"1", 1},
+            {"SIGINT", 2}, {"INT", 2}, {"2", 2},
+            {"SIGQUIT", 3}, {"QUIT", 3}, {"3", 3},
+            {"SIGKILL", 9}, {"KILL", 9}, {"9", 9},
+            {"SIGTERM", 15}, {"TERM", 15}, {"15", 15},
+            {"SIGSTOP", 17}, {"STOP", 17}, {"17", 17},
+            {"SIGCONT", 19}, {"CONT", 19}, {"19", 19}
+        };
+
+        if (args.size() >= 2 && (args[1] == "-l" || args[1] == "--list")) {
+            std::cout << " 1) SIGHUP     2) SIGINT     3) SIGQUIT    9) SIGKILL\n";
+            std::cout << "15) SIGTERM   17) SIGSTOP   19) SIGCONT\n";
             return;
         }
-        
-        std::string target = args[1];
-        
-        // Check if it's a job ID (%n)
-        if (target[0] == '%') {
-            try {
-                int jobId = std::stoi(target.substr(1));
-                if (g_procMgr.killJob(jobId)) {
-                    printSuccess("Job " + std::to_string(jobId) + " terminated.");
+
+        if (args.size() < 2) {
+            printError("kill: missing PID");
+            return;
+        }
+
+        int signal = 15;
+        std::vector<std::string> targets;
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-s" && i + 1 < args.size()) {
+                std::string sigName = args[++i];
+                std::transform(sigName.begin(), sigName.end(), sigName.begin(), ::toupper);
+                auto it = signalMap.find(sigName);
+                if (it != signalMap.end()) {
+                    signal = it->second;
                 } else {
-                    printError("kill: no such job: " + target);
+                    try { signal = std::stoi(sigName); } catch (...) {
+                        printError("kill: invalid signal: " + sigName);
+                        return;
+                    }
                 }
-            } catch (...) {
-                printError("kill: invalid job ID: " + target);
+            } else if (args[i][0] == '-' && args[i].length() > 1 && std::isdigit(args[i][1])) {
+                try { signal = std::stoi(args[i].substr(1)); } catch (...) {}
+            } else if (args[i][0] == '-' && args[i].length() > 1 && std::isalpha(args[i][1])) {
+                std::string sigName = args[i].substr(1);
+                std::transform(sigName.begin(), sigName.end(), sigName.begin(), ::toupper);
+                auto it = signalMap.find(sigName);
+                if (it != signalMap.end()) signal = it->second;
+            } else {
+                targets.push_back(args[i]);
             }
-        } else {
-            // It's a PID
-            try {
-                DWORD pid = std::stoul(target);
-                if (g_procMgr.killByPid(pid)) {
-                    printSuccess("Process " + target + " terminated.");
-                } else {
-                    printError("kill: failed to terminate process " + target);
+        }
+
+        for (const auto& target : targets) {
+            if (target[0] == '%') {
+                try {
+                    int jobId = std::stoi(target.substr(1));
+                    if (g_procMgr.killJob(jobId)) {
+                        printSuccess("Job " + std::to_string(jobId) + " terminated.");
+                    } else {
+                        printError("kill: no such job: " + target);
+                    }
+                } catch (...) {
+                    printError("kill: invalid job ID: " + target);
                 }
-            } catch (...) {
-                printError("kill: invalid PID: " + target);
+            } else {
+                try {
+                    DWORD pid = std::stoul(target);
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+                    if (hProc) {
+                        if (TerminateProcess(hProc, signal)) {
+                            printSuccess("Process " + target + " killed with signal " + std::to_string(signal));
+                        } else {
+                            printError("kill: failed to terminate process " + target);
+                        }
+                        CloseHandle(hProc);
+                    } else {
+                        printError("kill: (" + target + ") - No such process or access denied");
+                    }
+                } catch (...) {
+                    printError("kill: invalid PID: " + target);
+                }
             }
         }
     }
@@ -1501,403 +1981,875 @@ private:
         return false;
     }
 
-    // grep - search for pattern in file or input
+    // grep - search for pattern in file or input using buffered reading and regex
     void cmdGrep(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         if (args.size() < 2) {
             printError("grep: missing pattern");
-            std::cout << "Usage: grep <pattern> [file]" << std::endl;
+            std::cout << "Usage: grep [OPTIONS] PATTERN [FILE...]" << std::endl;
             return;
         }
-        
-        std::string pattern = args[1];
-        bool ignoreCase = false;
-        bool lineNumbers = false;
-        bool invertMatch = false;
-        size_t argStart = 2;
-        
-        // Parse flags
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-i") { ignoreCase = true; argStart++; }
-            else if (args[i] == "-n") { lineNumbers = true; argStart++; }
-            else if (args[i] == "-v") { invertMatch = true; argStart++; }
-            else if (args[i][0] != '-') { pattern = args[i]; argStart = i + 1; break; }
+
+        struct GrepOptions {
+             bool ignoreCase = false;
+             bool lineNumbers = false;
+             bool invertMatch = false;
+             bool countOnly = false;
+             bool recursive = false;
+             bool useRegex = false;
+             bool showFilename = false; // Implicit if multiple files
+             int context = 0;
+        } opts;
+
+        std::string pattern;
+        std::vector<std::string> files;
+        size_t argIdx = 1;
+
+        // Argument Parsing
+        for (; argIdx < args.size(); ++argIdx) {
+            std::string arg = args[argIdx];
+            if (arg[0] != '-') {
+                 if (pattern.empty()) pattern = arg;
+                 else files.push_back(arg);
+            } else {
+                 if (arg == "-i" || arg == "--ignore-case") opts.ignoreCase = true;
+                 else if (arg == "-n" || arg == "--line-number") opts.lineNumbers = true;
+                 else if (arg == "-v" || arg == "--invert-match") opts.invertMatch = true;
+                 else if (arg == "-c" || arg == "--count") opts.countOnly = true;
+                 else if (arg == "-r" || arg == "-R" || arg == "--recursive") opts.recursive = true;
+                 else if (arg == "-E" || arg == "--extended-regexp") opts.useRegex = true;
+                 else if (arg == "-h" || arg == "--no-filename") opts.showFilename = false;
+                 else if (arg == "-H" || arg == "--with-filename") opts.showFilename = true;
+                 else if (arg.rfind("-C", 0) == 0 && arg.length() > 2) opts.context = std::stoi(arg.substr(2));
+                 else if (arg == "-C" && argIdx + 1 < args.size()) opts.context = std::stoi(args[++argIdx]);
+                 else if (pattern.empty()) pattern = arg; // Handle negative pattern?? No, usually flags first
+            }
         }
         
-        std::vector<std::string> lines;
+        if (pattern.empty()) {
+             printError("grep: missing pattern");
+             return;
+        }
+
+        if (files.empty() && opts.recursive) files.push_back(".");
         
-        if (!pipedInput.empty()) {
-            // Use piped input
+        bool multipleFiles = files.size() > 1 || opts.recursive;
+        if (opts.recursive) multipleFiles = true;
+        int totalMatches = 0;
+
+        std::regex regexPattern;
+        try {
+            if (opts.useRegex) {
+                regexPattern = std::regex(pattern, opts.ignoreCase ? std::regex::icase : std::regex::ECMAScript);
+            }
+        } catch (...) {
+            printError("grep: invalid regular expression");
+            return;
+        }
+
+        auto performGrep = [&](std::istream& is, const std::string& filename) {
+             std::string line;
+             int lineNum = 0;
+             int matches = 0;
+             std::deque<std::string> contextBuffer; // For leading context
+             int contextCountdown = 0; // For trailing context
+
+             while (std::getline(is, line)) {
+                 lineNum++;
+                 bool found = false;
+                 std::smatch sm;
+
+                 if (opts.useRegex) {
+                     found = std::regex_search(line, sm, regexPattern);
+                 } else {
+                     std::string searchLine = line;
+                     std::string searchPat = pattern;
+                     if (opts.ignoreCase) {
+                         std::transform(searchLine.begin(), searchLine.end(), searchLine.begin(), ::tolower);
+                         std::transform(searchPat.begin(), searchPat.end(), searchPat.begin(), ::tolower);
+                     }
+                     found = searchLine.find(searchPat) != std::string::npos;
+                 }
+
+                 if (opts.invertMatch) found = !found;
+
+                 if (found) {
+                     matches++;
+                     if (opts.countOnly) continue;
+                     
+                     // Print Leading Context
+                     if (opts.context > 0 && !contextBuffer.empty()) {
+                          int cLine = lineNum - (int)contextBuffer.size();
+                          for (const auto& cL : contextBuffer) {
+                              if (multipleFiles || opts.showFilename) std::cout << filename << "-";
+                              if (opts.lineNumbers) std::cout << cLine << "-";
+                              std::cout << cL << std::endl;
+                              cLine++;
+                          }
+                          contextBuffer.clear();
+                     }
+
+                     // Print Match
+                     if (multipleFiles || opts.showFilename) {
+                         SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                         std::cout << filename << ":";
+                         SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                     }
+                     if (opts.lineNumbers) {
+                         SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                         std::cout << lineNum << ":";
+                         SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                     }
+
+                     // Highlight Pattern if not inverted
+                     if (!opts.invertMatch && !opts.useRegex) {
+                         // Basic highlight
+                         size_t pos = 0;
+                         std::string temp = line;
+                         std::string searchTemp = temp;
+                         if (opts.ignoreCase) std::transform(searchTemp.begin(), searchTemp.end(), searchTemp.begin(), ::tolower);
+                         std::string searchPat = pattern;
+                         if (opts.ignoreCase) std::transform(searchPat.begin(), searchPat.end(), searchPat.begin(), ::tolower);
+
+                         while ((pos = searchTemp.find(searchPat)) != std::string::npos) {
+                             std::cout << temp.substr(0, pos);
+                             SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_INTENSITY);
+                             std::cout << temp.substr(pos, pattern.length());
+                             SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                             temp = temp.substr(pos + pattern.length());
+                             searchTemp = searchTemp.substr(pos + searchPat.length());
+                         }
+                         std::cout << temp << std::endl;
+                     } else {
+                         std::cout << line << std::endl;
+                     }
+                     
+                     contextCountdown = opts.context;
+                 } else {
+                     // Not found
+                     if (contextCountdown > 0 && !opts.countOnly) {
+                         if (multipleFiles || opts.showFilename) std::cout << filename << "-";
+                         if (opts.lineNumbers) std::cout << lineNum << "-";
+                         std::cout << line << std::endl;
+                         contextCountdown--;
+                     } else if (opts.context > 0) {
+                         contextBuffer.push_back(line);
+                         if (contextBuffer.size() > (size_t)opts.context) contextBuffer.pop_front();
+                     }
+                 }
+             }
+
+             if (opts.countOnly) {
+                 if (multipleFiles || opts.showFilename) std::cout << filename << ":";
+                 std::cout << matches << std::endl;
+             }
+             return matches;
+        };
+
+        if (files.empty()) {
             std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-        } else if (argStart < args.size()) {
-            // Read from file
-            std::string filePath = resolvePath(args[argStart]);
-            std::ifstream file(filePath);
-            if (!file) {
-                printError("grep: cannot open '" + args[argStart] + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
+            totalMatches += performGrep(iss, "(standard input)");
         } else {
-            printError("grep: missing file operand");
-            return;
-        }
-        
-        std::string searchPattern = ignoreCase ? pattern : pattern;
-        
-        for (size_t i = 0; i < lines.size(); ++i) {
-            std::string line = lines[i];
-            std::string searchLine = ignoreCase ? line : line;
-            
-            if (ignoreCase) {
-                std::transform(searchLine.begin(), searchLine.end(), searchLine.begin(), ::tolower);
-                std::transform(searchPattern.begin(), searchPattern.end(), searchPattern.begin(), ::tolower);
-            }
-            
-            bool found = searchLine.find(searchPattern) != std::string::npos;
-            if (invertMatch) found = !found;
-            
-            if (found) {
-                if (lineNumbers) {
-                    std::cout << (i + 1) << ":";
+            for (const auto& file : files) {
+                if (opts.recursive && fs::is_directory(file)) {
+                     try {
+                         for (const auto& entry : fs::recursive_directory_iterator(file)) {
+                             if (entry.is_regular_file()) {
+                                 std::ifstream ifs(entry.path());
+                                 if (ifs) totalMatches += performGrep(ifs, entry.path().string());
+                             }
+                         }
+                     } catch (...) {}
+                } else {
+                     std::ifstream ifs(resolvePath(file));
+                     if (!ifs) {
+                         if (!opts.recursive) printError("grep: " + file + ": No such file or directory");
+                         lastExitCode = 2;
+                     } else {
+                         totalMatches += performGrep(ifs, file);
+                     }
                 }
-                // Highlight the match
-                size_t pos = 0;
-                std::string output = line;
-                HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-                
-                while ((pos = searchLine.find(searchPattern, pos)) != std::string::npos) {
-                    std::cout << line.substr(0, pos);
-                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-                    std::cout << line.substr(pos, pattern.length());
-                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                    line = line.substr(pos + pattern.length());
-                    searchLine = searchLine.substr(pos + searchPattern.length());
-                    pos = 0;
-                }
-                std::cout << line << std::endl;
             }
         }
+        
+        lastExitCode = (totalMatches > 0) ? 0 : 1;
     }
 
-    // head - show first N lines
+    // head - output first part of files
     void cmdHead(const std::vector<std::string>& args, const std::string& pipedInput = "") {
-        int numLines = 10;
-        std::string filePath;
-        
+        long long count = 10;
+        bool useBytes = false;
+        bool quiet = false;
+        bool verbose = false;
+        std::vector<std::string> files;
+
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-n" && i + 1 < args.size()) {
-                numLines = std::stoi(args[++i]);
-            } else if (args[i][0] == '-' && isdigit(args[i][1])) {
-                numLines = std::stoi(args[i].substr(1));
-            } else if (args[i][0] != '-') {
-                filePath = args[i];
-            }
+            std::string arg = args[i];
+            if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
+            else if (arg == "-c" && i + 1 < args.size()) { count = std::stoll(args[++i]); useBytes = true; }
+            else if (arg == "-q" || arg == "--quiet" || arg == "--silent") quiet = true;
+            else if (arg == "-v" || arg == "--verbose") verbose = true;
+            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg)); // handle -5
+            else files.push_back(arg);
         }
-        
-        std::vector<std::string> lines;
-        
-        if (!pipedInput.empty()) {
+
+        auto process = [&](std::istream& is, const std::string& name, bool showHeader) {
+            if (showHeader) {
+                std::cout << "==> " << name << " <==\n";
+            }
+            if (useBytes) {
+                char buf[4096];
+                long long remaining = count;
+                while (remaining > 0 && is) {
+                    long long toRead = (std::min)((long long)sizeof(buf), remaining);
+                    is.read(buf, toRead);
+                    std::cout.write(buf, is.gcount());
+                    remaining -= is.gcount();
+                }
+            } else {
+                std::string line;
+                long long remaining = count;
+                while (remaining > 0 && std::getline(is, line)) {
+                    std::cout << line << "\n";
+                    remaining--;
+                }
+            }
+            if (showHeader) std::cout << "\n";
+        };
+
+        if (files.empty() && !pipedInput.empty()) {
             std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("head: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
+            process(iss, "", false);
+        } else if (files.empty()) {
+             printError("head: missing file operand");
         } else {
-            printError("head: missing file operand");
-            return;
-        }
-        
-        for (int i = 0; i < numLines && i < (int)lines.size(); ++i) {
-            std::cout << lines[i] << std::endl;
+             bool showHeader = (files.size() > 1 && !quiet) || verbose;
+             for (const auto& file : files) {
+                 std::ifstream ifs(resolvePath(file), std::ios::binary);
+                 if (!ifs) {
+                     printError("head: cannot open '" + file + "'");
+                     continue;
+                 }
+                 process(ifs, file, showHeader);
+                 showHeader = (files.size() > 1 && !quiet); // Show separator for subsequent
+             }
         }
     }
 
-    // tail - show last N lines
+    // tail - output last part of files
     void cmdTail(const std::vector<std::string>& args, const std::string& pipedInput = "") {
-        int numLines = 10;
-        std::string filePath;
-        
+        long long count = 10;
+        bool useBytes = false;
+        bool follow = false;
+        bool quiet = false;
+        bool verbose = false;
+        std::vector<std::string> files;
+        int sleepInterval = 1000; // ms
+
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-n" && i + 1 < args.size()) {
-                numLines = std::stoi(args[++i]);
-            } else if (args[i][0] == '-' && isdigit(args[i][1])) {
-                numLines = std::stoi(args[i].substr(1));
-            } else if (args[i][0] != '-') {
-                filePath = args[i];
-            }
+            std::string arg = args[i];
+            if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
+            else if (arg == "-c" && i + 1 < args.size()) { count = std::stoll(args[++i]); useBytes = true; }
+            else if (arg == "-f" || arg == "--follow") follow = true;
+            else if (arg == "-q") quiet = true;
+            else if (arg == "-v") verbose = true;
+            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg)); 
+            else if (arg == "-s" && i + 1 < args.size()) sleepInterval = std::stoi(args[++i]) * 1000;
+            else files.push_back(arg);
         }
-        
-        std::vector<std::string> lines;
-        
-        if (!pipedInput.empty()) {
+
+        auto tailFile = [&](const std::string& path, bool showHeader) {
+            std::ifstream file(path, std::ios::binary);
+             if (!file) {
+                 printError("tail: cannot open '" + path + "'");
+                 return;
+             }
+             if (showHeader) std::cout << "==> " << path << " <==\n";
+
+             if (useBytes) {
+                 // Seek to end - count
+                 file.seekg(0, std::ios::end);
+                 long long fileSize = file.tellg();
+                 long long startPos = (std::max)(0LL, fileSize - count);
+                 file.seekg(startPos);
+                 std::cout << file.rdbuf();
+             } else {
+                 // Efficient backwards reading for lines
+                 file.seekg(0, std::ios::end);
+                 long long fileSize = file.tellg();
+                 if (fileSize == 0) return;
+
+                 long long pos = fileSize;
+                 long long linesFound = 0;
+                 // Optimization: Reading from end
+                 // Note: This is simpler than full buffer management but effective
+                 // We step back 4KB at a time
+                 const int CHUNK = 4096;
+                 char buffer[CHUNK];
+                 
+                 // If file is small, just read it all
+                 if (fileSize < CHUNK * 2 && count > 100) {
+                     file.seekg(0);
+                     // Fallback to forward read for small files/huge N
+                     std::vector<std::string> buf;
+                     std::string l;
+                     while(std::getline(file, l)) {
+                         buf.push_back(l);
+                         if (buf.size() > count) buf.erase(buf.begin());
+                     }
+                     for(const auto& s : buf) std::cout << s << "\n";
+                     return;
+                 }
+
+                 while (pos > 0 && linesFound <= count) {
+                      long long toRead = (std::min)((long long)CHUNK, pos);
+                      pos -= toRead;
+                      file.seekg(pos);
+                      file.read(buffer, toRead);
+                      for (long long k = toRead - 1; k >= 0; --k) {
+                          if (buffer[k] == '\n') {
+                              linesFound++;
+                              if (linesFound > count) {
+                                  pos += k + 1; // Point to char after newline
+                                  goto found_start;
+                              }
+                          }
+                      }
+                 }
+                 pos = 0; // Read from start if we didn't find N newlines
+                 
+                 found_start:
+                 file.seekg(pos);
+                 // Dump from pos
+                 std::cout << file.rdbuf(); 
+                 // Note: rdbuf dumping might lose the last newline if not present? usually ok
+             }
+             if (showHeader) std::cout << "\n";
+
+             if (follow) {
+                 file.clear(); // Clear EOF
+                 std::streampos lastPos = file.tellg();
+                 while (running) {
+                     // Check for new data
+                     // In real implementation we should use generic filesystem watcher
+                     // Polling here:
+                     std::this_thread::sleep_for(std::chrono::milliseconds(sleepInterval));
+                     fs::path p(path);
+                     if (fs::exists(p) && fs::file_size(p) > lastPos) {
+                         file.seekg(lastPos);
+                         std::string line;
+                         while (std::getline(file, line)) { // Or read block
+                             std::cout << line << std::endl;
+                         }
+                         if (!file.eof()) {
+                             // Block read might leave partial line? std::getline handles up to delim
+                         }
+                         file.clear();
+                         lastPos = file.tellg();
+                     } else if (fs::file_size(p) < lastPos) {
+                         std::cerr << "tail: " << path << ": file truncated" << std::endl;
+                         lastPos = 0;
+                         file.seekg(0);
+                     }
+                 }
+             }
+        };
+
+        if (files.empty() && !pipedInput.empty()) {
+            // Cannot seek on pipe, must use buffer
             std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
+            std::deque<std::string> ring;
+            if (useBytes) {
+                // ... byte ring buffer is harder, just dump last N chars? 
+                // String supports it
+                if (pipedInput.size() > count) 
+                    std::cout << pipedInput.substr(pipedInput.size() - count);
+                else 
+                    std::cout << pipedInput;
+            } else {
+                std::string line;
+                while (std::getline(iss, line)) {
+                    ring.push_back(line);
+                    if (ring.size() > count) ring.pop_front();
+                }
+                for (const auto& l : ring) std::cout << l << "\n";
             }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("tail: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
+        } else if (!files.empty()) {
+            bool showHeader = (files.size() > 1 && !quiet) || verbose;
+            for (const auto& f : files) {
+                tailFile(resolvePath(f), showHeader);
+                showHeader = (files.size() > 1);
             }
         } else {
-            printError("tail: missing file operand");
-            return;
-        }
-        
-        int start = std::max(0, (int)lines.size() - numLines);
-        for (int i = start; i < (int)lines.size(); ++i) {
-            std::cout << lines[i] << std::endl;
+             printError("tail: missing file operand");
         }
     }
 
-    // wc - word/line/char count
+    // wc - print newline, word, and byte counts
     void cmdWc(const std::vector<std::string>& args, const std::string& pipedInput = "") {
-        bool countLines = false, countWords = false, countChars = false;
-        std::string filePath;
-        
+        bool lines = false, words = false, chars = false, bytes = false;
+        bool maxLine = false;
+        std::vector<std::string> files;
+
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-l") countLines = true;
-            else if (args[i] == "-w") countWords = true;
-            else if (args[i] == "-c" || args[i] == "-m") countChars = true;
-            else if (args[i][0] != '-') filePath = args[i];
+            std::string arg = args[i];
+            if (arg == "-l" || arg == "--lines") lines = true;
+            else if (arg == "-w" || arg == "--words") words = true;
+            else if (arg == "-m" || arg == "--chars") chars = true;
+            else if (arg == "-c" || arg == "--bytes") bytes = true;
+            else if (arg == "-L" || arg == "--max-line-length") maxLine = true;
+            else files.push_back(arg);
         }
-        
-        // Default: show all
-        if (!countLines && !countWords && !countChars) {
-            countLines = countWords = countChars = true;
+
+        if (!lines && !words && !chars && !bytes && !maxLine) {
+            lines = words = bytes = true;
         }
-        
-        std::string content;
-        
-        if (!pipedInput.empty()) {
-            content = pipedInput;
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("wc: cannot open '" + filePath + "'");
-                return;
-            }
-            std::ostringstream oss;
-            oss << file.rdbuf();
-            content = oss.str();
+
+        auto countFile = [&](std::istream& is, const std::string& name) {
+             long long l = 0, w = 0, c = 0, b = 0, L = 0;
+             long long currentL = 0;
+             bool inWord = false;
+             char buf[8192];
+             
+             // Optimized stream reading
+             while (is.read(buf, sizeof(buf)) || is.gcount() > 0) {
+                 size_t n = is.gcount();
+                 b += n;
+
+                 for (size_t i = 0; i < n; ++i) {
+                     unsigned char ch = (unsigned char)buf[i];
+                     if (ch == '\n') {
+                         l++;
+                         if (currentL > L) L = currentL;
+                         currentL = 0;
+                     } else {
+                         // UTF-8 char counting logic
+                         if (chars) {
+                              // If using specific char count, skip continuation bytes
+                              if ((ch & 0xC0) != 0x80) c++;
+                         } else {
+                              c++; 
+                         }
+                         if ((ch & 0xC0) != 0x80) currentL++;
+                     }
+
+                     if (isspace(ch)) {
+                         inWord = false;
+                     } else if (!inWord) {
+                         inWord = true;
+                         w++;
+                     }
+                 }
+                 if (is.eof()) break;
+             }
+             if (currentL > L) L = currentL;
+
+             if (lines) std::cout << std::setw(4) << l << " ";
+             if (words) std::cout << std::setw(4) << w << " ";
+             if (bytes) std::cout << std::setw(4) << b << " ";
+             if (chars) std::cout << std::setw(4) << c << " ";
+             if (maxLine) std::cout << std::setw(4) << L << " ";
+             if (!name.empty()) std::cout << name;
+             std::cout << std::endl;
+             return std::make_tuple(l, w, b, c, L);
+        };
+
+        if (files.empty()) {
+             std::istringstream iss(pipedInput);
+             countFile(iss, "");
         } else {
-            printError("wc: missing file operand");
-            return;
+             long long tl=0, tw=0, tb=0, tc=0, tL=0;
+             for (const auto& file : files) {
+                  std::ifstream ifs(resolvePath(file), std::ios::binary);
+                  if (!ifs) {
+                      printError("wc: " + file + ": No such file or directory");
+                      continue;
+                  }
+                  auto [l, w, b, c, L] = countFile(ifs, file);
+                  tl += l; tw += w; tb += b; tc += c; tL = (std::max)(tL, L);
+             }
+             if (files.size() > 1) {
+                 if (lines) std::cout << std::setw(4) << tl << " ";
+                 if (words) std::cout << std::setw(4) << tw << " ";
+                 if (bytes) std::cout << std::setw(4) << tb << " ";
+                 if (chars) std::cout << std::setw(4) << tc << " ";
+                 if (maxLine) std::cout << std::setw(4) << tL << " ";
+                 std::cout << "total" << std::endl;
+             }
         }
-        
-        int lines = 0, words = 0, chars = (int)content.length();
-        bool inWord = false;
-        
-        for (char c : content) {
-            if (c == '\n') lines++;
-            if (isspace(c)) {
-                inWord = false;
-            } else if (!inWord) {
-                inWord = true;
-                words++;
-            }
-        }
-        
-        if (countLines) std::cout << std::setw(8) << lines;
-        if (countWords) std::cout << std::setw(8) << words;
-        if (countChars) std::cout << std::setw(8) << chars;
-        if (!filePath.empty()) std::cout << " " << filePath;
-        std::cout << std::endl;
     }
 
-    // sort - sort lines
+    // sort - sort lines of text files
     void cmdSort(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         bool reverse = false;
         bool numeric = false;
         bool unique = false;
-        std::string filePath;
+        bool ignoreCase = false;
+        bool check = false;
+        int keyStart = 0; 
+        int keyEnd = 0;
+        std::vector<std::string> files;
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-r") reverse = true;
-            else if (args[i] == "-n") numeric = true;
-            else if (args[i] == "-u") unique = true;
-            else if (args[i][0] != '-') filePath = args[i];
+            std::string arg = args[i];
+            if (arg == "-r" || arg == "--reverse") reverse = true;
+            else if (arg == "-n" || arg == "--numeric-sort") numeric = true;
+            else if (arg == "-u" || arg == "--unique") unique = true;
+            else if (arg == "-f" || arg == "--ignore-case") ignoreCase = true;
+            else if (arg == "-c" || arg == "--check") check = true;
+            else if (arg == "-k" && i + 1 < args.size()) {
+                std::string kdef = args[++i];
+                size_t comma = kdef.find(',');
+                if (comma != std::string::npos) {
+                    keyStart = std::stoi(kdef.substr(0, comma));
+                    keyEnd = std::stoi(kdef.substr(comma + 1));
+                } else {
+                    keyStart = std::stoi(kdef);
+                    keyEnd = 0; 
+                }
+            }
+            else if (arg[0] != '-') files.push_back(arg);
         }
         
         std::vector<std::string> lines;
         
-        if (!pipedInput.empty()) {
+        auto readLines = [&](std::istream& is) {
+            std::string line;
+            while (std::getline(is, line)) {
+                lines.push_back(line);
+            }
+        };
+
+        if (files.empty() && !pipedInput.empty()) {
             std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("sort: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
+            readLines(iss);
+        } else if (files.empty()) {
+             printError("sort: missing file operand");
+             return;
         } else {
-            printError("sort: missing file operand");
+             for (const auto& file : files) {
+                 std::ifstream ifs(resolvePath(file));
+                 if (!ifs) {
+                     printError("sort: cannot open '" + file + "'");
+                     return;
+                 }
+                 readLines(ifs);
+             }
+        }
+
+        auto extractKey = [&](const std::string& s) {
+            if (keyStart == 0) return s; 
+            
+            std::istringstream iss(s);
+            std::string token;
+            std::string keyStr;
+            int col = 1;
+            while (iss >> token) {
+                if (col >= keyStart) {
+                    if (!keyStr.empty()) keyStr += " ";
+                    keyStr += token;
+                }
+                if (keyEnd > 0 && col >= keyEnd) break;
+                col++;
+            }
+            return keyStr;
+        };
+
+        auto compare = [&](const std::string& a, const std::string& b) {
+             std::string ka = extractKey(a);
+             std::string kb = extractKey(b);
+
+             if (numeric) {
+                 try {
+                     double da = std::stod(ka);
+                     double db = std::stod(kb);
+                     return da < db;
+                 } catch (...) {
+                     return ka < kb;
+                 }
+             }
+             
+             if (ignoreCase) {
+                 std::transform(ka.begin(), ka.end(), ka.begin(), ::tolower);
+                 std::transform(kb.begin(), kb.end(), kb.begin(), ::tolower);
+             }
+             
+             return ka < kb;
+        };
+
+        if (check) {
+            for (size_t i = 1; i < lines.size(); ++i) {
+                bool ordered = !reverse ? !compare(lines[i], lines[i-1]) : !compare(lines[i-1], lines[i]);
+                if (reverse) {
+                    if (compare(lines[i-1], lines[i])) { 
+                        std::cout << "sort: disorder: " << lines[i] << std::endl;
+                        return;
+                    }
+                } else {
+                     if (compare(lines[i], lines[i-1])) {
+                         std::cout << "sort: disorder: " << lines[i] << std::endl;
+                         return;
+                     }
+                }
+            }
             return;
         }
-        
-        if (numeric) {
-            std::sort(lines.begin(), lines.end(), [](const std::string& a, const std::string& b) {
-                try { return std::stod(a) < std::stod(b); }
-                catch (...) { return a < b; }
-            });
-        } else {
-            std::sort(lines.begin(), lines.end());
-        }
-        
+
+        std::sort(lines.begin(), lines.end(), compare);
+
         if (reverse) {
             std::reverse(lines.begin(), lines.end());
         }
         
-        std::string prev;
+        if (unique) {
+            auto last = std::unique(lines.begin(), lines.end(), [&](const std::string& a, const std::string& b){
+                 std::string ka = extractKey(a);
+                 std::string kb = extractKey(b);
+                 if (ignoreCase) {
+                      std::transform(ka.begin(), ka.end(), ka.begin(), ::tolower);
+                      std::transform(kb.begin(), kb.end(), kb.begin(), ::tolower);
+                 }
+                 return ka == kb;
+            });
+            lines.erase(last, lines.end());
+        }
+        
         for (const auto& line : lines) {
-            if (!unique || line != prev) {
-                std::cout << line << std::endl;
-                prev = line;
-            }
+            std::cout << line << std::endl;
         }
     }
 
-    // uniq - remove duplicate consecutive lines
+    // uniq - report or omit repeated lines
     void cmdUniq(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         bool countDupes = false;
-        bool onlyDupes = false;
-        std::string filePath;
+        bool onlyDupes = false; 
+        bool onlyUnique = false; 
+        bool ignoreCase = false;
+        int skipFields = 0;
+        int skipChars = 0;
+        std::vector<std::string> files;
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-c") countDupes = true;
-            else if (args[i] == "-d") onlyDupes = true;
-            else if (args[i][0] != '-') filePath = args[i];
+            std::string arg = args[i];
+            if (arg == "-c" || arg == "--count") countDupes = true;
+            else if (arg == "-d" || arg == "--repeated") onlyDupes = true;
+            else if (arg == "-u" || arg == "--unique") onlyUnique = true;
+            else if (arg == "-i" || arg == "--ignore-case") ignoreCase = true;
+            else if (arg.rfind("-f", 0) == 0) skipFields = std::stoi(arg.length() > 2 ? arg.substr(2) : args[++i]);
+            else if (arg.rfind("-s", 0) == 0) skipChars = std::stoi(arg.length() > 2 ? arg.substr(2) : args[++i]);
+            else if (arg[0] != '-') files.push_back(arg);
         }
         
-        std::vector<std::string> lines;
+        std::unique_ptr<std::istream> inputPtr;
+        std::ifstream fileStream;
         
         if (!pipedInput.empty()) {
-            std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("uniq: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
+             inputPtr = std::make_unique<std::istringstream>(pipedInput);
+        } else if (!files.empty()) {
+             fileStream.open(resolvePath(files[0])); 
+             if (!fileStream) {
+                 printError("uniq: cannot open '" + files[0] + "'");
+                 return;
+             }
         } else {
-            printError("uniq: missing file operand");
-            return;
+             printError("uniq: missing file operand");
+             return;
         }
         
-        std::string prev;
-        int count = 0;
+        std::istream& is = (!pipedInput.empty()) ? (std::istream&)*inputPtr : fileStream;
         
-        for (size_t i = 0; i <= lines.size(); ++i) {
-            if (i < lines.size() && lines[i] == prev) {
+        std::ostream* os = &std::cout;
+        std::ofstream outStream;
+        if (files.size() > 1) {
+             outStream.open(resolvePath(files[1]));
+             if (outStream) os = &outStream;
+        }
+
+        std::string prevLine;
+        std::string currentLine;
+        int count = 0;
+        bool first = true;
+
+        auto linesMatch = [&](const std::string& a, const std::string& b) {
+            std::string sa = a;
+            std::string sb = b;
+            
+            if (skipFields > 0) {
+                 int skipped = 0;
+                 size_t posA = 0, posB = 0;
+                 while (skipped < skipFields) {
+                     while (posA < sa.length() && !isspace((unsigned char)sa[posA])) posA++;
+                     while (posA < sa.length() && isspace((unsigned char)sa[posA])) posA++;
+                     while (posB < sb.length() && !isspace((unsigned char)sb[posB])) posB++;
+                     while (posB < sb.length() && isspace((unsigned char)sb[posB])) posB++;
+                     skipped++;
+                 }
+                 if (posA < sa.length()) sa = sa.substr(posA); else sa = "";
+                 if (posB < sb.length()) sb = sb.substr(posB); else sb = "";
+            }
+            
+            if (skipChars > 0 && sa.length() > (size_t)skipChars) sa = sa.substr(skipChars);
+            if (skipChars > 0 && sb.length() > (size_t)skipChars) sb = sb.substr(skipChars);
+            
+            if (ignoreCase) {
+                std::transform(sa.begin(), sa.end(), sa.begin(), ::tolower);
+                std::transform(sb.begin(), sb.end(), sb.begin(), ::tolower);
+            }
+            return sa == sb;
+        };
+
+        auto flush = [&](const std::string& line, int cnt) {
+             if (cnt == 0) return;
+             bool print = true;
+             if (onlyDupes && cnt == 1) print = false;
+             if (onlyUnique && cnt > 1) print = false;
+             
+             if (print) {
+                 if (countDupes) *os << std::setw(7) << cnt << " ";
+                 *os << line << std::endl;
+             }
+        };
+
+        while (std::getline(is, currentLine)) {
+            if (first) {
+                prevLine = currentLine;
+                count = 1;
+                first = false;
+                continue;
+            }
+            
+            if (linesMatch(prevLine, currentLine)) {
                 count++;
             } else {
-                if (!prev.empty()) {
-                    if (!onlyDupes || count > 1) {
-                        if (countDupes) {
-                            std::cout << std::setw(7) << count << " ";
-                        }
-                        std::cout << prev << std::endl;
-                    }
-                }
-                if (i < lines.size()) {
-                    prev = lines[i];
-                    count = 1;
-                }
+                flush(prevLine, count);
+                prevLine = currentLine;
+                count = 1;
             }
         }
+        if (!first) flush(prevLine, count);
     }
 
-    // find - search for files
+    // find - search for files in a directory hierarchy
     void cmdFind(const std::vector<std::string>& args) {
-        std::string searchPath = ".";
+        std::vector<std::string> paths;
         std::string namePattern;
-        std::string typeFilter;  // "f" for file, "d" for directory
-        
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-name" && i + 1 < args.size()) {
-                namePattern = args[++i];
-            } else if (args[i] == "-type" && i + 1 < args.size()) {
-                typeFilter = args[++i];
-            } else if (args[i][0] != '-') {
-                searchPath = args[i];
+        std::string typeFilter; 
+        long long sizeMin = -1, sizeMax = -1;
+        int maxDepth = -1;
+        bool exec = false;
+        std::vector<std::string> execCommand;
+
+        size_t i = 1;
+        while (i < args.size() && args[i][0] != '-') {
+            paths.push_back(args[i++]);
+        }
+        if (paths.empty()) paths.push_back(".");
+
+        for (; i < args.size(); ++i) {
+            std::string arg = args[i];
+            if (arg == "-name" && i + 1 < args.size()) namePattern = args[++i];
+            else if (arg == "-type" && i + 1 < args.size()) typeFilter = args[++i];
+            else if (arg == "-size" && i + 1 < args.size()) {
+                std::string s = args[++i];
+                bool gt = (s[0] == '+');
+                bool lt = (s[0] == '-');
+                if (gt || lt) s = s.substr(1);
+                long long val = 0;
+                try { 
+                     size_t suffixPos = 0;
+                     val = std::stoll(s, &suffixPos);
+                     if (suffixPos < s.length()) {
+                         char suf = s[suffixPos];
+                         if (suf == 'k' || suf == 'K') val *= 1024;
+                         else if (suf == 'M') val *= 1024*1024;
+                         else if (suf == 'G') val *= 1024*1024*1024;
+                     }
+                } catch(...) {}
+                
+                if (gt) sizeMin = val + 1;
+                else if (lt) sizeMax = val - 1;
+                else { sizeMin = val; sizeMax = val; } 
             }
-        }
-        
-        std::string fullPath = resolvePath(searchPath);
-        
-        if (!fs::exists(fullPath)) {
-            printError("find: '" + searchPath + "': No such file or directory");
-            return;
-        }
-        
-        try {
-            for (const auto& entry : fs::recursive_directory_iterator(fullPath, fs::directory_options::skip_permission_denied)) {
-                std::string filename = entry.path().filename().string();
-                
-                // Type filter
-                if (typeFilter == "f" && !entry.is_regular_file()) continue;
-                if (typeFilter == "d" && !entry.is_directory()) continue;
-                
-                // Name pattern matching (simple wildcard support)
-                if (!namePattern.empty()) {
-                    bool match = false;
-                    if (namePattern[0] == '*') {
-                        // Suffix match
-                        std::string suffix = namePattern.substr(1);
-                        match = filename.length() >= suffix.length() &&
-                                filename.substr(filename.length() - suffix.length()) == suffix;
-                    } else if (namePattern.back() == '*') {
-                        // Prefix match
-                        std::string prefix = namePattern.substr(0, namePattern.length() - 1);
-                        match = filename.substr(0, prefix.length()) == prefix;
-                    } else {
-                        match = filename == namePattern;
-                    }
-                    if (!match) continue;
+            else if (arg == "-maxdepth" && i + 1 < args.size()) maxDepth = std::stoi(args[++i]);
+            else if (arg == "-exec") {
+                exec = true;
+                i++;
+                while (i < args.size()) {
+                    if (args[i] == ";") break;
+                    execCommand.push_back(args[i]);
+                    i++;
                 }
-                
-                std::cout << entry.path().string() << std::endl;
             }
-        } catch (const std::exception& e) {
-            printError("find: " + std::string(e.what()));
+        }
+
+        for (const auto& path : paths) {
+            std::string root = resolvePath(path);
+            if (!fs::exists(root)) {
+                printError("find: '" + path + "': No such file or directory");
+                continue;
+            }
+
+            try {
+                auto walker = [&](auto&& self, const fs::path& p, int depth) -> void {
+                    if (maxDepth != -1 && depth > maxDepth) return;
+                    
+                    bool match = true;
+                    std::string filename = p.filename().string();
+                    
+                    if (!namePattern.empty()) {
+                         if (namePattern.front() == '*' && namePattern.back() == '*') {
+                             std::string sub = namePattern.substr(1, namePattern.length()-2);
+                             if (filename.find(sub) == std::string::npos) match = false;
+                         } else if (namePattern.front() == '*') {
+                             std::string suf = namePattern.substr(1);
+                             if (filename.length() < suf.length() || filename.substr(filename.length()-suf.length()) != suf) match=false;
+                         } else if (namePattern.back() == '*') {
+                             std::string pre = namePattern.substr(0, namePattern.length()-1);
+                             if (filename.substr(0, pre.length()) != pre) match=false;
+                         } else {
+                             if (filename != namePattern) match = false;
+                         }
+                    }
+
+                    if (match && !typeFilter.empty()) {
+                        if (typeFilter == "f" && !fs::is_regular_file(p)) match = false;
+                        else if (typeFilter == "d" && !fs::is_directory(p)) match = false;
+                    }
+
+                    if (match && (sizeMin != -1 || sizeMax != -1)) {
+                         if (fs::is_regular_file(p)) {
+                             uintmax_t sz = fs::file_size(p);
+                             if (sizeMin != -1 && sz < (uintmax_t)sizeMin) match = false;
+                             if (sizeMax != -1 && sz > (uintmax_t)sizeMax) match = false;
+                         } else {
+                             match = false;
+                         }
+                    }
+
+                    if (match) {
+                        if (exec) {
+                            std::string cmd;
+                            for (const auto& part : execCommand) {
+                                if (part == "{}") cmd += "\"" + p.string() + "\" ";
+                                else cmd += part + " ";
+                            }
+                            runProcess("cmd /c " + cmd);
+                        } else {
+                            std::cout << p.string() << std::endl;
+                        }
+                    }
+
+                    if (fs::is_directory(p)) {
+                        for (const auto& entry : fs::directory_iterator(p)) {
+                             self(self, entry.path(), depth + 1);
+                        }
+                    }
+                };
+                
+                walker(walker, root, 0);
+
+            } catch (const std::exception& e) {
+                printError("find: " + std::string(e.what()));
+            }
         }
     }
 
@@ -1982,149 +2934,272 @@ private:
         SetConsoleMode(hInput, oldMode);
     }
 
-    // cut - extract columns from text
     void cmdCut(const std::vector<std::string>& args, const std::string& pipedInput = "") {
-        char delimiter = '\t';  // Default delimiter is tab
-        std::vector<int> fields;
-        std::string filePath;
+        char delimiter = '\t';
+        std::string outputDelimiter;
+        bool outputDelimiterSet = false;
+        std::vector<std::pair<int, int>> ranges;
+        std::vector<std::string> files;
+        bool byByte = false;
         bool byChar = false;
+        bool byField = false;
+        bool complement = false;
+        bool onlyDelimited = false;
+        
+        auto parseRange = [&](const std::string& spec) {
+            std::istringstream ss(spec);
+            std::string part;
+            while (std::getline(ss, part, ',')) {
+                size_t dashPos = part.find('-');
+                if (dashPos == std::string::npos) {
+                    int val = std::stoi(part);
+                    ranges.push_back({val, val});
+                } else if (dashPos == 0) {
+                    int end = std::stoi(part.substr(1));
+                    ranges.push_back({1, end});
+                } else if (dashPos == part.length() - 1) {
+                    int start = std::stoi(part.substr(0, dashPos));
+                    ranges.push_back({start, INT_MAX});
+                } else {
+                    int start = std::stoi(part.substr(0, dashPos));
+                    int end = std::stoi(part.substr(dashPos + 1));
+                    ranges.push_back({start, end});
+                }
+            }
+        };
         
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "-d" && i + 1 < args.size()) {
                 std::string delim = args[++i];
                 if (!delim.empty()) delimiter = delim[0];
+            } else if (args[i].substr(0, 2) == "-d" && args[i].length() > 2) {
+                delimiter = args[i][2];
             } else if (args[i] == "-f" && i + 1 < args.size()) {
-                std::string fieldSpec = args[++i];
-                // Parse field specification (e.g., "1,2,3" or "1-3")
-                std::istringstream fss(fieldSpec);
-                std::string part;
-                while (std::getline(fss, part, ',')) {
-                    size_t dashPos = part.find('-');
-                    if (dashPos != std::string::npos) {
-                        int start = std::stoi(part.substr(0, dashPos));
-                        int end = std::stoi(part.substr(dashPos + 1));
-                        for (int f = start; f <= end; ++f) {
-                            fields.push_back(f);
-                        }
-                    } else {
-                        fields.push_back(std::stoi(part));
-                    }
-                }
+                byField = true;
+                parseRange(args[++i]);
+            } else if (args[i].substr(0, 2) == "-f" && args[i].length() > 2) {
+                byField = true;
+                parseRange(args[i].substr(2));
             } else if (args[i] == "-c" && i + 1 < args.size()) {
                 byChar = true;
-                std::string charSpec = args[++i];
-                std::istringstream css(charSpec);
-                std::string part;
-                while (std::getline(css, part, ',')) {
-                    size_t dashPos = part.find('-');
-                    if (dashPos != std::string::npos) {
-                        int start = std::stoi(part.substr(0, dashPos));
-                        int end = std::stoi(part.substr(dashPos + 1));
-                        for (int c = start; c <= end; ++c) {
-                            fields.push_back(c);
-                        }
-                    } else {
-                        fields.push_back(std::stoi(part));
-                    }
-                }
+                parseRange(args[++i]);
+            } else if (args[i].substr(0, 2) == "-c" && args[i].length() > 2) {
+                byChar = true;
+                parseRange(args[i].substr(2));
+            } else if (args[i] == "-b" && i + 1 < args.size()) {
+                byByte = true;
+                parseRange(args[++i]);
+            } else if (args[i].substr(0, 2) == "-b" && args[i].length() > 2) {
+                byByte = true;
+                parseRange(args[i].substr(2));
+            } else if (args[i] == "--complement") {
+                complement = true;
+            } else if (args[i] == "-s" || args[i] == "--only-delimited") {
+                onlyDelimited = true;
+            } else if (args[i] == "--output-delimiter" && i + 1 < args.size()) {
+                outputDelimiter = args[++i];
+                outputDelimiterSet = true;
+            } else if (args[i].substr(0, 19) == "--output-delimiter=") {
+                outputDelimiter = args[i].substr(19);
+                outputDelimiterSet = true;
             } else if (args[i][0] != '-') {
-                filePath = args[i];
+                files.push_back(args[i]);
             }
         }
         
-        if (fields.empty()) {
+        if (ranges.empty()) {
             printError("cut: you must specify a list of bytes, characters, or fields");
             return;
         }
-        
-        std::vector<std::string> lines;
-        if (!pipedInput.empty()) {
-            std::istringstream iss(pipedInput);
-            std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("cut: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
-        } else {
-            printError("cut: missing file operand");
-            return;
+
+        if (!outputDelimiterSet) {
+            outputDelimiter = std::string(1, delimiter);
         }
-        
-        for (const auto& line : lines) {
-            if (byChar) {
-                // Cut by character position
+
+        std::sort(ranges.begin(), ranges.end());
+
+        auto isInRange = [&](int pos) -> bool {
+            for (const auto& r : ranges) {
+                if (pos >= r.first && pos <= r.second) return !complement;
+            }
+            return complement;
+        };
+
+        auto processLine = [&](const std::string& line) {
+            if (byByte || byChar) {
                 std::string result;
-                for (int pos : fields) {
-                    if (pos > 0 && pos <= (int)line.length()) {
+                bool first = true;
+                for (int pos = 1; pos <= (int)line.length(); ++pos) {
+                    if (isInRange(pos)) {
+                        if (!first && outputDelimiterSet) result += outputDelimiter;
                         result += line[pos - 1];
+                        first = false;
                     }
                 }
                 std::cout << result << "\n";
             } else {
-                // Cut by field
-                std::vector<std::string> tokens;
-                std::string token;
-                std::istringstream tss(line);
-                while (std::getline(tss, token, delimiter)) {
-                    tokens.push_back(token);
+                if (onlyDelimited && line.find(delimiter) == std::string::npos) {
+                    return;
                 }
                 
+                std::vector<std::string> tokens;
+                size_t start = 0, end;
+                while ((end = line.find(delimiter, start)) != std::string::npos) {
+                    tokens.push_back(line.substr(start, end - start));
+                    start = end + 1;
+                }
+                tokens.push_back(line.substr(start));
+                
                 std::string result;
-                for (size_t i = 0; i < fields.size(); ++i) {
-                    int fieldNum = fields[i];
-                    if (fieldNum > 0 && fieldNum <= (int)tokens.size()) {
-                        if (!result.empty()) result += delimiter;
-                        result += tokens[fieldNum - 1];
+                bool first = true;
+                for (int pos = 1; pos <= (int)tokens.size(); ++pos) {
+                    if (isInRange(pos)) {
+                        if (!first) result += outputDelimiter;
+                        result += tokens[pos - 1];
+                        first = false;
                     }
                 }
                 std::cout << result << "\n";
             }
+        };
+
+        if (!pipedInput.empty()) {
+            std::istringstream iss(pipedInput);
+            std::string line;
+            while (std::getline(iss, line)) {
+                processLine(line);
+            }
+        } else if (!files.empty()) {
+            for (const auto& filePath : files) {
+                std::ifstream file(resolvePath(filePath));
+                if (!file) {
+                    printError("cut: cannot open '" + filePath + "'");
+                    continue;
+                }
+                std::string line;
+                while (std::getline(file, line)) {
+                    processLine(line);
+                }
+            }
+        } else {
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                processLine(line);
+            }
         }
     }
 
-    // tr - translate or delete characters
     void cmdTr(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         bool deleteMode = false;
         bool squeezeMode = false;
+        bool complementMode = false;
         std::string set1, set2;
         
         size_t argIdx = 1;
-        while (argIdx < args.size() && args[argIdx][0] == '-') {
-            if (args[argIdx] == "-d") deleteMode = true;
-            else if (args[argIdx] == "-s") squeezeMode = true;
+        while (argIdx < args.size() && args[argIdx][0] == '-' && args[argIdx].length() > 1) {
+            for (size_t k = 1; k < args[argIdx].length(); ++k) {
+                char flag = args[argIdx][k];
+                if (flag == 'd') deleteMode = true;
+                else if (flag == 's') squeezeMode = true;
+                else if (flag == 'c' || flag == 'C') complementMode = true;
+            }
             argIdx++;
         }
         
-        if (argIdx < args.size()) {
-            set1 = args[argIdx++];
-        }
-        if (argIdx < args.size() && !deleteMode) {
-            set2 = args[argIdx++];
-        }
+        if (argIdx < args.size()) set1 = args[argIdx++];
+        if (argIdx < args.size()) set2 = args[argIdx++];
         
         if (set1.empty()) {
             printError("tr: missing operand");
             return;
         }
-        
-        // Expand character classes like a-z, A-Z, 0-9
-        auto expandSet = [](const std::string& set) -> std::string {
+
+        auto expandClass = [](const std::string& className) -> std::string {
+            std::string result;
+            if (className == "alpha" || className == "ALPHA") {
+                for (char c = 'a'; c <= 'z'; ++c) result += c;
+                for (char c = 'A'; c <= 'Z'; ++c) result += c;
+            } else if (className == "digit" || className == "DIGIT") {
+                for (char c = '0'; c <= '9'; ++c) result += c;
+            } else if (className == "upper" || className == "UPPER") {
+                for (char c = 'A'; c <= 'Z'; ++c) result += c;
+            } else if (className == "lower" || className == "LOWER") {
+                for (char c = 'a'; c <= 'z'; ++c) result += c;
+            } else if (className == "alnum" || className == "ALNUM") {
+                for (char c = 'a'; c <= 'z'; ++c) result += c;
+                for (char c = 'A'; c <= 'Z'; ++c) result += c;
+                for (char c = '0'; c <= '9'; ++c) result += c;
+            } else if (className == "space" || className == "SPACE") {
+                result = " \t\n\r\v\f";
+            } else if (className == "blank" || className == "BLANK") {
+                result = " \t";
+            } else if (className == "punct" || className == "PUNCT") {
+                result = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+            } else if (className == "xdigit" || className == "XDIGIT") {
+                for (char c = '0'; c <= '9'; ++c) result += c;
+                for (char c = 'a'; c <= 'f'; ++c) result += c;
+                for (char c = 'A'; c <= 'F'; ++c) result += c;
+            } else if (className == "cntrl" || className == "CNTRL") {
+                for (char c = 0; c < 32; ++c) result += c;
+                result += (char)127;
+            } else if (className == "graph" || className == "GRAPH") {
+                for (char c = 33; c < 127; ++c) result += c;
+            } else if (className == "print" || className == "PRINT") {
+                for (char c = 32; c < 127; ++c) result += c;
+            }
+            return result;
+        };
+
+        auto expandEscape = [](char c) -> char {
+            switch (c) {
+                case 'n': return '\n';
+                case 't': return '\t';
+                case 'r': return '\r';
+                case 'f': return '\f';
+                case 'v': return '\v';
+                case 'a': return '\a';
+                case 'b': return '\b';
+                case '\\': return '\\';
+                default: return c;
+            }
+        };
+
+        auto expandSet = [&](const std::string& set) -> std::string {
             std::string result;
             for (size_t i = 0; i < set.length(); ++i) {
+                if (set[i] == '[' && i + 2 < set.length() && set[i + 1] == ':') {
+                    size_t endPos = set.find(":]", i + 2);
+                    if (endPos != std::string::npos) {
+                        std::string className = set.substr(i + 2, endPos - i - 2);
+                        result += expandClass(className);
+                        i = endPos + 1;
+                        continue;
+                    }
+                }
+                if (set[i] == '\\' && i + 1 < set.length()) {
+                    char next = set[i + 1];
+                    if (next >= '0' && next <= '7') {
+                        int val = 0;
+                        size_t j = i + 1;
+                        while (j < set.length() && j < i + 4 && set[j] >= '0' && set[j] <= '7') {
+                            val = val * 8 + (set[j] - '0');
+                            j++;
+                        }
+                        result += (char)val;
+                        i = j - 1;
+                    } else {
+                        result += expandEscape(next);
+                        i++;
+                    }
+                    continue;
+                }
                 if (i + 2 < set.length() && set[i + 1] == '-') {
                     char start = set[i];
                     char end = set[i + 2];
-                    for (char c = start; c <= end; ++c) {
-                        result += c;
+                    if (start <= end) {
+                        for (char c = start; c <= end; ++c) result += c;
+                    } else {
+                        for (char c = start; c >= end; --c) result += c;
                     }
                     i += 2;
                 } else {
@@ -2137,251 +3212,664 @@ private:
         std::string expandedSet1 = expandSet(set1);
         std::string expandedSet2 = expandSet(set2);
         
-        // Extend set2 if shorter than set1
-        while (!deleteMode && expandedSet2.length() < expandedSet1.length() && !expandedSet2.empty()) {
+        if (complementMode) {
+            std::string complement;
+            for (int c = 1; c < 256; ++c) {
+                if (expandedSet1.find((char)c) == std::string::npos) {
+                    complement += (char)c;
+                }
+            }
+            expandedSet1 = complement;
+        }
+        
+        while (!deleteMode && !expandedSet2.empty() && expandedSet2.length() < expandedSet1.length()) {
             expandedSet2 += expandedSet2.back();
         }
         
         std::string input = pipedInput;
         if (input.empty()) {
-            printError("tr: requires piped input");
-            return;
+            std::ostringstream oss;
+            char buf[4096];
+            while (std::cin.read(buf, sizeof(buf)) || std::cin.gcount() > 0) {
+                oss.write(buf, std::cin.gcount());
+            }
+            input = oss.str();
         }
         
         std::string result;
         char lastChar = '\0';
+        bool lastWasInSet1 = false;
         
-        for (char c : input) {
+        for (unsigned char c : input) {
             size_t pos = expandedSet1.find(c);
             if (deleteMode) {
                 if (pos == std::string::npos) {
-                    result += c;
+                    if (!squeezeMode || c != lastChar) {
+                        result += c;
+                        lastChar = c;
+                    }
                 }
             } else if (pos != std::string::npos) {
                 char newChar = (pos < expandedSet2.length()) ? expandedSet2[pos] : c;
-                if (!squeezeMode || newChar != lastChar) {
+                if (!squeezeMode || newChar != lastChar || !lastWasInSet1) {
                     result += newChar;
                     lastChar = newChar;
                 }
+                lastWasInSet1 = true;
             } else {
-                if (!squeezeMode || c != lastChar) {
-                    result += c;
-                    lastChar = c;
-                }
+                result += c;
+                lastChar = c;
+                lastWasInSet1 = false;
             }
         }
         
         std::cout << result;
     }
 
-    // sed - stream editor (basic s/pattern/replacement/ support)
     void cmdSed(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         if (args.size() < 2) {
             printError("sed: missing script");
-            std::cout << "Usage: sed 's/pattern/replacement/[g]' [file]\n";
             return;
         }
         
-        std::string script = args[1];
-        std::string filePath;
+        std::vector<std::string> scripts;
+        std::vector<std::string> files;
         bool inPlace = false;
+        std::string inPlaceSuffix;
+        bool quietMode = false;
         
-        for (size_t i = 2; i < args.size(); ++i) {
-            if (args[i] == "-i") inPlace = true;
-            else if (args[i][0] != '-') filePath = args[i];
-        }
-        
-        // Parse s/pattern/replacement/flags
-        if (script.length() < 4 || script[0] != 's') {
-            printError("sed: only s/// substitution supported");
-            return;
-        }
-        
-        char delim = script[1];
-        std::vector<std::string> parts;
-        std::string current;
-        bool escaped = false;
-        
-        for (size_t i = 2; i < script.length(); ++i) {
-            if (escaped) {
-                current += script[i];
-                escaped = false;
-            } else if (script[i] == '\\') {
-                escaped = true;
-            } else if (script[i] == delim) {
-                parts.push_back(current);
-                current.clear();
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-n" || args[i] == "--quiet" || args[i] == "--silent") {
+                quietMode = true;
+            } else if (args[i] == "-e" && i + 1 < args.size()) {
+                scripts.push_back(args[++i]);
+            } else if (args[i] == "-i" || args[i].substr(0, 2) == "-i") {
+                inPlace = true;
+                if (args[i].length() > 2) inPlaceSuffix = args[i].substr(2);
+            } else if (args[i][0] == '-') {
+            } else if (scripts.empty()) {
+                scripts.push_back(args[i]);
             } else {
-                current += script[i];
+                files.push_back(args[i]);
             }
         }
-        parts.push_back(current);
         
-        if (parts.size() < 2) {
-            printError("sed: invalid substitution syntax");
+        if (scripts.empty()) {
+            printError("sed: missing script");
             return;
         }
-        
-        std::string pattern = parts[0];
-        std::string replacement = parts[1];
-        bool globalReplace = (parts.size() > 2 && parts[2].find('g') != std::string::npos);
-        
-        std::vector<std::string> lines;
+
+        struct SedCommand {
+            std::string addr1;
+            std::string addr2;
+            char cmd;
+            std::string arg1;
+            std::string arg2;
+            bool globalFlag;
+            bool printFlag;
+        };
+
+        auto parseScript = [&](const std::string& script) -> std::vector<SedCommand> {
+            std::vector<SedCommand> commands;
+            size_t pos = 0;
+            
+            while (pos < script.length()) {
+                while (pos < script.length() && (script[pos] == ' ' || script[pos] == '\t' || script[pos] == ';')) pos++;
+                if (pos >= script.length()) break;
+                
+                SedCommand cmd = {"", "", '\0', "", "", false, false};
+                
+                if (std::isdigit(script[pos]) || script[pos] == '$') {
+                    while (pos < script.length() && (std::isdigit(script[pos]) || script[pos] == '$')) {
+                        cmd.addr1 += script[pos++];
+                    }
+                    if (pos < script.length() && script[pos] == ',') {
+                        pos++;
+                        while (pos < script.length() && (std::isdigit(script[pos]) || script[pos] == '$')) {
+                            cmd.addr2 += script[pos++];
+                        }
+                    }
+                } else if (script[pos] == '/') {
+                    pos++;
+                    while (pos < script.length() && script[pos] != '/') {
+                        if (script[pos] == '\\' && pos + 1 < script.length()) {
+                            cmd.addr1 += script[pos++];
+                        }
+                        cmd.addr1 += script[pos++];
+                    }
+                    if (pos < script.length()) pos++;
+                }
+                
+                while (pos < script.length() && (script[pos] == ' ' || script[pos] == '\t')) pos++;
+                if (pos >= script.length()) break;
+                
+                cmd.cmd = script[pos++];
+                
+                if (cmd.cmd == 's' && pos < script.length()) {
+                    char delim = script[pos++];
+                    bool escaped = false;
+                    while (pos < script.length()) {
+                        if (escaped) {
+                            cmd.arg1 += script[pos++];
+                            escaped = false;
+                        } else if (script[pos] == '\\') {
+                            escaped = true;
+                            cmd.arg1 += script[pos++];
+                        } else if (script[pos] == delim) {
+                            pos++;
+                            break;
+                        } else {
+                            cmd.arg1 += script[pos++];
+                        }
+                    }
+                    escaped = false;
+                    while (pos < script.length()) {
+                        if (escaped) {
+                            cmd.arg2 += script[pos++];
+                            escaped = false;
+                        } else if (script[pos] == '\\') {
+                            escaped = true;
+                            cmd.arg2 += script[pos++];
+                        } else if (script[pos] == delim) {
+                            pos++;
+                            break;
+                        } else {
+                            cmd.arg2 += script[pos++];
+                        }
+                    }
+                    while (pos < script.length() && script[pos] != ';' && script[pos] != '\n') {
+                        if (script[pos] == 'g') cmd.globalFlag = true;
+                        else if (script[pos] == 'p') cmd.printFlag = true;
+                        pos++;
+                    }
+                } else if (cmd.cmd == 'y' && pos < script.length()) {
+                    char delim = script[pos++];
+                    while (pos < script.length() && script[pos] != delim) cmd.arg1 += script[pos++];
+                    if (pos < script.length()) pos++;
+                    while (pos < script.length() && script[pos] != delim) cmd.arg2 += script[pos++];
+                    if (pos < script.length()) pos++;
+                }
+                
+                commands.push_back(cmd);
+            }
+            return commands;
+        };
+
+        std::vector<SedCommand> allCommands;
+        for (const auto& script : scripts) {
+            auto cmds = parseScript(script);
+            allCommands.insert(allCommands.end(), cmds.begin(), cmds.end());
+        }
+
+        auto matchAddress = [](const std::string& addr, int lineNum, int lastLine, const std::string& line) -> bool {
+            if (addr.empty()) return true;
+            if (addr == "$") return lineNum == lastLine;
+            if (std::isdigit(addr[0])) return lineNum == std::stoi(addr);
+            try {
+                std::regex re(addr);
+                return std::regex_search(line, re);
+            } catch (...) {
+                return line.find(addr) != std::string::npos;
+            }
+        };
+
+        auto processLines = [&](std::vector<std::string>& lines) -> std::string {
+            std::ostringstream output;
+            int lastLine = (int)lines.size();
+            std::map<int, bool> inRange;
+            
+            for (int lineNum = 1; lineNum <= (int)lines.size(); ++lineNum) {
+                std::string line = lines[lineNum - 1];
+                bool deleted = false;
+                bool printed = false;
+                
+                for (size_t ci = 0; ci < allCommands.size(); ++ci) {
+                    const auto& cmd = allCommands[ci];
+                    
+                    bool inAddr = false;
+                    if (cmd.addr1.empty() && cmd.addr2.empty()) {
+                        inAddr = true;
+                    } else if (cmd.addr2.empty()) {
+                        inAddr = matchAddress(cmd.addr1, lineNum, lastLine, line);
+                    } else {
+                        if (!inRange[ci] && matchAddress(cmd.addr1, lineNum, lastLine, line)) {
+                            inRange[ci] = true;
+                        }
+                        if (inRange[ci]) {
+                            inAddr = true;
+                            if (matchAddress(cmd.addr2, lineNum, lastLine, line)) {
+                                inRange[ci] = false;
+                            }
+                        }
+                    }
+                    
+                    if (!inAddr) continue;
+                    
+                    switch (cmd.cmd) {
+                        case 'd':
+                            deleted = true;
+                            break;
+                        case 'p':
+                            output << line << "\n";
+                            printed = true;
+                            break;
+                        case 'q':
+                            if (!quietMode && !deleted) output << line << "\n";
+                            return output.str();
+                        case 's': {
+                            try {
+                                std::regex re(cmd.arg1);
+                                std::string repl = cmd.arg2;
+                                if (cmd.globalFlag) {
+                                    line = std::regex_replace(line, re, repl);
+                                } else {
+                                    line = std::regex_replace(line, re, repl, std::regex_constants::format_first_only);
+                                }
+                                if (cmd.printFlag) {
+                                    output << line << "\n";
+                                    printed = true;
+                                }
+                            } catch (...) {
+                                if (cmd.globalFlag) {
+                                    size_t pos = 0;
+                                    while ((pos = line.find(cmd.arg1, pos)) != std::string::npos) {
+                                        line.replace(pos, cmd.arg1.length(), cmd.arg2);
+                                        pos += cmd.arg2.length();
+                                    }
+                                } else {
+                                    size_t pos = line.find(cmd.arg1);
+                                    if (pos != std::string::npos) {
+                                        line.replace(pos, cmd.arg1.length(), cmd.arg2);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        case 'y': {
+                            for (char& c : line) {
+                                size_t idx = cmd.arg1.find(c);
+                                if (idx != std::string::npos && idx < cmd.arg2.length()) {
+                                    c = cmd.arg2[idx];
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    
+                    if (deleted) break;
+                }
+                
+                if (!deleted && !quietMode) {
+                    output << line << "\n";
+                }
+            }
+            return output.str();
+        };
+
         if (!pipedInput.empty()) {
+            std::vector<std::string> lines;
             std::istringstream iss(pipedInput);
             std::string line;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
+            while (std::getline(iss, line)) lines.push_back(line);
+            std::cout << processLines(lines);
+        } else if (!files.empty()) {
+            for (const auto& filePath : files) {
+                std::vector<std::string> lines;
+                std::ifstream file(resolvePath(filePath));
+                if (!file) {
+                    printError("sed: cannot open '" + filePath + "'");
+                    continue;
+                }
+                std::string line;
+                while (std::getline(file, line)) lines.push_back(line);
+                file.close();
+                
+                std::string result = processLines(lines);
+                
+                if (inPlace) {
+                    if (!inPlaceSuffix.empty()) {
+                        fs::copy_file(resolvePath(filePath), resolvePath(filePath) + inPlaceSuffix, fs::copy_options::overwrite_existing);
+                    }
+                    std::ofstream out(resolvePath(filePath));
+                    out << result;
+                } else {
+                    std::cout << result;
+                }
             }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("sed: cannot open '" + filePath + "'");
-                return;
-            }
+        } else {
+            std::vector<std::string> lines;
             std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
-            }
-        } else {
-            printError("sed: missing file operand or piped input");
-            return;
-        }
-        
-        std::ostringstream output;
-        for (const auto& line : lines) {
-            std::string result = line;
-            if (globalReplace) {
-                size_t pos = 0;
-                while ((pos = result.find(pattern, pos)) != std::string::npos) {
-                    result.replace(pos, pattern.length(), replacement);
-                    pos += replacement.length();
-                }
-            } else {
-                size_t pos = result.find(pattern);
-                if (pos != std::string::npos) {
-                    result.replace(pos, pattern.length(), replacement);
-                }
-            }
-            output << result << "\n";
-        }
-        
-        if (inPlace && !filePath.empty()) {
-            std::ofstream file(resolvePath(filePath));
-            file << output.str();
-        } else {
-            std::cout << output.str();
+            while (std::getline(std::cin, line)) lines.push_back(line);
+            std::cout << processLines(lines);
         }
     }
 
-    // awk - pattern scanning and processing (basic field extraction)
     void cmdAwk(const std::vector<std::string>& args, const std::string& pipedInput = "") {
         if (args.size() < 2) {
             printError("awk: missing program");
-            std::cout << "Usage: awk '{print $1}' [file] or awk -F: '{print $1}' [file]\n";
             return;
         }
         
-        char fieldSep = ' ';
+        std::string fieldSepStr = " ";
         std::string program;
-        std::string filePath;
+        std::vector<std::string> files;
         
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "-F" && i + 1 < args.size()) {
-                std::string fs = args[++i];
-                if (!fs.empty()) fieldSep = fs[0];
+                fieldSepStr = args[++i];
             } else if (args[i].substr(0, 2) == "-F") {
-                std::string fs = args[i].substr(2);
-                if (!fs.empty()) fieldSep = fs[0];
+                fieldSepStr = args[i].substr(2);
+            } else if (program.empty() && (args[i][0] == '{' || args[i][0] == '\'')) {
+                program = args[i];
             } else if (program.empty() && args[i][0] != '-') {
                 program = args[i];
             } else if (args[i][0] != '-') {
-                filePath = args[i];
+                files.push_back(args[i]);
             }
         }
-        
-        // Parse simple print command: {print $1, $2}
-        std::vector<int> fieldsToPrint;
-        std::string printSep = " ";
-        
-        if (program.find("print") != std::string::npos) {
-            size_t printPos = program.find("print");
-            std::string printPart = program.substr(printPos + 5);
+
+        std::map<std::string, std::string> vars;
+        vars["FS"] = fieldSepStr;
+        vars["OFS"] = " ";
+        vars["ORS"] = "\n";
+        vars["NR"] = "0";
+        vars["NF"] = "0";
+        vars["FILENAME"] = "";
+
+        auto splitFields = [&](const std::string& line) -> std::vector<std::string> {
+            std::vector<std::string> fields;
+            fields.push_back(line);
+            std::string fs = vars["FS"];
             
-            // Extract field numbers
-            for (size_t i = 0; i < printPart.length(); ++i) {
-                if (printPart[i] == '$') {
-                    std::string numStr;
-                    size_t j = i + 1;
-                    while (j < printPart.length() && std::isdigit(printPart[j])) {
-                        numStr += printPart[j++];
+            if (fs == " ") {
+                std::string token;
+                bool inToken = false;
+                for (char c : line) {
+                    if (std::isspace(c)) {
+                        if (inToken) {
+                            fields.push_back(token);
+                            token.clear();
+                            inToken = false;
+                        }
+                    } else {
+                        token += c;
+                        inToken = true;
                     }
-                    if (!numStr.empty()) {
-                        fieldsToPrint.push_back(std::stoi(numStr));
-                    }
-                    i = j - 1;
+                }
+                if (inToken) fields.push_back(token);
+            } else if (fs.length() == 1) {
+                std::istringstream iss(line);
+                std::string token;
+                while (std::getline(iss, token, fs[0])) {
+                    fields.push_back(token);
+                }
+            } else {
+                size_t pos = 0, found;
+                while ((found = line.find(fs, pos)) != std::string::npos) {
+                    fields.push_back(line.substr(pos, found - pos));
+                    pos = found + fs.length();
+                }
+                fields.push_back(line.substr(pos));
+            }
+            
+            vars["NF"] = std::to_string(fields.size() - 1);
+            return fields;
+        };
+
+        auto evalExpr = [&](const std::string& expr, const std::vector<std::string>& fields) -> std::string {
+            std::string result = expr;
+            
+            for (int i = 9; i >= 0; --i) {
+                std::string placeholder = "$" + std::to_string(i);
+                size_t pos;
+                while ((pos = result.find(placeholder)) != std::string::npos) {
+                    std::string val = (i < (int)fields.size()) ? fields[i] : "";
+                    result.replace(pos, placeholder.length(), val);
                 }
             }
+            
+            for (const auto& kv : vars) {
+                size_t pos;
+                while ((pos = result.find(kv.first)) != std::string::npos) {
+                    bool validBoundary = true;
+                    if (pos > 0 && (std::isalnum(result[pos - 1]) || result[pos - 1] == '_')) validBoundary = false;
+                    size_t endPos = pos + kv.first.length();
+                    if (endPos < result.length() && (std::isalnum(result[endPos]) || result[endPos] == '_')) validBoundary = false;
+                    if (validBoundary) {
+                        result.replace(pos, kv.first.length(), kv.second);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            
+            size_t lenPos;
+            while ((lenPos = result.find("length(")) != std::string::npos) {
+                size_t endParen = result.find(")", lenPos);
+                if (endParen != std::string::npos) {
+                    std::string arg = result.substr(lenPos + 7, endParen - lenPos - 7);
+                    result.replace(lenPos, endParen - lenPos + 1, std::to_string(arg.length()));
+                } else break;
+            }
+            
+            while ((lenPos = result.find("toupper(")) != std::string::npos) {
+                size_t endParen = result.find(")", lenPos);
+                if (endParen != std::string::npos) {
+                    std::string arg = result.substr(lenPos + 8, endParen - lenPos - 8);
+                    std::transform(arg.begin(), arg.end(), arg.begin(), ::toupper);
+                    result.replace(lenPos, endParen - lenPos + 1, arg);
+                } else break;
+            }
+            
+            while ((lenPos = result.find("tolower(")) != std::string::npos) {
+                size_t endParen = result.find(")", lenPos);
+                if (endParen != std::string::npos) {
+                    std::string arg = result.substr(lenPos + 8, endParen - lenPos - 8);
+                    std::transform(arg.begin(), arg.end(), arg.begin(), ::tolower);
+                    result.replace(lenPos, endParen - lenPos + 1, arg);
+                } else break;
+            }
+            
+            return result;
+        };
+
+        auto parseAction = [&](const std::string& action, const std::vector<std::string>& fields) {
+            std::string act = action;
+            while (!act.empty() && (act.front() == '{' || act.front() == ' ')) act.erase(0, 1);
+            while (!act.empty() && (act.back() == '}' || act.back() == ' ')) act.pop_back();
+            
+            std::istringstream iss(act);
+            std::string stmt;
+            while (std::getline(iss, stmt, ';')) {
+                while (!stmt.empty() && stmt.front() == ' ') stmt.erase(0, 1);
+                while (!stmt.empty() && stmt.back() == ' ') stmt.pop_back();
+                if (stmt.empty()) continue;
+                
+                if (stmt.substr(0, 5) == "print") {
+                    std::string printArgs = stmt.substr(5);
+                    while (!printArgs.empty() && printArgs.front() == ' ') printArgs.erase(0, 1);
+                    
+                    if (printArgs.empty()) {
+                        std::cout << fields[0] << vars["ORS"];
+                    } else {
+                        std::vector<std::string> parts;
+                        std::string current;
+                        bool inQuote = false;
+                        for (size_t i = 0; i < printArgs.length(); ++i) {
+                            char c = printArgs[i];
+                            if (c == '"') {
+                                inQuote = !inQuote;
+                            } else if ((c == ',' || c == ' ') && !inQuote) {
+                                if (!current.empty()) {
+                                    parts.push_back(current);
+                                    current.clear();
+                                }
+                            } else {
+                                current += c;
+                            }
+                        }
+                        if (!current.empty()) parts.push_back(current);
+                        
+                        std::string output;
+                        for (size_t i = 0; i < parts.size(); ++i) {
+                            if (i > 0) output += vars["OFS"];
+                            output += evalExpr(parts[i], fields);
+                        }
+                        std::cout << output << vars["ORS"];
+                    }
+                } else if (stmt.substr(0, 6) == "printf") {
+                    std::string printfArgs = stmt.substr(6);
+                    while (!printfArgs.empty() && printfArgs.front() == ' ') printfArgs.erase(0, 1);
+                    
+                    size_t firstQuote = printfArgs.find('"');
+                    size_t lastQuote = printfArgs.rfind('"');
+                    if (firstQuote != std::string::npos && lastQuote > firstQuote) {
+                        std::string fmt = printfArgs.substr(firstQuote + 1, lastQuote - firstQuote - 1);
+                        std::string argsStr = printfArgs.substr(lastQuote + 1);
+                        
+                        std::vector<std::string> printfVals;
+                        std::istringstream argStream(argsStr);
+                        std::string arg;
+                        while (std::getline(argStream, arg, ',')) {
+                            while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
+                            printfVals.push_back(evalExpr(arg, fields));
+                        }
+                        
+                        std::string output;
+                        size_t valIdx = 0;
+                        for (size_t i = 0; i < fmt.length(); ++i) {
+                            if (fmt[i] == '%' && i + 1 < fmt.length()) {
+                                char spec = fmt[i + 1];
+                                if (spec == 's' && valIdx < printfVals.size()) {
+                                    output += printfVals[valIdx++];
+                                    i++;
+                                } else if (spec == 'd' && valIdx < printfVals.size()) {
+                                    try { output += std::to_string(std::stoi(printfVals[valIdx++])); } catch (...) { output += "0"; }
+                                    i++;
+                                } else if (spec == '%') {
+                                    output += '%';
+                                    i++;
+                                } else {
+                                    output += fmt[i];
+                                }
+                            } else if (fmt[i] == '\\' && i + 1 < fmt.length()) {
+                                char esc = fmt[i + 1];
+                                if (esc == 'n') output += '\n';
+                                else if (esc == 't') output += '\t';
+                                else output += esc;
+                                i++;
+                            } else {
+                                output += fmt[i];
+                            }
+                        }
+                        std::cout << output;
+                    }
+                }
+            }
+        };
+
+        std::string beginBlock, endBlock, mainBlock;
+        size_t beginPos = program.find("BEGIN");
+        size_t endPos = program.find("END");
+        
+        if (beginPos != std::string::npos) {
+            size_t braceStart = program.find('{', beginPos);
+            if (braceStart != std::string::npos) {
+                int braceCount = 1;
+                size_t braceEnd = braceStart + 1;
+                while (braceEnd < program.length() && braceCount > 0) {
+                    if (program[braceEnd] == '{') braceCount++;
+                    else if (program[braceEnd] == '}') braceCount--;
+                    braceEnd++;
+                }
+                beginBlock = program.substr(braceStart, braceEnd - braceStart);
+            }
         }
         
-        if (fieldsToPrint.empty()) {
-            fieldsToPrint.push_back(0);  // Print whole line
+        if (endPos != std::string::npos) {
+            size_t braceStart = program.find('{', endPos);
+            if (braceStart != std::string::npos) {
+                int braceCount = 1;
+                size_t braceEnd = braceStart + 1;
+                while (braceEnd < program.length() && braceCount > 0) {
+                    if (program[braceEnd] == '{') braceCount++;
+                    else if (program[braceEnd] == '}') braceCount--;
+                    braceEnd++;
+                }
+                endBlock = program.substr(braceStart, braceEnd - braceStart);
+            }
         }
         
-        std::vector<std::string> lines;
+        size_t mainStart = program.find('{');
+        if (mainStart != std::string::npos) {
+            if (beginPos != std::string::npos && mainStart > beginPos && mainStart < beginPos + 10) {
+                mainStart = program.find('}', mainStart);
+                if (mainStart != std::string::npos) mainStart = program.find('{', mainStart);
+            }
+            if (mainStart != std::string::npos && endPos != std::string::npos && mainStart > endPos) {
+                mainStart = std::string::npos;
+            }
+            if (mainStart != std::string::npos) {
+                int braceCount = 1;
+                size_t braceEnd = mainStart + 1;
+                while (braceEnd < program.length() && braceCount > 0) {
+                    if (program[braceEnd] == '{') braceCount++;
+                    else if (program[braceEnd] == '}') braceCount--;
+                    braceEnd++;
+                }
+                mainBlock = program.substr(mainStart, braceEnd - mainStart);
+            }
+        }
+        
+        if (mainBlock.empty() && beginBlock.empty() && endBlock.empty()) {
+            mainBlock = program;
+        }
+
+        if (!beginBlock.empty()) {
+            std::vector<std::string> emptyFields = {""};
+            parseAction(beginBlock, emptyFields);
+        }
+
+        auto processLine = [&](const std::string& line, const std::string& filename) {
+            int nr = std::stoi(vars["NR"]) + 1;
+            vars["NR"] = std::to_string(nr);
+            vars["FILENAME"] = filename;
+            
+            std::vector<std::string> fields = splitFields(line);
+            
+            if (!mainBlock.empty()) {
+                parseAction(mainBlock, fields);
+            }
+        };
+
         if (!pipedInput.empty()) {
             std::istringstream iss(pipedInput);
             std::string line;
             while (std::getline(iss, line)) {
-                lines.push_back(line);
+                processLine(line, "");
             }
-        } else if (!filePath.empty()) {
-            std::ifstream file(resolvePath(filePath));
-            if (!file) {
-                printError("awk: cannot open '" + filePath + "'");
-                return;
-            }
-            std::string line;
-            while (std::getline(file, line)) {
-                lines.push_back(line);
+        } else if (!files.empty()) {
+            for (const auto& filePath : files) {
+                std::ifstream file(resolvePath(filePath));
+                if (!file) {
+                    printError("awk: cannot open '" + filePath + "'");
+                    continue;
+                }
+                std::string line;
+                while (std::getline(file, line)) {
+                    processLine(line, filePath);
+                }
             }
         } else {
-            printError("awk: missing file operand or piped input");
-            return;
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                processLine(line, "");
+            }
         }
-        
-        for (const auto& line : lines) {
-            std::vector<std::string> fields;
-            fields.push_back(line);  // $0 = whole line
-            
-            // Split by field separator (handling multiple separators as one)
-            std::string token;
-            bool inToken = false;
-            for (char c : line) {
-                if (c == fieldSep || (fieldSep == ' ' && std::isspace(c))) {
-                    if (inToken) {
-                        fields.push_back(token);
-                        token.clear();
-                        inToken = false;
-                    }
-                } else {
-                    token += c;
-                    inToken = true;
-                }
-            }
-            if (inToken) {
-                fields.push_back(token);
-            }
-            
-            std::string output;
-            for (size_t i = 0; i < fieldsToPrint.size(); ++i) {
-                int fieldNum = fieldsToPrint[i];
-                if (fieldNum >= 0 && fieldNum < (int)fields.size()) {
-                    if (!output.empty()) output += printSep;
-                    output += fields[fieldNum];
-                }
-            }
-            std::cout << output << "\n";
+
+        if (!endBlock.empty()) {
+            std::vector<std::string> emptyFields = {""};
+            parseAction(endBlock, emptyFields);
         }
     }
 
@@ -2591,191 +4079,370 @@ private:
     // FILE OPERATIONS COMMANDS
     // ============================================================================
 
-    // ln - create links (symbolic links on Windows)
     void cmdLn(const std::vector<std::string>& args) {
-        if (args.size() < 3) {
-            printError("ln: missing operands");
-            std::cout << "Usage: ln [-s] target link_name\n";
+        if (args.size() < 2) {
+            printError("ln: missing operand");
             return;
         }
         
         bool symbolic = false;
-        std::string target, linkName;
+        bool force = false;
+        bool noDereference = false;
+        bool verbose = false;
+        bool relative = false;
+        std::vector<std::string> targets;
+        std::string linkName;
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-s") symbolic = true;
-            else if (target.empty()) target = args[i];
-            else linkName = args[i];
-        }
-        
-        if (target.empty() || linkName.empty()) {
-            printError("ln: missing target or link name");
-            return;
-        }
-        
-        std::string targetPath = resolvePath(target);
-        std::string linkPath = resolvePath(linkName);
-        
-        if (!symbolic) {
-            // Hard links
-            if (CreateHardLinkA(linkPath.c_str(), targetPath.c_str(), NULL)) {
-                std::cout << "Created hard link: " << linkName << " -> " << target << "\n";
+            if (args[i][0] == '-' && args[i].length() > 1) {
+                for (size_t j = 1; j < args[i].length(); ++j) {
+                    char flag = args[i][j];
+                    if (flag == 's') symbolic = true;
+                    else if (flag == 'f') force = true;
+                    else if (flag == 'n') noDereference = true;
+                    else if (flag == 'v') verbose = true;
+                    else if (flag == 'r') relative = true;
+                }
             } else {
-                printError("ln: failed to create hard link (error " + std::to_string(GetLastError()) + ")");
-            }
-        } else {
-            // Symbolic links (requires admin or developer mode on Windows)
-            DWORD flags = fs::is_directory(targetPath) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
-            flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-            
-            if (CreateSymbolicLinkA(linkPath.c_str(), targetPath.c_str(), flags)) {
-                std::cout << "Created symbolic link: " << linkName << " -> " << target << "\n";
-            } else {
-                DWORD error = GetLastError();
-                if (error == ERROR_PRIVILEGE_NOT_HELD) {
-                    printError("ln: symbolic links require admin privileges or Developer Mode enabled");
+                if (linkName.empty()) {
+                    targets.push_back(args[i]);
                 } else {
-                    printError("ln: failed to create symbolic link (error " + std::to_string(error) + ")");
+                    targets.push_back(linkName);
+                    linkName = args[i];
+                }
+                if (targets.size() == 1 && i == args.size() - 1) {
+                    linkName = targets[0];
+                    targets.clear();
+                } else if (i == args.size() - 1) {
+                    linkName = args[i];
+                    targets.pop_back();
+                }
+            }
+        }
+        
+        if (targets.empty() && !linkName.empty()) {
+            targets.push_back(linkName);
+            linkName = fs::path(linkName).filename().string();
+        }
+
+        for (const auto& target : targets) {
+            std::string targetPath = resolvePath(target);
+            std::string actualLinkPath;
+            
+            if (fs::is_directory(resolvePath(linkName))) {
+                actualLinkPath = resolvePath(linkName) + "\\" + fs::path(target).filename().string();
+            } else {
+                actualLinkPath = resolvePath(linkName);
+            }
+            
+            if (force && fs::exists(actualLinkPath)) {
+                try { fs::remove(actualLinkPath); } catch (...) {}
+            }
+            
+            if (fs::exists(actualLinkPath) && !noDereference) {
+                printError("ln: failed to create link '" + actualLinkPath + "': File exists");
+                continue;
+            }
+            
+            std::string linkTarget = targetPath;
+            if (relative && symbolic) {
+                fs::path linkDir = fs::path(actualLinkPath).parent_path();
+                linkTarget = fs::relative(targetPath, linkDir).string();
+            }
+            
+            if (!symbolic) {
+                if (CreateHardLinkA(actualLinkPath.c_str(), targetPath.c_str(), NULL)) {
+                    if (verbose) std::cout << "'" << actualLinkPath << "' => '" << target << "'\n";
+                } else {
+                    printError("ln: failed to create hard link (error " + std::to_string(GetLastError()) + ")");
+                }
+            } else {
+                DWORD flags = 0;
+                try { if (fs::is_directory(targetPath)) flags = SYMBOLIC_LINK_FLAG_DIRECTORY; } catch (...) {}
+                flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+                
+                if (CreateSymbolicLinkA(actualLinkPath.c_str(), linkTarget.c_str(), flags)) {
+                    if (verbose) std::cout << "'" << actualLinkPath << "' -> '" << linkTarget << "'\n";
+                } else {
+                    DWORD error = GetLastError();
+                    if (error == ERROR_PRIVILEGE_NOT_HELD) {
+                        printError("ln: symbolic links require admin privileges or Developer Mode");
+                    } else {
+                        printError("ln: failed to create symbolic link (error " + std::to_string(error) + ")");
+                    }
                 }
             }
         }
     }
 
-    // stat - display file status
     void cmdStat(const std::vector<std::string>& args) {
         if (args.size() < 2) {
             printError("stat: missing file operand");
             return;
         }
         
+        std::string format;
+        bool followSymlinks = false;
+        bool terse = false;
+        std::vector<std::string> files;
+        
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i][0] == '-') continue;
+            if ((args[i] == "-c" || args[i] == "--format") && i + 1 < args.size()) {
+                format = args[++i];
+            } else if (args[i].substr(0, 10) == "--format=") {
+                format = args[i].substr(10);
+            } else if (args[i] == "-L" || args[i] == "--dereference") {
+                followSymlinks = true;
+            } else if (args[i] == "-t" || args[i] == "--terse") {
+                terse = true;
+            } else if (args[i][0] != '-') {
+                files.push_back(args[i]);
+            }
+        }
+        
+        for (const auto& arg : files) {
+            std::string filePath = resolvePath(arg);
             
-            std::string filePath = resolvePath(args[i]);
+            if (followSymlinks && fs::is_symlink(filePath)) {
+                try { filePath = fs::canonical(filePath).string(); } catch (...) {}
+            }
             
             if (!fs::exists(filePath)) {
-                printError("stat: cannot stat '" + args[i] + "': No such file or directory");
+                printError("stat: cannot stat '" + arg + "': No such file or directory");
                 continue;
             }
             
-            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "  File: ";
-            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-            std::cout << args[i] << "\n";
-            
             try {
-                auto status = fs::status(filePath);
                 auto fileSize = fs::is_regular_file(filePath) ? fs::file_size(filePath) : 0;
                 auto lastWrite = fs::last_write_time(filePath);
+                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    lastWrite - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+                auto modTime = std::chrono::system_clock::to_time_t(sctp);
                 
                 std::string fileType;
                 if (fs::is_regular_file(filePath)) fileType = "regular file";
                 else if (fs::is_directory(filePath)) fileType = "directory";
                 else if (fs::is_symlink(filePath)) fileType = "symbolic link";
-                else if (fs::is_block_file(filePath)) fileType = "block device";
-                else if (fs::is_character_file(filePath)) fileType = "character device";
                 else fileType = "unknown";
                 
-                std::cout << "  Size: " << fileSize << " bytes\n";
-                std::cout << "  Type: " << fileType << "\n";
-                
-                // Get file attributes
                 DWORD attrs = GetFileAttributesA(filePath.c_str());
                 std::string attrStr;
-                if (attrs & FILE_ATTRIBUTE_READONLY) attrStr += "readonly ";
-                if (attrs & FILE_ATTRIBUTE_HIDDEN) attrStr += "hidden ";
-                if (attrs & FILE_ATTRIBUTE_SYSTEM) attrStr += "system ";
-                if (attrs & FILE_ATTRIBUTE_ARCHIVE) attrStr += "archive ";
-                if (attrStr.empty()) attrStr = "none";
-                std::cout << " Attrs: " << attrStr << "\n";
+                if (attrs & FILE_ATTRIBUTE_READONLY) attrStr += "r";
+                else attrStr += "-";
+                attrStr += "w";
+                if (filePath.find(".exe") != std::string::npos || filePath.find(".bat") != std::string::npos)
+                    attrStr += "x";
+                else attrStr += "-";
                 
-                // Convert file time to readable format
-                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                    lastWrite - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
-                auto time = std::chrono::system_clock::to_time_t(sctp);
-                std::cout << "Modify: " << std::ctime(&time);
+                BY_HANDLE_FILE_INFORMATION fileInfo;
+                HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, 
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+                DWORD nLinks = 1;
+                DWORD fileIndex = 0;
+                if (hFile != INVALID_HANDLE_VALUE) {
+                    if (GetFileInformationByHandle(hFile, &fileInfo)) {
+                        nLinks = fileInfo.nNumberOfLinks;
+                        fileIndex = fileInfo.nFileIndexLow;
+                    }
+                    CloseHandle(hFile);
+                }
                 
+                if (!format.empty()) {
+                    std::string output = format;
+                    size_t pos;
+                    while ((pos = output.find("%n")) != std::string::npos)
+                        output.replace(pos, 2, arg);
+                    while ((pos = output.find("%N")) != std::string::npos)
+                        output.replace(pos, 2, "'" + arg + "'");
+                    while ((pos = output.find("%s")) != std::string::npos)
+                        output.replace(pos, 2, std::to_string(fileSize));
+                    while ((pos = output.find("%F")) != std::string::npos)
+                        output.replace(pos, 2, fileType);
+                    while ((pos = output.find("%A")) != std::string::npos)
+                        output.replace(pos, 2, attrStr);
+                    while ((pos = output.find("%h")) != std::string::npos)
+                        output.replace(pos, 2, std::to_string(nLinks));
+                    while ((pos = output.find("%i")) != std::string::npos)
+                        output.replace(pos, 2, std::to_string(fileIndex));
+                    while ((pos = output.find("%Y")) != std::string::npos)
+                        output.replace(pos, 2, std::to_string(modTime));
+                    while ((pos = output.find("%y")) != std::string::npos) {
+                        char timeBuf[64];
+                        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", localtime(&modTime));
+                        output.replace(pos, 2, timeBuf);
+                    }
+                    while ((pos = output.find("\\n")) != std::string::npos)
+                        output.replace(pos, 2, "\n");
+                    std::cout << output << "\n";
+                } else if (terse) {
+                    std::cout << arg << " " << fileSize << " " << nLinks << " " << modTime << "\n";
+                } else {
+                    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                    std::cout << "  File: ";
+                    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    std::cout << arg << "\n";
+                    std::cout << "  Size: " << fileSize << "       \tBlocks: " << (fileSize / 512 + 1) 
+                              << "     \tLinks: " << nLinks << "\n";
+                    std::cout << "  Type: " << fileType << "\n";
+                    std::cout << " Attrs: ";
+                    if (attrs & FILE_ATTRIBUTE_READONLY) std::cout << "readonly ";
+                    if (attrs & FILE_ATTRIBUTE_HIDDEN) std::cout << "hidden ";
+                    if (attrs & FILE_ATTRIBUTE_SYSTEM) std::cout << "system ";
+                    if (attrs & FILE_ATTRIBUTE_ARCHIVE) std::cout << "archive ";
+                    if (attrs & FILE_ATTRIBUTE_DIRECTORY) std::cout << "directory ";
+                    std::cout << "\n";
+                    std::cout << "Modify: " << std::ctime(&modTime);
+                    std::cout << "\n";
+                }
             } catch (const std::exception& e) {
                 printError("stat: " + std::string(e.what()));
             }
-            
-            std::cout << "\n";
         }
     }
 
-    // file - determine file type
     void cmdFile(const std::vector<std::string>& args) {
         if (args.size() < 2) {
             printError("file: missing file operand");
             return;
         }
         
+        bool brief = false;
+        bool mimeType = false;
+        std::vector<std::string> files;
+        
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i][0] == '-') continue;
-            
-            std::string filePath = resolvePath(args[i]);
+            if (args[i] == "-b" || args[i] == "--brief") brief = true;
+            else if (args[i] == "-i" || args[i] == "--mime-type") mimeType = true;
+            else if (args[i][0] != '-') files.push_back(args[i]);
+        }
+        
+        for (const auto& arg : files) {
+            std::string filePath = resolvePath(arg);
             
             if (!fs::exists(filePath)) {
-                std::cout << args[i] << ": cannot open (No such file or directory)\n";
+                if (!brief) std::cout << arg << ": ";
+                std::cout << "cannot open (No such file or directory)\n";
                 continue;
             }
             
-            std::cout << args[i] << ": ";
+            if (!brief) std::cout << arg << ": ";
             
             if (fs::is_directory(filePath)) {
-                std::cout << "directory\n";
+                std::cout << (mimeType ? "inode/directory" : "directory") << "\n";
                 continue;
             }
             
             if (fs::is_symlink(filePath)) {
-                std::cout << "symbolic link\n";
+                std::cout << (mimeType ? "inode/symlink" : "symbolic link") << "\n";
                 continue;
             }
             
-            // Read magic bytes
             std::ifstream file(filePath, std::ios::binary);
             if (!file) {
                 std::cout << "cannot open\n";
                 continue;
             }
             
-            unsigned char magic[16] = {0};
-            file.read(reinterpret_cast<char*>(magic), 16);
+            unsigned char magic[32] = {0};
+            file.read(reinterpret_cast<char*>(magic), 32);
             size_t bytesRead = file.gcount();
             
             if (bytesRead == 0) {
-                std::cout << "empty\n";
+                std::cout << (mimeType ? "inode/x-empty" : "empty") << "\n";
                 continue;
             }
             
-            // Detect file type by magic bytes
             if (magic[0] == 0x4D && magic[1] == 0x5A) {
-                std::cout << "PE32 executable (Windows)\n";
+                std::cout << (mimeType ? "application/x-dosexec" : "PE32 executable (Windows)") << "\n";
             } else if (magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
-                std::cout << "ELF executable (Linux)\n";
+                std::cout << (mimeType ? "application/x-executable" : "ELF executable") << "\n";
+            } else if (magic[0] == 0xCA && magic[1] == 0xFE && magic[2] == 0xBA && magic[3] == 0xBE) {
+                std::cout << (mimeType ? "application/x-mach-binary" : "Mach-O universal binary") << "\n";
             } else if (magic[0] == 0x89 && magic[1] == 'P' && magic[2] == 'N' && magic[3] == 'G') {
-                std::cout << "PNG image data\n";
+                std::cout << (mimeType ? "image/png" : "PNG image data") << "\n";
             } else if (magic[0] == 0xFF && magic[1] == 0xD8 && magic[2] == 0xFF) {
-                std::cout << "JPEG image data\n";
-            } else if (magic[0] == 'G' && magic[1] == 'I' && magic[2] == 'F') {
-                std::cout << "GIF image data\n";
+                std::cout << (mimeType ? "image/jpeg" : "JPEG image data") << "\n";
+            } else if (magic[0] == 'G' && magic[1] == 'I' && magic[2] == 'F' && magic[3] == '8') {
+                std::cout << (mimeType ? "image/gif" : "GIF image data") << "\n";
+            } else if (magic[0] == 'B' && magic[1] == 'M') {
+                std::cout << (mimeType ? "image/bmp" : "BMP image data") << "\n";
+            } else if (magic[0] == 0x00 && magic[1] == 0x00 && magic[2] == 0x01 && magic[3] == 0x00) {
+                std::cout << (mimeType ? "image/x-icon" : "ICO image data") << "\n";
+            } else if (magic[0] == 'R' && magic[1] == 'I' && magic[2] == 'F' && magic[3] == 'F') {
+                if (magic[8] == 'W' && magic[9] == 'A' && magic[10] == 'V' && magic[11] == 'E') {
+                    std::cout << (mimeType ? "audio/wav" : "WAV audio") << "\n";
+                } else if (magic[8] == 'A' && magic[9] == 'V' && magic[10] == 'I') {
+                    std::cout << (mimeType ? "video/avi" : "AVI video") << "\n";
+                } else if (magic[8] == 'W' && magic[9] == 'E' && magic[10] == 'B' && magic[11] == 'P') {
+                    std::cout << (mimeType ? "image/webp" : "WebP image") << "\n";
+                } else {
+                    std::cout << (mimeType ? "application/octet-stream" : "RIFF data") << "\n";
+                }
+            } else if (magic[0] == 'O' && magic[1] == 'g' && magic[2] == 'g' && magic[3] == 'S') {
+                std::cout << (mimeType ? "application/ogg" : "Ogg data") << "\n";
+            } else if (magic[0] == 'f' && magic[1] == 'L' && magic[2] == 'a' && magic[3] == 'C') {
+                std::cout << (mimeType ? "audio/flac" : "FLAC audio") << "\n";
+            } else if (magic[0] == 0xFF && (magic[1] & 0xE0) == 0xE0) {
+                std::cout << (mimeType ? "audio/mpeg" : "MP3 audio") << "\n";
+            } else if (magic[0] == 'I' && magic[1] == 'D' && magic[2] == '3') {
+                std::cout << (mimeType ? "audio/mpeg" : "MP3 audio (ID3 tag)") << "\n";
+            } else if (magic[4] == 'f' && magic[5] == 't' && magic[6] == 'y' && magic[7] == 'p') {
+                std::cout << (mimeType ? "video/mp4" : "MP4/M4A media") << "\n";
+            } else if (magic[0] == 0x1A && magic[1] == 0x45 && magic[2] == 0xDF && magic[3] == 0xA3) {
+                std::cout << (mimeType ? "video/webm" : "WebM/MKV video") << "\n";
             } else if (magic[0] == 'P' && magic[1] == 'K' && magic[2] == 0x03 && magic[3] == 0x04) {
-                std::cout << "Zip archive data\n";
+                file.seekg(30);
+                char nameTest[8] = {0};
+                file.read(nameTest, 8);
+                if (strncmp(nameTest, "word/", 5) == 0) {
+                    std::cout << (mimeType ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "Microsoft Word 2007+ document") << "\n";
+                } else if (strncmp(nameTest, "xl/", 3) == 0) {
+                    std::cout << (mimeType ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "Microsoft Excel 2007+ spreadsheet") << "\n";
+                } else if (strncmp(nameTest, "ppt/", 4) == 0) {
+                    std::cout << (mimeType ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "Microsoft PowerPoint 2007+ presentation") << "\n";
+                } else {
+                    std::cout << (mimeType ? "application/zip" : "Zip archive data") << "\n";
+                }
             } else if (magic[0] == 0x1F && magic[1] == 0x8B) {
-                std::cout << "gzip compressed data\n";
+                std::cout << (mimeType ? "application/gzip" : "gzip compressed data") << "\n";
+            } else if (magic[0] == 0x42 && magic[1] == 0x5A && magic[2] == 0x68) {
+                std::cout << (mimeType ? "application/x-bzip2" : "bzip2 compressed data") << "\n";
+            } else if (magic[0] == 0xFD && magic[1] == 0x37 && magic[2] == 0x7A && magic[3] == 0x58 && magic[4] == 0x5A) {
+                std::cout << (mimeType ? "application/x-xz" : "XZ compressed data") << "\n";
+            } else if (magic[0] == 0x37 && magic[1] == 0x7A && magic[2] == 0xBC && magic[3] == 0xAF) {
+                std::cout << (mimeType ? "application/x-7z-compressed" : "7-zip archive data") << "\n";
+            } else if (magic[0] == 0x52 && magic[1] == 0x61 && magic[2] == 0x72 && magic[3] == 0x21) {
+                std::cout << (mimeType ? "application/x-rar" : "RAR archive data") << "\n";
             } else if (magic[0] == '%' && magic[1] == 'P' && magic[2] == 'D' && magic[3] == 'F') {
-                std::cout << "PDF document\n";
-            } else if (magic[0] == 0xD0 && magic[1] == 0xCF) {
-                std::cout << "Microsoft Office document\n";
-            } else if (magic[0] == '<' && (magic[1] == '?' || magic[1] == '!' || magic[1] == 'h')) {
-                std::cout << "HTML/XML document\n";
+                std::cout << (mimeType ? "application/pdf" : "PDF document") << "\n";
+            } else if (magic[0] == 0xD0 && magic[1] == 0xCF && magic[2] == 0x11 && magic[3] == 0xE0) {
+                std::cout << (mimeType ? "application/msword" : "Microsoft Office document (OLE)") << "\n";
+            } else if (magic[0] == 0x25 && magic[1] == 0x21 && magic[2] == 0x50 && magic[3] == 0x53) {
+                std::cout << (mimeType ? "application/postscript" : "PostScript document") << "\n";
+            } else if (magic[0] == 0xEF && magic[1] == 0xBB && magic[2] == 0xBF) {
+                std::cout << (mimeType ? "text/plain; charset=utf-8" : "UTF-8 Unicode text (with BOM)") << "\n";
+            } else if (magic[0] == 0xFE && magic[1] == 0xFF) {
+                std::cout << (mimeType ? "text/plain; charset=utf-16be" : "UTF-16 BE Unicode text") << "\n";
+            } else if (magic[0] == 0xFF && magic[1] == 0xFE) {
+                std::cout << (mimeType ? "text/plain; charset=utf-16le" : "UTF-16 LE Unicode text") << "\n";
+            } else if (magic[0] == '<' && magic[1] == '?') {
+                if (magic[2] == 'x' && magic[3] == 'm' && magic[4] == 'l') {
+                    std::cout << (mimeType ? "application/xml" : "XML document") << "\n";
+                } else {
+                    std::cout << (mimeType ? "text/x-php" : "PHP script") << "\n";
+                }
+            } else if (magic[0] == '<' && magic[1] == '!' && magic[2] == 'D') {
+                std::cout << (mimeType ? "text/html" : "HTML document") << "\n";
+            } else if (magic[0] == '<' && (magic[1] == 'h' || magic[1] == 'H')) {
+                std::cout << (mimeType ? "text/html" : "HTML document") << "\n";
             } else if (magic[0] == '{' || magic[0] == '[') {
-                std::cout << "JSON data\n";
+                std::cout << (mimeType ? "application/json" : "JSON data") << "\n";
             } else if (magic[0] == '#' && magic[1] == '!') {
-                std::cout << "script, shebang executable\n";
+                std::cout << (mimeType ? "text/x-shellscript" : "script, shebang executable") << "\n";
+            } else if (magic[0] == 0x00 && magic[1] == 0x00 && magic[2] == 0x00) {
+                std::cout << (mimeType ? "application/octet-stream" : "binary data") << "\n";
             } else {
-                // Check if it's text
                 bool isText = true;
                 for (size_t j = 0; j < bytesRead; ++j) {
                     if (magic[j] < 0x09 || (magic[j] > 0x0D && magic[j] < 0x20 && magic[j] != 0x1B)) {
@@ -2783,9 +4450,9 @@ private:
                     }
                 }
                 if (isText) {
-                    std::cout << "ASCII text\n";
+                    std::cout << (mimeType ? "text/plain" : "ASCII text") << "\n";
                 } else {
-                    std::cout << "data\n";
+                    std::cout << (mimeType ? "application/octet-stream" : "data") << "\n";
                 }
             }
         }
@@ -2899,96 +4566,189 @@ private:
         }
     }
 
-    // tree - display directory tree
     void cmdTree(const std::vector<std::string>& args) {
         std::string path = ".";
         int maxDepth = -1;
         bool dirsOnly = false;
+        bool showHidden = false;
+        bool showSize = false;
+        bool humanReadable = false;
+        bool showPermissions = false;
+        bool fullPath = false;
+        bool noReport = false;
+        bool showDu = false;
+        std::string ignorePattern;
         
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "-L" && i + 1 < args.size()) {
-                maxDepth = std::stoi(args[++i]);
+                try { maxDepth = std::stoi(args[++i]); } catch (...) {}
             } else if (args[i] == "-d") {
                 dirsOnly = true;
+            } else if (args[i] == "-a") {
+                showHidden = true;
+            } else if (args[i] == "-s") {
+                showSize = true;
+            } else if (args[i] == "-h") {
+                humanReadable = true;
+            } else if (args[i] == "-p") {
+                showPermissions = true;
+            } else if (args[i] == "-f") {
+                fullPath = true;
+            } else if (args[i] == "--noreport") {
+                noReport = true;
+            } else if (args[i] == "--du") {
+                showDu = true;
+                showSize = true;
+            } else if ((args[i] == "-I" || args[i] == "--ignore") && i + 1 < args.size()) {
+                ignorePattern = args[++i];
             } else if (args[i][0] != '-') {
                 path = args[i];
             }
         }
         
-        std::string fullPath = resolvePath(path);
-        if (!fs::exists(fullPath) || !fs::is_directory(fullPath)) {
+        std::string rootPath = resolvePath(path);
+        if (!fs::exists(rootPath) || !fs::is_directory(rootPath)) {
             printError("tree: '" + path + "' is not a directory");
             return;
         }
         
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << path << "\n";
+        std::cout << (fullPath ? rootPath : path) << "\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         
         int dirCount = 0, fileCount = 0;
-        
-        std::function<void(const fs::path&, const std::string&, int)> printTree;
-        printTree = [&](const fs::path& p, const std::string& prefix, int depth) {
-            if (maxDepth >= 0 && depth >= maxDepth) return;
+        uintmax_t totalSize = 0;
+
+        auto formatSize = [](uintmax_t bytes, bool human) -> std::string {
+            if (!human) return std::to_string(bytes);
+            const char* units[] = {"B", "K", "M", "G", "T"};
+            int u = 0;
+            double size = (double)bytes;
+            while (size >= 1024 && u < 4) { size /= 1024; u++; }
+            char buf[32];
+            if (u == 0) snprintf(buf, sizeof(buf), "%4d%s", (int)size, units[u]);
+            else snprintf(buf, sizeof(buf), "%4.1f%s", size, units[u]);
+            return buf;
+        };
+
+        std::function<uintmax_t(const fs::path&, const std::string&, int)> printTree;
+        printTree = [&](const fs::path& p, const std::string& prefix, int depth) -> uintmax_t {
+            if (maxDepth >= 0 && depth >= maxDepth) return 0;
             
             std::vector<fs::directory_entry> entries;
             try {
                 for (const auto& entry : fs::directory_iterator(p)) {
+                    std::string name = entry.path().filename().string();
+                    if (!showHidden && name[0] == '.') continue;
+                    if (!ignorePattern.empty()) {
+                        try {
+                            std::regex re(ignorePattern);
+                            if (std::regex_search(name, re)) continue;
+                        } catch (...) {
+                            if (name.find(ignorePattern) != std::string::npos) continue;
+                        }
+                    }
                     if (dirsOnly && !entry.is_directory()) continue;
                     entries.push_back(entry);
                 }
             } catch (...) {
-                return;
+                return 0;
             }
             
             std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
                 return a.path().filename() < b.path().filename();
             });
             
+            uintmax_t dirSize = 0;
+            
             for (size_t i = 0; i < entries.size(); ++i) {
                 const auto& entry = entries[i];
                 bool isLast = (i == entries.size() - 1);
                 
-                std::cout << prefix;
-                std::cout << (isLast ? "`-- " : "|-- ");
+                std::cout << prefix << (isLast ? "`-- " : "|-- ");
+                
+                uintmax_t entrySize = 0;
+                if (entry.is_directory()) {
+                    if (showDu) {
+                        entrySize = printTree(entry.path(), prefix + (isLast ? "    " : "|   "), depth + 1);
+                    }
+                } else {
+                    try { entrySize = fs::file_size(entry.path()); } catch (...) {}
+                }
+                
+                if (showPermissions) {
+                    DWORD attrs = GetFileAttributesA(entry.path().string().c_str());
+                    std::cout << "[" << (attrs & FILE_ATTRIBUTE_DIRECTORY ? "d" : "-")
+                              << (attrs & FILE_ATTRIBUTE_READONLY ? "r-" : "rw")
+                              << (attrs & FILE_ATTRIBUTE_HIDDEN ? "h" : "-") << "] ";
+                }
+                
+                if (showSize) {
+                    std::cout << "[" << std::setw(8) << formatSize(entrySize, humanReadable) << "]  ";
+                }
                 
                 if (entry.is_directory()) {
                     SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-                    std::cout << entry.path().filename().string() << "\n";
+                    std::cout << (fullPath ? entry.path().string() : entry.path().filename().string()) << "\n";
                     SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
                     dirCount++;
-                    printTree(entry.path(), prefix + (isLast ? "    " : "|   "), depth + 1);
+                    if (!showDu) {
+                        printTree(entry.path(), prefix + (isLast ? "    " : "|   "), depth + 1);
+                    }
+                    dirSize += entrySize;
                 } else {
-                    std::cout << entry.path().filename().string() << "\n";
+                    std::cout << (fullPath ? entry.path().string() : entry.path().filename().string()) << "\n";
                     fileCount++;
+                    dirSize += entrySize;
+                    totalSize += entrySize;
                 }
             }
+            return dirSize;
         };
         
-        printTree(fullPath, "", 0);
+        printTree(rootPath, "", 0);
         
-        std::cout << "\n" << dirCount << " directories";
-        if (!dirsOnly) {
-            std::cout << ", " << fileCount << " files";
+        if (!noReport) {
+            std::cout << "\n" << dirCount << " directories";
+            if (!dirsOnly) {
+                std::cout << ", " << fileCount << " files";
+                if (showSize) {
+                    std::cout << " (" << formatSize(totalSize, humanReadable) << " total)";
+                }
+            }
+            std::cout << "\n";
         }
-        std::cout << "\n";
     }
 
-    // du - disk usage
     void cmdDu(const std::vector<std::string>& args) {
         bool humanReadable = false;
         bool summary = false;
+        bool showAll = false;
+        bool showTotal = false;
+        bool showTime = false;
+        bool apparentSize = false;
         int maxDepth = -1;
+        int blockSize = 1024;
+        std::string excludePattern;
         std::vector<std::string> paths;
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-h") humanReadable = true;
-            else if (args[i] == "-s") summary = true;
-            else if (args[i] == "-d" && i + 1 < args.size()) {
-                maxDepth = std::stoi(args[++i]);
+            if (args[i] == "-h" || args[i] == "--human-readable") humanReadable = true;
+            else if (args[i] == "-s" || args[i] == "--summarize") summary = true;
+            else if (args[i] == "-a" || args[i] == "--all") showAll = true;
+            else if (args[i] == "-c" || args[i] == "--total") showTotal = true;
+            else if (args[i] == "-b" || args[i] == "--bytes") { blockSize = 1; apparentSize = true; }
+            else if (args[i] == "-k") blockSize = 1024;
+            else if (args[i] == "-m") blockSize = 1024 * 1024;
+            else if (args[i] == "--time") showTime = true;
+            else if (args[i] == "--apparent-size") apparentSize = true;
+            else if ((args[i] == "-d" || args[i] == "--max-depth") && i + 1 < args.size()) {
+                try { maxDepth = std::stoi(args[++i]); } catch (...) {}
             } else if (args[i].substr(0, 2) == "-d") {
-                maxDepth = std::stoi(args[i].substr(2));
+                try { maxDepth = std::stoi(args[i].substr(2)); } catch (...) {}
+            } else if ((args[i] == "--exclude") && i + 1 < args.size()) {
+                excludePattern = args[++i];
             } else if (args[i][0] != '-') {
                 paths.push_back(args[i]);
             }
@@ -2996,27 +4756,21 @@ private:
         
         if (paths.empty()) paths.push_back(".");
         
-        auto formatSize = [humanReadable](uintmax_t bytes) -> std::string {
-            if (!humanReadable) {
-                return std::to_string(bytes / 1024);  // KB
+        auto formatSize = [humanReadable, blockSize](uintmax_t bytes) -> std::string {
+            if (humanReadable) {
+                const char* units[] = {"B", "K", "M", "G", "T"};
+                int unit = 0;
+                double size = (double)bytes;
+                while (size >= 1024 && unit < 4) { size /= 1024; unit++; }
+                std::ostringstream oss;
+                if (unit == 0) oss << (int)size << units[unit];
+                else oss << std::fixed << std::setprecision(1) << size << units[unit];
+                return oss.str();
             }
-            
-            const char* units[] = {"B", "K", "M", "G", "T"};
-            int unit = 0;
-            double size = (double)bytes;
-            while (size >= 1024 && unit < 4) {
-                size /= 1024;
-                unit++;
-            }
-            
-            std::ostringstream oss;
-            if (unit == 0) {
-                oss << (int)size << units[unit];
-            } else {
-                oss << std::fixed << std::setprecision(1) << size << units[unit];
-            }
-            return oss.str();
+            return std::to_string(bytes / blockSize);
         };
+        
+        uintmax_t grandTotal = 0;
         
         for (const auto& path : paths) {
             std::string fullPath = resolvePath(path);
@@ -3032,20 +4786,57 @@ private:
                 
                 try {
                     if (fs::is_regular_file(p)) {
-                        return fs::file_size(p);
+                        uintmax_t fsize = fs::file_size(p);
+                        if (showAll && !summary) {
+                            std::cout << std::setw(8) << formatSize(fsize) << "\t" << p.string() << "\n";
+                        }
+                        return fsize;
                     }
                     
                     for (const auto& entry : fs::directory_iterator(p, fs::directory_options::skip_permission_denied)) {
+                        std::string name = entry.path().filename().string();
+                        if (!excludePattern.empty()) {
+                            try {
+                                std::regex re(excludePattern);
+                                if (std::regex_search(name, re)) continue;
+                            } catch (...) {
+                                if (name.find(excludePattern) != std::string::npos) continue;
+                            }
+                        }
+                        
                         if (entry.is_directory()) {
                             uintmax_t dirSize = calcSize(entry.path(), depth + 1);
                             total += dirSize;
                             
                             if (!summary && (maxDepth < 0 || depth < maxDepth)) {
-                                std::cout << std::setw(8) << formatSize(dirSize) << "\t" 
-                                         << entry.path().string() << "\n";
+                                std::cout << std::setw(8) << formatSize(dirSize) << "\t";
+                                if (showTime) {
+                                    auto lwt = fs::last_write_time(entry.path());
+                                    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                                        lwt - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+                                    auto time = std::chrono::system_clock::to_time_t(sctp);
+                                    char timeBuf[64];
+                                    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M", localtime(&time));
+                                    std::cout << timeBuf << " ";
+                                }
+                                std::cout << entry.path().string() << "\n";
                             }
                         } else if (entry.is_regular_file()) {
-                            total += fs::file_size(entry.path());
+                            uintmax_t fsize = fs::file_size(entry.path());
+                            total += fsize;
+                            if (showAll && !summary && (maxDepth < 0 || depth < maxDepth)) {
+                                std::cout << std::setw(8) << formatSize(fsize) << "\t";
+                                if (showTime) {
+                                    auto lwt = fs::last_write_time(entry.path());
+                                    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                                        lwt - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+                                    auto time = std::chrono::system_clock::to_time_t(sctp);
+                                    char timeBuf[64];
+                                    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M", localtime(&time));
+                                    std::cout << timeBuf << " ";
+                                }
+                                std::cout << entry.path().string() << "\n";
+                            }
                         }
                     }
                 } catch (...) {}
@@ -3055,6 +4846,11 @@ private:
             
             uintmax_t totalSize = calcSize(fullPath, 0);
             std::cout << std::setw(8) << formatSize(totalSize) << "\t" << path << "\n";
+            grandTotal += totalSize;
+        }
+        
+        if (showTotal && paths.size() > 1) {
+            std::cout << std::setw(8) << formatSize(grandTotal) << "\ttotal\n";
         }
     }
 
@@ -3150,7 +4946,7 @@ private:
             std::cout << package << "\n\n";
             
             std::string cmd = "winget install --accept-package-agreements --accept-source-agreements " + package;
-            system(cmd.c_str());
+            runProcess(cmd);
             
         } else if (subcmd == "remove" || subcmd == "uninstall") {
             if (args.size() < 3) {
@@ -3167,7 +4963,7 @@ private:
             std::cout << package << "\n\n";
             
             std::string cmd = "winget uninstall " + package;
-            system(cmd.c_str());
+            runProcess(cmd);
             
         } else if (subcmd == "search" || subcmd == "find") {
             if (args.size() < 3) {
@@ -3179,7 +4975,7 @@ private:
             std::string tempFile = getPackagesFilePath() + ".tmp";
             
             std::string cmd = "winget search " + query + " --accept-source-agreements";
-            system(cmd.c_str());
+            runProcess(cmd);
             
             std::cout << "\n";
             HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -3187,8 +4983,8 @@ private:
             std::cout << "Syncing found packages to aliases...";
             SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
             
-            std::string captureCmd = "winget search " + query + " --accept-source-agreements > \"" + tempFile + "\" 2>nul";
-            system(captureCmd.c_str());
+            std::string captureCmd = "cmd /c winget search " + query + " --accept-source-agreements > \"" + tempFile + "\" 2>nul";
+            runProcess(captureCmd);
             
             auto existingAliases = loadPackageAliases();
             int addedCount = 0;
@@ -3252,14 +5048,14 @@ private:
             
         } else if (subcmd == "update") {
             std::cout << "Checking for updates...\n\n";
-            system("winget upgrade");
+            runProcess("winget upgrade");
             
         } else if (subcmd == "upgrade") {
             std::cout << "Upgrading all packages...\n\n";
-            system("winget upgrade --all --accept-package-agreements --accept-source-agreements");
+            runProcess("winget upgrade --all --accept-package-agreements --accept-source-agreements");
             
         } else if (subcmd == "list") {
-            system("winget list");
+            runProcess("winget list");
             
         } else if (subcmd == "info" || subcmd == "show") {
             if (args.size() < 3) {
@@ -3269,7 +5065,7 @@ private:
             
             std::string package = resolvePackageName(args[2]);
             std::string cmd = "winget show " + package;
-            system(cmd.c_str());
+            runProcess(cmd);
             
         } else if (subcmd == "alias" || subcmd == "aliases") {
             auto aliases = loadPackageAliases();
@@ -3673,9 +5469,19 @@ private:
         std::cout << "\n  Networking:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  ifconfig/ip";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Show network interfaces\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  hostname";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      Show hostname (-i for IP)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  ping";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "          Ping a host\n";
+        std::cout << "          Ping a host (-c count)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  traceroute";
@@ -3683,27 +5489,64 @@ private:
         std::cout << "    Trace route to host\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  curl/wget";
+        std::cout << "  nslookup/dig";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "     HTTP requests / download\n";
+        std::cout << "  DNS lookup with server info\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  nslookup";
+        std::cout << "  curl/wget";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "      DNS lookup\n";
+        std::cout << "     HTTP requests / download files\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  arp";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Show ARP table\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  ss/netstat";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "    Socket statistics (-t tcp, -u udp)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  nc/netcat";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "     TCP client/server (-l listen)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  net show";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "      Show WiFi networks\n";
+        std::cout << "      Scan WiFi networks\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  net connect";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "   Connect to WiFi (-p password)\n";
-        
+        std::cout << "   Connect to WiFi network\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  net disconnect";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "\n  External tools: git, node, python, mysql, etc.\n";
+        std::cout << "Disconnect from WiFi\n";
+
+        std::cout << "\n  Process Management (Extended):\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  pstree";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Show process tree\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  renice/nice";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Change process priority\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  lsof";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          List open files/handles\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "\n  External tools: git, node, python, gcc, g++, make, etc.\n";
         std::cout << "  Run 'registry refresh' to scan for installed commands.\n";
 
         std::cout << "\n";
@@ -4149,10 +5992,7 @@ private:
         }
 
         const std::string& cmd = tokens[0];
-
-        // Only print newline if not running from a script (how to detect?)
-        // For now, keep it potentially noisy or improve later.
-        // std::cout << std::endl; 
+        lastExitCode = 0;
 
         try {
         if (cmd == "pwd") {
@@ -4337,7 +6177,40 @@ private:
         } else if (cmd == "netstat") {
             Networking::netstat(tokens);
         } else if (cmd == "ifconfig" || cmd == "ipconfig") {
-            Networking::showIP(tokens);
+            Networking::ifconfig(tokens);
+        } else if (cmd == "ss") {
+            Networking::ss(tokens);
+        } else if (cmd == "hostname") {
+            Networking::hostname(tokens);
+        } else if (cmd == "arp") {
+            Networking::arp(tokens);
+        } else if (cmd == "nc" || cmd == "netcat") {
+            Networking::nc(tokens);
+        } else if (cmd == "pstree") {
+            DWORD pid = 0;
+            if (tokens.size() > 1) { try { pid = std::stoul(tokens[1]); } catch (...) {} }
+            ProcessManager::pstree(pid);
+        } else if (cmd == "renice" || cmd == "nice") {
+            if (tokens.size() < 3) {
+                printError("Usage: renice <priority> -p <pid>");
+            } else {
+                int priority = 0;
+                DWORD pid = 0;
+                for (size_t i = 1; i < tokens.size(); i++) {
+                    if (tokens[i] == "-p" && i + 1 < tokens.size()) {
+                        try { pid = std::stoul(tokens[++i]); } catch (...) {}
+                    } else if (tokens[i] == "-n" && i + 1 < tokens.size()) {
+                        try { priority = std::stoi(tokens[++i]); } catch (...) {}
+                    } else {
+                        try { priority = std::stoi(tokens[i]); } catch (...) {}
+                    }
+                }
+                if (pid > 0 && ProcessManager::setProcessPriority(pid, priority)) {
+                    std::cout << "Priority of PID " << pid << " set to " << priority << std::endl;
+                } else {
+                    printError("Failed to set priority");
+                }
+            }
         } else if (cmd == "gcc" || cmd == "g++" || cmd == "cc" || cmd == "c++" || 
                    cmd == "make" || cmd == "gdb" || cmd == "ar" || cmd == "ld" ||
                    cmd == "objdump" || cmd == "objcopy" || cmd == "strip" || cmd == "windres" ||
@@ -4658,16 +6531,22 @@ private:
             } else {
                 printError("File system error: " + std::string(e.what()));
             }
+            lastExitCode = 1;
         } catch (const std::invalid_argument& e) {
             printError("Invalid argument: " + std::string(e.what()));
+            lastExitCode = 1;
         } catch (const std::out_of_range& e) {
             printError("Value out of range: " + std::string(e.what()));
+            lastExitCode = 1;
         } catch (const std::runtime_error& e) {
             printError("Runtime error: " + std::string(e.what()));
+            lastExitCode = 1;
         } catch (const std::exception& e) {
             printError("Error: " + std::string(e.what()));
+            lastExitCode = 1;
         } catch (...) {
             printError("An unexpected error occurred.");
+            lastExitCode = 1;
         }
 
         if (cmd != "clear" && cmd != "cls" && running) {
@@ -4810,12 +6689,14 @@ private:
             
             DWORD exitCode;
             GetExitCodeProcess(pi.hProcess, &exitCode);
+            lastExitCode = (int)exitCode;
             
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
             printError("Failed to execute (error " + std::to_string(err) + ")");
+            lastExitCode = 1;
         }
     }
 
@@ -4907,7 +6788,82 @@ public:
         return output;
     }
 
-    // Parse and handle output redirection (>, >>, 2>, 2>&1, &>) and pipes (|)
+    size_t findSinglePipe(const std::string& str, size_t start = 0) {
+        for (size_t i = start; i < str.length(); i++) {
+            if (str[i] == '|') {
+                if (i + 1 < str.length() && str[i + 1] == '|') {
+                    i++;
+                    continue;
+                }
+                if (i > 0 && str[i - 1] == '|') {
+                    continue;
+                }
+                return i;
+            }
+        }
+        return std::string::npos;
+    }
+
+    std::string readHeredoc(const std::string& delimiter) {
+        std::string content;
+        std::string line;
+        
+        while (true) {
+            std::cout << "> ";
+            if (!std::getline(std::cin, line)) break;
+            
+            std::string trimmed = line;
+            trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+            if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+            
+            if (trimmed == delimiter) break;
+            
+            content += line + "\n";
+        }
+        return content;
+    }
+
+    int executeWithStdin(const std::string& cmdPart, const std::string& stdinContent) {
+        char tempPath[MAX_PATH];
+        char tempFile[MAX_PATH];
+        GetTempPathA(MAX_PATH, tempPath);
+        GetTempFileNameA(tempPath, "lin", 0, tempFile);
+        
+        std::ofstream tf(tempFile);
+        tf << stdinContent;
+        tf.close();
+        
+        std::string fullCmd = "cmd /c \"cd /d \"" + currentDir + "\" && " + cmdPart + " < \"" + tempFile + "\"\"";
+        
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[8192];
+        strncpy_s(cmdBuffer, fullCmd.c_str(), sizeof(cmdBuffer) - 1);
+        
+        int exitCode = 0;
+        if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            DWORD code;
+            GetExitCodeProcess(pi.hProcess, &code);
+            exitCode = (int)code;
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        } else {
+            exitCode = 1;
+        }
+        
+        DeleteFileA(tempFile);
+        return exitCode;
+    }
+
     bool handleRedirection(const std::string& input) {
         // Check for stderr redirections first
         size_t stderrToStdout = input.find("2>&1");
@@ -5006,16 +6962,156 @@ public:
             
             // Execute command, capture stderr separately
             std::string fullCmd = "cd /d \"" + currentDir + "\" && " + cmdPart + " 2>\"" + stderrFile + "\"";
-            int result = system(fullCmd.c_str());
+            int result = runProcess("cmd /c " + fullCmd);
             (void)result;  // Suppress warning
             
             return true;
         }
         
-        // Check for output redirection first (> or >>)
+        size_t hereStringPos = processedInput.find("<<<");
+        size_t heredocPos = processedInput.find("<<");
+        size_t inputRedirPos = processedInput.find("<");
+        
+        if (heredocPos != std::string::npos && heredocPos == hereStringPos) {
+            heredocPos = std::string::npos;
+        }
+        if (inputRedirPos != std::string::npos && (inputRedirPos == heredocPos || inputRedirPos == hereStringPos || inputRedirPos + 1 == heredocPos)) {
+            inputRedirPos = std::string::npos;
+        }
+        
+        if (hereStringPos != std::string::npos) {
+            std::string cmdPart = processedInput.substr(0, hereStringPos);
+            std::string stringPart = processedInput.substr(hereStringPos + 3);
+            
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            stringPart.erase(0, stringPart.find_first_not_of(" \t"));
+            
+            if (stringPart.front() == '"' || stringPart.front() == '\'') {
+                char quote = stringPart.front();
+                stringPart = stringPart.substr(1);
+                size_t endQuote = stringPart.find(quote);
+                if (endQuote != std::string::npos) {
+                    stringPart = stringPart.substr(0, endQuote);
+                }
+            } else {
+                size_t endSpace = stringPart.find_first_of(" \t");
+                if (endSpace != std::string::npos) {
+                    stringPart = stringPart.substr(0, endSpace);
+                }
+            }
+            
+            std::vector<std::string> tokens = tokenize(cmdPart);
+            if (!tokens.empty()) {
+                std::string& cmd = tokens[0];
+                std::istringstream iss(stringPart);
+                
+                std::ostringstream capturedOutput;
+                std::streambuf* oldCout = std::cout.rdbuf();
+                std::cout.rdbuf(capturedOutput.rdbuf());
+                
+                if (cmd == "grep") cmdGrep(tokens, stringPart);
+                else if (cmd == "wc") cmdWc(tokens, stringPart);
+                else if (cmd == "head") cmdHead(tokens, stringPart);
+                else if (cmd == "tail") cmdTail(tokens, stringPart);
+                else if (cmd == "sort") cmdSort(tokens, stringPart);
+                else if (cmd == "uniq") cmdUniq(tokens, stringPart);
+                else if (cmd == "cut") cmdCut(tokens, stringPart);
+                else if (cmd == "tr") cmdTr(tokens, stringPart);
+                else if (cmd == "cat") {
+                    std::cout << stringPart;
+                    if (!stringPart.empty() && stringPart.back() != '\n') std::cout << '\n';
+                }
+                else {
+                    std::cout.rdbuf(oldCout);
+                    lastExitCode = executeWithStdin(cmdPart, stringPart + "\n");
+                    return true;
+                }
+                
+                std::cout.rdbuf(oldCout);
+                std::cout << capturedOutput.str();
+            }
+            return true;
+        }
+        
+        if (heredocPos != std::string::npos && (hereStringPos == std::string::npos || heredocPos < hereStringPos)) {
+            std::string cmdPart = processedInput.substr(0, heredocPos);
+            std::string delimPart = processedInput.substr(heredocPos + 2);
+            
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            delimPart.erase(0, delimPart.find_first_not_of(" \t"));
+            delimPart.erase(delimPart.find_last_not_of(" \t\r\n") + 1);
+            
+            if (delimPart.empty()) {
+                printError("Syntax error: missing delimiter after <<");
+                return true;
+            }
+            
+            std::string heredocContent = readHeredoc(delimPart);
+            
+            std::vector<std::string> tokens = tokenize(cmdPart);
+            if (!tokens.empty()) {
+                std::string& cmd = tokens[0];
+                
+                if (cmd == "grep") cmdGrep(tokens, heredocContent);
+                else if (cmd == "wc") cmdWc(tokens, heredocContent);
+                else if (cmd == "cat") {
+                    std::cout << heredocContent;
+                }
+                else {
+                    lastExitCode = executeWithStdin(cmdPart, heredocContent);
+                }
+            }
+            return true;
+        }
+        
+        if (inputRedirPos != std::string::npos && inputRedirPos > 0) {
+            bool isStderrRedir = (inputRedirPos > 0 && processedInput[inputRedirPos - 1] == '2');
+            bool isAmpRedir = (inputRedirPos > 0 && processedInput[inputRedirPos - 1] == '&');
+            
+            if (!isStderrRedir && !isAmpRedir) {
+                std::string cmdPart = processedInput.substr(0, inputRedirPos);
+                std::string filePart = processedInput.substr(inputRedirPos + 1);
+                
+                cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+                filePart.erase(0, filePart.find_first_not_of(" \t"));
+                filePart.erase(filePart.find_last_not_of(" \t") + 1);
+                
+                if (filePart.empty()) {
+                    printError("Syntax error: missing filename after <");
+                    return true;
+                }
+                
+                std::string inputFile = resolvePath(filePart);
+                if (!fs::exists(inputFile)) {
+                    printError("No such file: " + filePart);
+                    lastExitCode = 1;
+                    return true;
+                }
+                
+                std::ifstream ifs(inputFile);
+                std::string fileContent((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                ifs.close();
+                
+                std::vector<std::string> tokens = tokenize(cmdPart);
+                if (!tokens.empty()) {
+                    std::string& cmd = tokens[0];
+                    
+                    if (cmd == "grep") cmdGrep(tokens, fileContent);
+                    else if (cmd == "wc") cmdWc(tokens, fileContent);
+                    else if (cmd == "cat") {
+                        std::cout << fileContent;
+                    }
+                    else {
+                        lastExitCode = executeWithStdin(cmdPart, fileContent);
+                    }
+                }
+                return true;
+            }
+        }
+        
         size_t appendPos = processedInput.find(">>");
         size_t writePos = processedInput.find(">");
-        size_t pipePos = processedInput.find("|");
+        size_t pipePos = findSinglePipe(processedInput);
         
         // Handle output redirection
         if (appendPos != std::string::npos || (writePos != std::string::npos && (appendPos == std::string::npos || writePos < appendPos))) {
@@ -5079,7 +7175,7 @@ public:
             std::vector<std::string> commands;
             std::string remaining = input;
             
-            while ((pipePos = remaining.find("|")) != std::string::npos) {
+            while ((pipePos = findSinglePipe(remaining)) != std::string::npos) {
                 std::string cmd = remaining.substr(0, pipePos);
                 cmd.erase(0, cmd.find_first_not_of(" \t"));
                 cmd.erase(cmd.find_last_not_of(" \t") + 1);
@@ -5099,11 +7195,17 @@ public:
                 
                 std::string& cmd = tokens[0];
                 
-                // For the first command or external commands, use executeAndCapture
-                // For subsequent commands, use built-in text processing with piped input
                 if (i == 0) {
-                    // First command - capture output using _popen
-                    pipedOutput = executeAndCapture(commands[i]);
+                    std::string cmdToRun = commands[i];
+                    if (cmd == "ls" || cmd == "dir") {
+                        if (cmdToRun.find("-1") == std::string::npos && cmdToRun.find(" -l") == std::string::npos) {
+                            cmdToRun = cmd + " -1";
+                            for (size_t j = 1; j < tokens.size(); j++) {
+                                cmdToRun += " " + tokens[j];
+                            }
+                        }
+                    }
+                    pipedOutput = executeAndCapture(cmdToRun);
                 } else {
                     // Subsequent commands - use built-in text processing with piped input
                     std::ostringstream capturedOutput;
@@ -5148,12 +7250,122 @@ public:
                 }
             }
             
-            // Output final result with spacing
             std::cout << std::endl << pipedOutput << std::endl;
             return true;
         }
         
         return false;
+    }
+
+    int executeCommandLine(const std::string& cmdLine) {
+        std::string trimmed = cmdLine;
+        trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+        if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+        if (trimmed.empty()) return 0;
+
+        if (handleRedirection(trimmed)) {
+            return lastExitCode;
+        }
+
+        std::vector<std::string> tokens = tokenize(trimmed);
+        if (tokens.empty()) return 0;
+
+        std::string& cmd = tokens[0];
+
+        if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\" ||
+            cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos ||
+            (cmd.length() > 4 && cmd.substr(cmd.length() - 4) == ".exe")) {
+            std::string execPath = cmd;
+            if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\") {
+                execPath = cmd.substr(2);
+            }
+            runExecutable(execPath, tokens);
+        } else {
+            executeCommand(tokens);
+        }
+        return lastExitCode;
+    }
+
+    std::string expandHistoryInString(const std::string& input) {
+        std::string result = input;
+        size_t pos = 0;
+        while ((pos = result.find("!!", pos)) != std::string::npos) {
+            if (!commandHistory.empty()) {
+                result.replace(pos, 2, commandHistory.back());
+                pos += commandHistory.back().length();
+            } else {
+                pos += 2;
+            }
+        }
+        return result;
+    }
+
+    bool handleChainedCommands(const std::string& input) {
+        size_t orPos = input.find("||");
+        size_t andPos = input.find("&&");
+        
+        if (orPos == std::string::npos && andPos == std::string::npos) {
+            return false;
+        }
+        
+        struct ChainPart {
+            std::string cmd;
+            int opType;
+        };
+        std::vector<ChainPart> parts;
+        std::string remaining = input;
+        
+        while (true) {
+            orPos = remaining.find("||");
+            andPos = remaining.find("&&");
+            
+            size_t minPos = std::string::npos;
+            int opType = 0;
+            
+            if (orPos != std::string::npos && (andPos == std::string::npos || orPos < andPos)) {
+                minPos = orPos;
+                opType = 1;
+            } else if (andPos != std::string::npos) {
+                minPos = andPos;
+                opType = 2;
+            }
+            
+            if (minPos == std::string::npos) {
+                std::string cmd = remaining;
+                cmd.erase(0, cmd.find_first_not_of(" \t"));
+                if (!cmd.empty()) cmd.erase(cmd.find_last_not_of(" \t") + 1);
+                parts.push_back({cmd, 0});
+                break;
+            }
+            
+            std::string cmd = remaining.substr(0, minPos);
+            cmd.erase(0, cmd.find_first_not_of(" \t"));
+            if (!cmd.empty()) cmd.erase(cmd.find_last_not_of(" \t") + 1);
+            parts.push_back({cmd, opType});
+            remaining = remaining.substr(minPos + 2);
+        }
+        
+        if (parts.size() <= 1 && parts[0].opType == 0) {
+            return false;
+        }
+        
+        int exitCode = 0;
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i == 0) {
+                exitCode = executeCommandLine(parts[i].cmd);
+            } else {
+                int prevOp = parts[i - 1].opType;
+                if (prevOp == 1 && exitCode != 0) {
+                    exitCode = executeCommandLine(parts[i].cmd);
+                } else if (prevOp == 2 && exitCode == 0) {
+                    exitCode = executeCommandLine(parts[i].cmd);
+                } else if (prevOp == 1 && exitCode == 0) {
+                } else if (prevOp == 2 && exitCode != 0) {
+                }
+            }
+        }
+        
+        return true;
     }
 
     void run() {
@@ -5305,22 +7517,13 @@ public:
                 continue;
             }
 
-            // History expansion: !!, !n, !-n, !string
-            if (input[0] == '!' && input.length() > 1) {
+            input = expandHistoryInString(input);
+
+            if (input[0] == '!' && input.length() > 1 && input[1] != '!') {
                 std::string expandedInput;
                 bool expanded = false;
                 
-                if (input == "!!") {
-                    // !! - repeat last command
-                    if (!commandHistory.empty()) {
-                        expandedInput = commandHistory.back();
-                        expanded = true;
-                    } else {
-                        printError("!!: event not found");
-                        continue;
-                    }
-                } else if (input[1] == '-' && input.length() > 2) {
-                    // !-n - run n-th previous command
+                if (input[1] == '-' && input.length() > 2) {
                     try {
                         int n = std::stoi(input.substr(2));
                         if (n > 0 && n <= (int)commandHistory.size()) {
@@ -5335,7 +7538,6 @@ public:
                         continue;
                     }
                 } else if (std::isdigit(input[1])) {
-                    // !n - run command n from history
                     try {
                         int n = std::stoi(input.substr(1));
                         if (n > 0 && n <= (int)commandHistory.size()) {
@@ -5350,11 +7552,10 @@ public:
                         continue;
                     }
                 } else {
-                    // !string - run most recent command starting with string
                     std::string prefix = input.substr(1);
-                    for (int i = (int)commandHistory.size() - 1; i >= 0; --i) {
-                        if (commandHistory[i].substr(0, prefix.length()) == prefix) {
-                            expandedInput = commandHistory[i];
+                    for (auto it = commandHistory.rbegin(); it != commandHistory.rend(); ++it) {
+                        if (it->substr(0, prefix.length()) == prefix) {
+                            expandedInput = *it;
                             expanded = true;
                             break;
                         }
@@ -5366,7 +7567,6 @@ public:
                 }
                 
                 if (expanded) {
-                    // Show the expanded command
                     std::cout << expandedInput << std::endl;
                     input = expandedInput;
                 }
@@ -5375,6 +7575,10 @@ public:
             // Save command to history (except for history command itself to avoid clutter)
             if (input.substr(0, 7) != "history") {
                 saveToHistory(input);
+            }
+
+            if (handleChainedCommands(input)) {
+                continue;
             }
 
             // Check for redirection or pipes first
