@@ -5,11 +5,19 @@
 
 #include "fs_common.hpp"
 #include "journal.hpp"
+#include "permissions.hpp"
+#include "fs_entry.hpp"
+#include "fs_context.hpp"
 
 class FileSystemShell {
     DiskDevice disk;
     SuperBlock sb;
     Journal* journal;
+    
+    PermissionCache permCache;
+    EntryReader* entryReader;
+    EntryWriter* entryWriter;
+    EntryFinder* entryFinder;
     
     struct {
         uint64_t currentDirCluster; 
@@ -17,18 +25,23 @@ class FileSystemShell {
         uint64_t rootContentCluster;
         uint64_t currentLevelID;
         uint64_t rootLevelID;
+        uint32_t currentFolderPerms;
         string currentPath;
         string currentVersion;
     } context;
 
 public:
-    FileSystemShell() : journal(nullptr) {
+    FileSystemShell() : journal(nullptr), entryReader(nullptr), entryWriter(nullptr), entryFinder(nullptr) {
         memset(&context, 0, sizeof(context));
         context.currentPath = "/";
+        context.currentFolderPerms = PERM_ROOT_DEFAULT;
     }
     
     ~FileSystemShell() {
         if (journal) delete journal;
+        if (entryReader) delete entryReader;
+        if (entryWriter) delete entryWriter;
+        if (entryFinder) delete entryFinder;
     }
 
     LevelDescriptor* findLevelByID(uint64_t levelID) {
@@ -89,6 +102,15 @@ public:
         context.currentDirCluster = sb.rootDirCluster;
         context.currentPath = "/";
         context.rootLevelID = sb.rootLevelID;
+        context.currentFolderPerms = PERM_ROOT_DEFAULT;
+        
+        if (entryReader) delete entryReader;
+        if (entryWriter) delete entryWriter;
+        if (entryFinder) delete entryFinder;
+        entryReader = new EntryReader(disk);
+        entryWriter = new EntryWriter(disk);
+        entryFinder = new EntryFinder(disk);
+        permCache.clear();
         
         cout << "Mounted successfully. At Root.\n";
         
@@ -127,6 +149,15 @@ public:
         context.currentDirCluster = sb.rootDirCluster;
         context.currentPath = "/";
         context.rootLevelID = sb.rootLevelID;
+        context.currentFolderPerms = PERM_ROOT_DEFAULT;
+        
+        if (entryReader) delete entryReader;
+        if (entryWriter) delete entryWriter;
+        if (entryFinder) delete entryFinder;
+        entryReader = new EntryReader(disk);
+        entryWriter = new EntryWriter(disk);
+        entryFinder = new EntryFinder(disk);
+        permCache.clear();
         
         cout << "=== Leveled File System v2 ===\n";
         cout << "  Image: " << path << " (" << (disk.getDiskSize()/1024/1024) << " MB)\n";
@@ -312,6 +343,36 @@ public:
         entry.flags = LAT_FLAG_USED;
         entry.refCount = 1;
         setLABEntry(cluster, entry);
+    }
+    
+    void freeCluster(uint64_t cluster) {
+        if (cluster == 0 || isReservedCluster(cluster)) return;
+        
+        LABEntry entry;
+        entry.nextCluster = LAT_FREE;
+        entry.levelID = LEVEL_ID_NONE;
+        entry.flags = 0;
+        entry.refCount = 0;
+        setLABEntry(cluster, entry);
+        
+        sb.totalFreeClusters++;
+        writeSuperBlock();
+    }
+    
+    void freeChain(uint64_t startCluster) {
+        if (startCluster == 0 || isReservedCluster(startCluster)) return;
+        
+        vector<uint64_t> chain = getChain(startCluster);
+        for (uint64_t c : chain) {
+            LABEntry entry;
+            entry.nextCluster = LAT_FREE;
+            entry.levelID = LEVEL_ID_NONE;
+            entry.flags = 0;
+            entry.refCount = 0;
+            setLABEntry(c, entry);
+            sb.totalFreeClusters++;
+        }
+        writeSuperBlock();
     }
 
     uint64_t allocCluster() {
@@ -523,6 +584,12 @@ public:
     void look(string target = "") {
         if (!disk.isOpen()) return;
         
+        // Check if current folder allows read (when looking at current dir)
+        if (target.empty() && !(context.currentFolderPerms & PERM_READ)) {
+            cout << "Permission denied: no read access to current folder.\n";
+            return;
+        }
+        
         uint64_t contentCluster = context.currentContentCluster;
         string itemsTitle = context.currentPath + " (" + context.currentVersion + ")";
 
@@ -616,7 +683,7 @@ public:
                         entries[j].type == TYPE_SYMLINK || entries[j].type == TYPE_HARDLINK ||
                         entries[j].type == TYPE_LEVEL_MOUNT) {
                         empty = false;
-                        entries[j].name[31] = '\0';
+                        entries[j].name[23] = '\0';
                         string typeStr;
                         if (entries[j].type == TYPE_LEVELED_DIR) typeStr = "<L-DIR>";
                         else if (entries[j].type == TYPE_FILE) typeStr = "<FILE>";
@@ -624,7 +691,14 @@ public:
                         else if (entries[j].type == TYPE_HARDLINK) typeStr = "<HDLINK>";
                         else if (entries[j].type == TYPE_LEVEL_MOUNT) typeStr = "<LVLMNT>";
                         
-                        cout << setw(8) << left << typeStr << " " << entries[j].name;
+                        entries[j].extension[7] = '\0';
+                        string displayName = entries[j].name;
+                        if (entries[j].type == TYPE_FILE && entries[j].extension[0] != '\0') {
+                            displayName += ".";
+                            displayName += entries[j].extension;
+                        }
+                        
+                        cout << setw(8) << left << typeStr << " " << displayName;
                         
                         if (entries[j].type == TYPE_SYMLINK && entries[j].startCluster != 0) {
                             char targetBuf[CLUSTER_SIZE];
@@ -740,11 +814,17 @@ public:
             disk.readSector(contentCluster * 8 + i, entries);
             for (int j=0; j<SECTOR_SIZE/sizeof(DirEntry); j++) {
                 if (entries[j].type == TYPE_LEVELED_DIR) {
-                    entries[j].name[31] = '\0';
+                    entries[j].name[23] = '\0';
                     folders.push_back({string(entries[j].name), entries[j].startCluster});
                 } else if (entries[j].type == TYPE_FILE) {
-                    entries[j].name[31] = '\0';
-                    files.push_back(string(entries[j].name));
+                    entries[j].name[23] = '\0';
+                    entries[j].extension[7] = '\0';
+                    string displayName = entries[j].name;
+                    if (entries[j].extension[0] != '\0') {
+                        displayName += ".";
+                        displayName += entries[j].extension;
+                    }
+                    files.push_back(displayName);
                 }
             }
         }
@@ -893,15 +973,22 @@ found_target:
         }
     }
     
-    void create(string type, string path) {
+    void create(string type, string path, string extension = "") {
         if (!disk.isOpen()) return;
+        
+        // Check if current folder allows write
+        if (!(context.currentFolderPerms & PERM_WRITE)) {
+            cout << "Permission denied: current folder is read-only.\n";
+            return;
+        }
+        
         PathResult res = resolvePath(path);
         if (!res.valid) { cout << "Invalid path location.\n"; return; }
         
-        createInCluster(res.parentCluster, type, res.name);
+        createInCluster(res.parentCluster, type, res.name, extension);
     }
     
-    void createInCluster(uint64_t contentCluster, string type, string name) {
+    void createInCluster(uint64_t contentCluster, string type, string name, string extension = "") {
         DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
         int freeSector = -1;
         int freeIdx = -1;
@@ -955,27 +1042,515 @@ found_slot:
         }
         
         DirEntry* target = &entries[freeIdx];
-        strcpy(target->name, name.c_str());
+        memset(target, 0, sizeof(DirEntry));
+        strncpy(target->name, name.c_str(), 23);
+        target->name[23] = '\0';
+        strncpy(target->extension, extension.c_str(), 7);
+        target->extension[7] = '\0';
+        target->createTime = time(0);
+        target->modTime = time(0);
         
         if (type == "folder") {
             target->type = TYPE_LEVELED_DIR;
             target->startCluster = allocCluster();
+            target->attributes = PERM_DIR_DEFAULT;
+            
+            if (target->startCluster != 0) {
+                VersionEntry vTable[CLUSTER_SIZE / sizeof(VersionEntry)];
+                memset(vTable, 0, sizeof(vTable));
+                strcpy(vTable[0].versionName, "master");
+                vTable[0].isActive = 1;
+                vTable[0].contentTableCluster = allocCluster();
+                vTable[0].levelID = context.currentLevelID;
+                vTable[0].parentLevelID = context.rootLevelID;
+                vTable[0].flags = LEVEL_FLAG_ACTIVE;
+                vTable[0].permissions = PERM_DIR_DEFAULT;
+                vTable[0].createTime = time(0);
+                vTable[0].modTime = time(0);
+                vTable[0].isLocked = 0;
+                vTable[0].isSnapshot = 0;
+                
+                for (int s = 0; s < 8; s++) {
+                    disk.writeSector(target->startCluster * 8 + s, ((char*)vTable) + s * SECTOR_SIZE);
+                }
+                
+                if (vTable[0].contentTableCluster != 0) {
+                    DirEntry emptyContent[CLUSTER_SIZE / sizeof(DirEntry)];
+                    memset(emptyContent, 0, sizeof(emptyContent));
+                    for (int s = 0; s < 8; s++) {
+                        disk.writeSector(vTable[0].contentTableCluster * 8 + s, ((char*)emptyContent) + s * SECTOR_SIZE);
+                    }
+                }
+            }
         } else if (type == "symlink") {
             target->type = TYPE_SYMLINK;
             target->startCluster = 0;
             target->size = 0;
+            target->attributes = PERM_DEFAULT;
         } else if (type == "hardlink") {
             target->type = TYPE_HARDLINK;
             target->startCluster = 0;
             target->size = 0;
-            target->attributes = 1;
+            target->attributes = PERM_DEFAULT;
         } else {
             target->type = TYPE_FILE;
-            target->startCluster = allocCluster(); 
+            target->startCluster = allocCluster();
             target->size = 0;
+            target->attributes = PERM_DEFAULT;
         }
+        
         disk.writeSector(targetCluster * 8 + freeSector, entries);
-        cout << "Created " << type << " " << name << ".\n";
+        
+        string displayName = name;
+        if (!extension.empty()) displayName += "." + extension;
+        cout << "Created " << type << " " << displayName << " [" << getPermsStr(target->attributes) << "]\n";
+    }
+    
+    string getPermsStr(uint32_t attrs) {
+        string s;
+        s += (attrs & PERM_READ) ? 'r' : '-';
+        s += (attrs & PERM_WRITE) ? 'w' : '-';
+        s += (attrs & PERM_EXEC) ? 'x' : '-';
+        return s;
+    }
+    
+    string formatTime(uint32_t t) {
+        if (t == 0) return "----";
+        time_t tt = t;
+        struct tm* tm = localtime(&tt);
+        char buf[20];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", tm);
+        return string(buf);
+    }
+    
+    bool checkCurrentDirWrite() {
+        if (context.currentPath == "/") return true;
+        return PermissionChecker::checkWrite(context.currentFolderPerms);
+    }
+    
+    bool checkCurrentDirRead() {
+        if (context.currentPath == "/") return true;
+        return PermissionChecker::checkRead(context.currentFolderPerms);
+    }
+    
+    bool checkCurrentDirExec() {
+        if (context.currentPath == "/") return true;
+        return PermissionChecker::checkExec(context.currentFolderPerms);
+    }
+    
+    uint32_t getEntryPermsFromDisk(uint64_t cluster, const string& name) {
+        if (!entryFinder) return PERM_DEFAULT;
+        FindResult result = entryFinder->findByName(cluster, name);
+        if (result.found) {
+            return result.entry.attributes;
+        }
+        return PERM_DEFAULT;
+    }
+    
+    
+    void perms(string options, string path) {
+        if (!disk.isOpen()) return;
+        PathResult res = resolvePath(path);
+        if (!res.valid) { cout << "Invalid path.\n"; return; }
+        
+        DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
+        vector<uint64_t> chain = getChain(res.parentCluster);
+        
+        for (uint64_t c : chain) {
+            for (int i = 0; i < 8; i++) {
+                disk.readSector(c * 8 + i, entries);
+                for (int j = 0; j < SECTOR_SIZE/sizeof(DirEntry); j++) {
+                    if (entries[j].type != TYPE_FREE && string(entries[j].name) == res.name) {
+                        // Parse options: +r, -r, +w, -w, +e, -e
+                        if (options == "+r") entries[j].attributes |= PERM_READ;
+                        else if (options == "-r") entries[j].attributes &= ~PERM_READ;
+                        else if (options == "+w") entries[j].attributes |= PERM_WRITE;
+                        else if (options == "-w") entries[j].attributes &= ~PERM_WRITE;
+                        else if (options == "+x") entries[j].attributes |= PERM_EXEC;
+                        else if (options == "-x") entries[j].attributes &= ~PERM_EXEC;
+                        else { cout << "Invalid option. Use +r,-r,+w,-w,+x,-x\n"; return; }
+                        
+                        entries[j].modTime = time(0);
+                        disk.writeSector(c * 8 + i, entries);
+                        permCache.clear();
+                        cout << "Permissions: " << PermissionChecker::getPermsString(entries[j].attributes) << "\n";
+                        return;
+                    }
+                }
+            }
+        }
+        cout << "File not found.\n";
+    }
+    
+    void lookDetailed(string path = "") {
+        if (!disk.isOpen()) return;
+        
+        uint64_t contentCluster = context.currentContentCluster;
+        string title = context.currentPath;
+        
+        if (!path.empty()) {
+            PathResult res = resolvePath(path);
+            if (!res.valid) { cout << "Invalid path.\n"; return; }
+            
+            // Find the folder
+            DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
+            vector<uint64_t> chain = getChain(res.parentCluster);
+            for (uint64_t c : chain) {
+                for (int i = 0; i < 8; i++) {
+                    disk.readSector(c * 8 + i, entries);
+                    for (int j = 0; j < SECTOR_SIZE/sizeof(DirEntry); j++) {
+                        if (entries[j].type == TYPE_LEVELED_DIR && string(entries[j].name) == res.name) {
+                            // Need to pick a level - use first active
+                            VersionEntry vps[SECTOR_SIZE/sizeof(VersionEntry)];
+                            disk.readSector(entries[j].startCluster * 8, vps);
+                            for (int v = 0; v < SECTOR_SIZE/sizeof(VersionEntry); v++) {
+                                if (vps[v].isActive) {
+                                    contentCluster = vps[v].contentTableCluster;
+                                    title = path + ":" + vps[v].versionName;
+                                    goto found;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cout << "Folder not found.\n";
+            return;
+        }
+        
+found:
+        cout << "\n" << title << " (detailed):\n";
+        cout << string(70, '-') << "\n";
+        cout << setw(8) << left << "Type" << " " << setw(5) << "Perms" << " " 
+             << setw(10) << right << "Size" << "  " << setw(16) << left << "Modified" << "  Name\n";
+        cout << string(70, '-') << "\n";
+        
+        DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
+        bool empty = true;
+        
+        vector<uint64_t> chain = getChain(contentCluster);
+        for (uint64_t c : chain) {
+            for (int i = 0; i < 8; i++) {
+                disk.readSector(c * 8 + i, entries);
+                for (int j = 0; j < SECTOR_SIZE/sizeof(DirEntry); j++) {
+                    if (entries[j].type != TYPE_FREE && entries[j].name[0] != '\0') {
+                        empty = false;
+                        entries[j].name[23] = '\0';
+                        entries[j].extension[7] = '\0';
+                        
+                        string typeStr;
+                        if (entries[j].type == TYPE_LEVELED_DIR) typeStr = "<DIR>";
+                        else if (entries[j].type == TYPE_FILE) typeStr = "<FILE>";
+                        else if (entries[j].type == TYPE_SYMLINK) typeStr = "<LINK>";
+                        else if (entries[j].type == TYPE_HARDLINK) typeStr = "<HARD>";
+                        else if (entries[j].type == TYPE_LEVEL_MOUNT) typeStr = "<MNT>";
+                        else typeStr = "<?>";
+                        
+                        string displayName = entries[j].name;
+                        if (entries[j].type == TYPE_FILE && entries[j].extension[0] != '\0') {
+                            displayName += ".";
+                            displayName += entries[j].extension;
+                        }
+                        
+                        string perms = getPermsStr(entries[j].attributes);
+                        string sizeStr = (entries[j].type == TYPE_FILE) ? to_string(entries[j].size) : "-";
+                        string modStr = formatTime(entries[j].modTime);
+                        
+                        cout << setw(8) << left << typeStr << " " 
+                             << setw(5) << perms << " "
+                             << setw(10) << right << sizeStr << "  "
+                             << setw(16) << left << modStr << "  " 
+                             << displayName << "\n";
+                    }
+                }
+            }
+        }
+        if (empty) cout << "(empty)\n";
+        cout << string(70, '-') << "\n";
+    }
+    
+    // Filesystem check - validates integrity
+    void fsck() {
+        if (!disk.isOpen()) return;
+        
+        cout << "\n=== LevelFS Filesystem Check ===\n\n";
+        
+        int errors = 0;
+        int warnings = 0;
+        
+        // Check 1: SuperBlock integrity
+        cout << "[1/5] Checking SuperBlock...\n";
+        if (sb.magic != MAGIC) {
+            cout << "  ERROR: Invalid magic number!\n";
+            errors++;
+        } else {
+            cout << "  OK: Magic number valid.\n";
+        }
+        
+        if (sb.totalClusters == 0 || sb.totalClusters > 0xFFFFFFFF) {
+            cout << "  ERROR: Invalid cluster count!\n";
+            errors++;
+        } else {
+            cout << "  OK: Cluster count valid (" << sb.totalClusters << ").\n";
+        }
+        
+        // Check 2: Root directory
+        cout << "[2/5] Checking root directory...\n";
+        if (sb.rootDirCluster == 0 || sb.rootDirCluster >= sb.totalClusters) {
+            cout << "  ERROR: Invalid root directory cluster!\n";
+            errors++;
+        } else {
+            uint8_t testBuf[SECTOR_SIZE];
+            if (!disk.readSector(sb.rootDirCluster * 8, testBuf)) {
+                cout << "  ERROR: Cannot read root directory!\n";
+                errors++;
+            } else {
+                cout << "  OK: Root directory readable.\n";
+            }
+        }
+        
+        // Check 3: Level registry
+        cout << "[3/5] Checking level registry...\n";
+        if (sb.levelRegistryCluster == 0) {
+            cout << "  WARNING: No level registry.\n";
+            warnings++;
+        } else {
+            int levelCount = 0;
+            vector<uint64_t> chain = getChain(sb.levelRegistryCluster);
+            for (uint64_t c : chain) {
+                LevelDescriptor reg[SECTOR_SIZE / sizeof(LevelDescriptor)];
+                for (int s = 0; s < 8; s++) {
+                    disk.readSector(c * 8 + s, reg);
+                    for (int j = 0; j < SECTOR_SIZE / sizeof(LevelDescriptor); j++) {
+                        if (reg[j].flags & LEVEL_FLAG_ACTIVE) levelCount++;
+                    }
+                }
+            }
+            cout << "  OK: " << levelCount << " active levels found.\n";
+        }
+        
+        // Check 4: Free space consistency
+        cout << "[4/5] Checking free space... ";
+        cout.flush();
+        
+        uint64_t reportedFree = sb.totalFreeClusters;
+        uint64_t sampleFree = 0;
+        uint64_t sampleCount = 0;
+        
+        // Fast sampling: check every 100th cluster with spinner
+        uint64_t dataStart = sb.labPoolStart + sb.labPoolClusters;
+        uint64_t totalToCheck = min(sb.totalClusters - dataStart, (uint64_t)100000);
+        const char spinner[] = "|/-\\";
+        int spinIdx = 0;
+        
+        for (uint64_t i = 0; i < totalToCheck; i += 100) {
+            uint64_t cluster = dataStart + i;
+            if (cluster >= sb.totalClusters) break;
+            
+            LABEntry lab = getLABEntry(cluster);
+            if (lab.nextCluster == LAT_FREE) sampleFree++;
+            sampleCount++;
+            
+            // Update spinner every 1000 samples
+            if (sampleCount % 10 == 0) {
+                cout << "\b" << spinner[spinIdx++ % 4];
+                cout.flush();
+            }
+        }
+        
+        cout << "\b \n";  // Clear spinner
+        
+        // Estimate total free from sample
+        if (sampleCount > 0 && sampleFree > 0) {
+            uint64_t estimatedFree = (sampleFree * 100);  // Scale up from sampling
+            cout << "  OK: ~" << estimatedFree << " free clusters (sampled).\n";
+        } else if (reportedFree > 0) {
+            cout << "  OK: " << reportedFree << " free clusters (from superblock).\n";
+        } else {
+            cout << "  WARNING: Disk may be full.\n";
+            warnings++;
+        }
+        
+        // Check 5: Journal
+        cout << "[5/5] Checking journal...\n";
+        if (sb.journalStartCluster == 0) {
+            cout << "  WARNING: No journal configured.\n";
+            warnings++;
+        } else {
+            cout << "  OK: Journal at cluster " << sb.journalStartCluster << ".\n";
+        }
+        
+        cout << "\n=== Check Complete ===\n";
+        cout << "Errors: " << errors << ", Warnings: " << warnings << "\n";
+        if (errors == 0) {
+            cout << "Filesystem appears healthy.\n";
+        } else {
+            cout << "Filesystem has errors. Consider reformatting.\n";
+        }
+    }
+    
+    // Analyze fragmentation
+    void fragInfo() {
+        if (!disk.isOpen()) return;
+        
+        cout << "\n=== Fragmentation Analysis ===\n\n";
+        
+        int totalFiles = 0;
+        int fragmentedFiles = 0;
+        int totalFragments = 0;
+        
+        // Scan current directory for files
+        vector<DirEntry> entries = readDirEntries(context.currentContentCluster);
+        
+        for (const auto& e : entries) {
+            if (e.type == TYPE_FILE && e.startCluster != 0) {
+                totalFiles++;
+                vector<uint64_t> chain = getChain(e.startCluster);
+                
+                int fragments = 1;
+                for (size_t i = 1; i < chain.size(); i++) {
+                    if (chain[i] != chain[i-1] + 1) fragments++;
+                }
+                
+                if (fragments > 1) {
+                    fragmentedFiles++;
+                    totalFragments += fragments;
+                    
+                    char nameBuf[25];
+                    strncpy(nameBuf, e.name, 24);
+                    nameBuf[24] = '\0';
+                    string displayName = nameBuf;
+                    if (e.extension[0]) {
+                        displayName += ".";
+                        displayName += e.extension;
+                    }
+                    cout << "  " << displayName << ": " << fragments << " fragments (" 
+                         << chain.size() << " clusters)\n";
+                }
+            }
+        }
+        
+        cout << "\nSummary:\n";
+        cout << "  Total files: " << totalFiles << "\n";
+        cout << "  Fragmented files: " << fragmentedFiles << "\n";
+        
+        if (totalFiles > 0) {
+            int pct = (fragmentedFiles * 100) / totalFiles;
+            cout << "  Fragmentation: " << pct << "%\n";
+        }
+    }
+    
+    // Defragment a single file
+    bool defragFile(DirEntry& entry, uint64_t entrySector, int entryIdx) {
+        if (entry.type != TYPE_FILE || entry.startCluster == 0) return true;
+        
+        vector<uint64_t> oldChain = getChain(entry.startCluster);
+        if (oldChain.size() <= 1) return true;  // Already contiguous or empty
+        
+        // Check if already contiguous
+        bool isContiguous = true;
+        for (size_t i = 1; i < oldChain.size(); i++) {
+            if (oldChain[i] != oldChain[i-1] + 1) {
+                isContiguous = false;
+                break;
+            }
+        }
+        if (isContiguous) return true;
+        
+        // Need to find contiguous space
+        uint64_t neededClusters = oldChain.size();
+        uint64_t newStart = 0;
+        uint64_t consecutive = 0;
+        uint64_t dataStart = sb.labPoolStart + sb.labPoolClusters;
+        
+        for (uint64_t c = dataStart; c < sb.totalClusters; c++) {
+            LABEntry lab = getLABEntry(c);
+            if (lab.nextCluster == LAT_FREE) {
+                if (consecutive == 0) newStart = c;
+                consecutive++;
+                if (consecutive >= neededClusters) break;
+            } else {
+                consecutive = 0;
+            }
+        }
+        
+        if (consecutive < neededClusters) {
+            return false;  // Not enough contiguous space
+        }
+        
+        // Copy data to new location
+        for (size_t i = 0; i < oldChain.size(); i++) {
+            uint8_t buffer[CLUSTER_SIZE];
+            for (int s = 0; s < 8; s++) {
+                disk.readSector(oldChain[i] * 8 + s, buffer + s * SECTOR_SIZE);
+            }
+            for (int s = 0; s < 8; s++) {
+                disk.writeSector((newStart + i) * 8 + s, buffer + s * SECTOR_SIZE);
+            }
+            
+            // Update LAT for new cluster
+            if (i < oldChain.size() - 1) {
+                setLATEntry(newStart + i, newStart + i + 1);
+            } else {
+                setLATEntry(newStart + i, LAT_END);
+            }
+            
+            // Free old cluster
+            setLATEntry(oldChain[i], LAT_FREE);
+        }
+        
+        // Update entry
+        DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
+        disk.readSector(entrySector, entries);
+        entries[entryIdx].startCluster = newStart;
+        disk.writeSector(entrySector, entries);
+        
+        return true;
+    }
+    
+    // Defragment disk
+    void defrag() {
+        if (!disk.isOpen()) return;
+        
+        cout << "\n=== Disk Defragmentation ===\n\n";
+        cout << "Analyzing fragmentation...\n";
+        
+        int defragged = 0;
+        int failed = 0;
+        
+        vector<uint64_t> chain = getChain(context.currentContentCluster);
+        for (uint64_t c : chain) {
+            for (int i = 0; i < 8; i++) {
+                DirEntry entries[SECTOR_SIZE/sizeof(DirEntry)];
+                disk.readSector(c * 8 + i, entries);
+                
+                for (int j = 0; j < SECTOR_SIZE/sizeof(DirEntry); j++) {
+                    if (entries[j].type == TYPE_FILE && entries[j].startCluster != 0) {
+                        entries[j].name[23] = '\0';
+                        string displayName = entries[j].name;
+                        if (entries[j].extension[0]) {
+                            displayName += ".";
+                            displayName += entries[j].extension;
+                        }
+                        
+                        cout << "  Processing: " << displayName << "... ";
+                        cout.flush();
+                        
+                        if (defragFile(entries[j], c * 8 + i, j)) {
+                            cout << "OK\n";
+                            defragged++;
+                        } else {
+                            cout << "SKIP (no contiguous space)\n";
+                            failed++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        cout << "\nDefragmentation complete.\n";
+        cout << "  Files processed: " << defragged << "\n";
+        cout << "  Files skipped: " << failed << "\n";
     }
     
     void createLevelMount(string path, uint64_t levelID) {
@@ -1046,6 +1621,7 @@ found_slot:
         if (path == "..") {
             context.currentDirCluster = sb.rootDirCluster;
             context.currentPath = "/";
+            context.currentFolderPerms = PERM_READ | PERM_WRITE | PERM_EXEC;  // Root has full perms
             loadVersion("master");
             return;
         }
@@ -1069,6 +1645,16 @@ found_slot:
                 disk.readSector(c * 8 + i, entries);
                 for (int j=0; j<SECTOR_SIZE/sizeof(DirEntry); j++) {
                     if (entries[j].type == TYPE_LEVELED_DIR && string(entries[j].name) == folderName) {
+                        // Check permissions before entering
+                        if (!(entries[j].attributes & PERM_READ)) {
+                            cout << "Permission denied: no read access to '" << folderName << "'.\n";
+                            return;
+                        }
+                        if (!(entries[j].attributes & PERM_EXEC)) {
+                            cout << "Permission denied: no execute access to enter '" << folderName << "'.\n";
+                            return;
+                        }
+                        context.currentFolderPerms = entries[j].attributes;
                         enterFolder(entries[j].startCluster, folderName, levelName);
                         return;
                     }
@@ -1531,6 +2117,13 @@ found_slot:
         
         if (!found) { cout << "File not found.\n"; return; }
         
+        // Check read permission
+        if (!(fileEntry.attributes & PERM_READ)) {
+            cout << "Permission denied: no read access.\n";
+            return;
+        }
+        
+        
         // Follow symlink (with loop detection)
         int symlinkDepth = 0;
         while (fileEntry.type == TYPE_SYMLINK && symlinkDepth < 10) {
@@ -1600,6 +2193,13 @@ found_slot:
 
     void del(string path, bool recursive) {
         if (!disk.isOpen()) return;
+        
+        // Check if current folder allows write (for deletion)
+        if (!(context.currentFolderPerms & PERM_WRITE)) {
+            cout << "Permission denied: current folder is read-only.\n";
+            return;
+        }
+        
         PathResult res = resolvePath(path);
         if (!res.valid) { cout << "Invalid path.\n"; return; }
 
@@ -1627,6 +2227,12 @@ found_slot:
                              }
                         }
                         
+                        // Check write permission for files
+                        if (entries[j].type == TYPE_FILE && !(entries[j].attributes & PERM_WRITE)) {
+                            cout << "Permission denied: no write access to delete '" << res.name << "'.\n";
+                            return;
+                        }
+                        
                         // Handle hardlink reference counting
                         if (entries[j].type == TYPE_HARDLINK || entries[j].type == TYPE_FILE) {
                             if (entries[j].attributes > 1) {
@@ -1643,7 +2249,23 @@ found_slot:
                             cout << "Deleted " << res.name << ".\n";
                         }
                         
+                        if (entries[j].startCluster != 0 && entries[j].type != TYPE_SYMLINK) {
+                            if (entries[j].type == TYPE_LEVELED_DIR) {
+                                VersionEntry vps[SECTOR_SIZE/sizeof(VersionEntry)];
+                                disk.readSector(entries[j].startCluster * 8, vps);
+                                for (int v = 0; v < SECTOR_SIZE/sizeof(VersionEntry); v++) {
+                                    if (vps[v].isActive && vps[v].contentTableCluster != 0) {
+                                        freeChain(vps[v].contentTableCluster);
+                                    }
+                                }
+                                freeChain(entries[j].startCluster);
+                            } else {
+                                freeChain(entries[j].startCluster);
+                            }
+                        }
+                        
                         entries[j].type = TYPE_FREE;
+                        memset(&entries[j], 0, sizeof(DirEntry));
                         disk.writeSector(c * 8 + i, entries);
                         return;
                     }
@@ -1785,6 +2407,12 @@ found_src:
     void write(string path) {
         if (!disk.isOpen()) return;
         
+        // Check if current folder allows write (for new files)
+        if (!(context.currentFolderPerms & PERM_WRITE)) {
+            cout << "Permission denied: current folder is read-only.\n";
+            return;
+        }
+        
         PathResult res = resolvePath(path);
         if (!res.valid) { cout << "Invalid path location.\n"; return; }
         string name = res.name;
@@ -1839,6 +2467,12 @@ found_src:
         }
 
 scan_done:
+        // Check write permission for existing files
+        if (!isNew && !(foundEntry.attributes & PERM_WRITE)) {
+            cout << "Permission denied: no write access to '" << name << "'.\n";
+            return;
+        }
+        
         cout << "--- Editor: " << name << " ---\n";
         cout << "Type content. End with line '.done'\n";
         string content, line;
@@ -1860,9 +2494,10 @@ scan_done:
         
         if (isNew) {
             entryPtr->type = TYPE_FILE;
-            strncpy(entryPtr->name, name.c_str(), 31);
+            strncpy(entryPtr->name, name.c_str(), 23);
             entryPtr->startCluster = allocCluster();
             entryPtr->createTime = time(0);
+            entryPtr->attributes = PERM_DEFAULT;
             if (entryPtr->startCluster == 0) { cout << "Disk full.\n"; return; }
         }
         
@@ -2008,13 +2643,27 @@ int main(int argc, char** argv) {
             }
             else if (cmd == "look") {
                 string arg; ss >> arg;
-                fs.look(arg);
+                if (arg == "-d") {
+                    string path; ss >> path;
+                    fs.lookDetailed(path);
+                } else {
+                    fs.look(arg);
+                }
+            }
+            else if (cmd == "perms") {
+                string option, path;
+                ss >> option >> path;
+                if (option.empty() || path.empty()) {
+                    cout << "Usage: perms <+r|-r|+w|-w|+x|-x> <path>\n";
+                } else {
+                    fs.perms(option, path);
+                }
             }
             else if (cmd == "dir-tree") fs.dirTree();
             else if (cmd == "create") {
-                string type, name;
-                ss >> type >> name;
-                fs.create(type, name);
+                string type, name, ext;
+                ss >> type >> name >> ext;
+                fs.create(type, name, ext);
             }
             else if (cmd == "nav") {
                 string path; ss >> path;
@@ -2102,13 +2751,15 @@ int main(int argc, char** argv) {
                 cout << "  look          - List directory contents\n";
                 cout << "  look <folder> - List levels of a folder\n";
                 cout << "  look <f>:<l>  - List contents of folder:level\n";
+                cout << "  look -d [path]- Detailed view (size, perms, time)\n";
                 cout << "  dir-tree      - Display directory tree\n";
                 cout << "  current       - Show current path and level\n";
                 cout << "  levels        - List all levels in registry\n";
                 cout << "  create folder <n> - Create folder\n";
-                cout << "  create file <n>   - Create file\n";
+                cout << "  create file <n> [ext] - Create file (e.g. readme txt)\n";
                 cout << "  write <name>  - Text editor for file\n";
                 cout << "  read <name>   - Read file contents\n";
+                cout << "  perms <+/-rwx> <file> - Set permissions (+r,-w,+x...)\n";
                 cout << "  symlink <target> <link> - Create symbolic link\n";
                 cout << "  hardlink <target> <link> - Create hard link\n";
                 cout << "  mount-level <path> <id> - Mount level by ID at path\n";
@@ -2119,8 +2770,14 @@ int main(int argc, char** argv) {
                 cout << "  level branch <f> <p> <n> - Branch level from parent\n";
                 cout << "  level remove <f> <n> - Remove level from folder/.\n";
                 cout << "  link <dir1> <dir2> <level> - Create shared level (DAG)\n";
+                cout << "  fsck          - Check filesystem integrity\n";
+                cout << "  fraginfo      - Show fragmentation info\n";
+                cout << "  defrag        - Defragment disk\n";
                 cout << "  exit          - Exit\n";
             }
+            else if (cmd == "fsck") fs.fsck();
+            else if (cmd == "fraginfo") fs.fragInfo();
+            else if (cmd == "defrag") fs.defrag();
             else cout << "Unknown command. Type 'help' for list.\n";
         } catch (const exception& e) {
             cout << "Error: " << e.what() << "\n";

@@ -589,6 +589,11 @@ public:
         vTable[0].levelID = LEVEL_ID_MASTER;
         vTable[0].parentLevelID = LEVEL_ID_NONE;
         vTable[0].flags = LEVEL_FLAG_ACTIVE;
+        vTable[0].permissions = PERM_ROOT_DEFAULT;
+        vTable[0].createTime = (uint32_t)(timestamp & 0xFFFFFFFF);
+        vTable[0].modTime = (uint32_t)(timestamp & 0xFFFFFFFF);
+        vTable[0].isLocked = 0;
+        vTable[0].isSnapshot = 0;
         
         for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
             disk.writeSector(sb.rootDirCluster * SECTORS_PER_CLUSTER + s,
@@ -597,11 +602,25 @@ public:
         
         DirEntry content[CLUSTER_SIZE / sizeof(DirEntry)];
         memset(content, 0, sizeof(content));
+        
+        strcpy(content[0].name, ".");
+        content[0].type = TYPE_LEVELED_DIR;
+        content[0].startCluster = sb.rootDirCluster;
+        content[0].size = 0;
+        content[0].attributes = PERM_ROOT_DEFAULT;
+        content[0].createTime = (uint32_t)(timestamp & 0xFFFFFFFF);
+        content[0].modTime = (uint32_t)(timestamp & 0xFFFFFFFF);
+        
+        for (int i = 1; i < CLUSTER_SIZE / sizeof(DirEntry); i++) {
+            content[i].type = TYPE_FREE;
+            content[i].attributes = 0;
+        }
+        
         for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
             disk.writeSector((sb.rootDirCluster + 1) * SECTORS_PER_CLUSTER + s,
                 ((char*)content) + s * SECTOR_SIZE);
         }
-        cout << "  Root directory initialized\n";
+        cout << "  Root directory initialized with perms: rwx\n";
         
         disk.close();
         cout << "\n=== LFS v2 Format Complete ===\n";

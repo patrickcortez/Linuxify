@@ -150,7 +150,8 @@ enum EntryType {
 };
 
 struct DirEntry {
-    char name[32];
+    char name[24];
+    char extension[8];
     uint8_t type;
     uint64_t startCluster;
     uint64_t size;
@@ -160,16 +161,51 @@ struct DirEntry {
     char padding[3];
 };
 
+/*
+ * Permission Flags (stored in DirEntry.attributes)
+ * Lower byte (0x00FF): Basic permission flags
+ * Upper byte (0xFF00): File-specific flags
+ */
+
+#define PERM_READ     0x0001   // r: Allow reading file/listing directory
+#define PERM_WRITE    0x0002   // w: Allow writing file/creating entries in directory
+#define PERM_EXEC     0x0004   // x: Allow executing file/entering directory
+#define PERM_HIDDEN   0x0008   // h: Hidden from normal listing
+#define PERM_SYSTEM   0x0010   // s: System file/folder
+#define PERM_ARCHIVE  0x0020   // a: Archived/modified since backup
+#define PERM_READONLY 0x0040   // o: Read-only (stricter than -w)
+#define PERM_INHERIT  0x0080   // i: Inherit permissions from parent
+
+#define PERM_DEFAULT     (PERM_READ | PERM_WRITE)              // rw- for files
+#define PERM_DIR_DEFAULT (PERM_READ | PERM_WRITE | PERM_EXEC)  // rwx for folders
+#define PERM_ROOT_DEFAULT (PERM_READ | PERM_WRITE | PERM_EXEC) // rwx for root
+
+#define ATTR_MASK_PERMS  0x00FF  // Mask for permission bits
+#define ATTR_MASK_FLAGS  0xFF00  // Mask for flag bits
+
+#define FILE_FLAG_ENCRYPTED   0x0100  // Content is encrypted
+#define FILE_FLAG_COMPRESSED  0x0200  // Content is compressed
+#define FILE_FLAG_IMMUTABLE   0x0400  // Cannot be modified (even by owner)
+#define FILE_FLAG_APPEND_ONLY 0x0800  // Can only append, not overwrite
+
+/*
+ * LeveledDirEntry - Extended directory entry for level-aware operations
+ * Used in level registry and cross-level references
+ */
 struct LeveledDirEntry {
-    char name[32];
-    uint8_t type;
-    uint64_t levelID;
-    uint64_t size;
-    uint32_t permissions;
-    uint32_t createTime;
-    uint32_t modTime;
-    uint8_t flags;
-    char padding[2];
+    char name[32];              // Entry name (up to 31 chars + null)
+    uint8_t type;               // EntryType enum value
+    uint64_t levelID;           // Level this entry belongs to
+    uint64_t startCluster;      // Data/content cluster
+    uint64_t size;              // File size in bytes
+    uint32_t permissions;       // Permission flags (PERM_*)
+    uint32_t attributes;        // Extended attributes (FILE_FLAG_*)
+    uint32_t createTime;        // Creation timestamp
+    uint32_t modTime;           // Last modification timestamp
+    uint32_t accessTime;        // Last access timestamp
+    uint8_t flags;              // Entry-specific flags
+    uint8_t ownerLevel;         // Owner level ID (for inheritance)
+    char padding[2];            // Alignment padding
 };
 
 struct JournalEntry {
@@ -183,14 +219,23 @@ struct JournalEntry {
     uint64_t checksum;
 };
 
+/*
+ * VersionEntry - Version/level reference within a leveled directory
+ * Each folder can have multiple versions pointing to different content
+ */
 struct VersionEntry {
-    char versionName[32];
-    uint64_t contentTableCluster;
-    uint64_t levelID;
-    uint64_t parentLevelID;
-    uint32_t flags;
-    uint8_t isActive;
-    char padding[7];
+    char versionName[32];       // Version/level name (e.g., "master", "branch1")
+    uint64_t contentTableCluster; // Cluster containing directory entries
+    uint64_t levelID;           // Level ID this version belongs to
+    uint64_t parentLevelID;     // Parent level ID (for branching)
+    uint32_t flags;             // LEVEL_FLAG_* flags
+    uint32_t permissions;       // Level-wide permissions (PERM_*)
+    uint32_t createTime;        // When this version was created
+    uint32_t modTime;           // Last modification time
+    uint8_t isActive;           // 1 if this version is active/visible
+    uint8_t isLocked;           // 1 if version is locked (read-only)
+    uint8_t isSnapshot;         // 1 if this is a snapshot (immutable)
+    char padding[1];            // Alignment
 };
 
 #pragma pack(pop)
