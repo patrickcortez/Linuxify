@@ -1,0 +1,9 @@
+look
+create folder TestFolder
+level add TestFolder TestLevel
+look TestFolder:TestLevel
+look TestFolder:MissingLevel
+create file TestFolder:TestLevel/Nested.txt
+look TestFolder:TestLevel
+dir-tree
+exit

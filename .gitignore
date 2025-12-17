@@ -1,2 +1,4 @@
 installer/output
 .agent
+server
+*.img
