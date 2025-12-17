@@ -1,3 +1,17 @@
+/*
+ * Leveled File System (LFS) v2 Common Header
+ * Architecture: True Level-First Design with 2-Level Radix Tree HLAT
+ * 
+ * Disk Layout:
+ *   Sector 0: SuperBlock
+ *   Cluster 1+: Level Index Table (LIT) - Sparse pointers to LABs
+ *   Cluster N+: Level Allocation Blocks (LABs) - Actual allocation metadata
+ *   Cluster M+: Level Registry - Global level catalog
+ *   Cluster J+: Journal
+ *   Cluster R+: Root Directory
+ *   Cluster B: Backup SuperBlock
+ */
+
 #ifndef FS_COMMON_HPP
 #define FS_COMMON_HPP
 
@@ -15,58 +29,147 @@
 
 #define SECTOR_SIZE 512
 #define CLUSTER_SIZE 4096 
-#define MAGIC 0x4C564C46 
+#define SECTORS_PER_CLUSTER 8
+#define LFS_MAGIC 0x4C465332
+#define LFS_VERSION 2
+#define MAGIC 0x4C465332
 
-// Level Allocation Table (LAT) Constants
 #define LAT_FREE 0x0000000000000000
 #define LAT_END  0xFFFFFFFFFFFFFFFF
 #define LAT_BAD  0xFFFFFFFFFFFFFFFE
+#define LIT_EMPTY 0x0000000000000000
 
-// Journal Operation Types
+#define LAB_ENTRIES_PER_CLUSTER 256
+#define LIT_ENTRIES_PER_CLUSTER 512
+#define CLUSTERS_PER_LIT_ENTRY 256
+
 #define OP_CREATE     1
 #define OP_WRITE      2
 #define OP_DELETE     3
 #define OP_UPDATE_DIR 4
 #define OP_MKDIR      5
+#define OP_LEVEL_CREATE 6
+#define OP_LEVEL_LINK   7
+#define OP_LAB_ALLOC    8
 
-// Journal Entry Status
 #define J_PENDING   0
 #define J_COMMITTED 1
 #define J_ABORTED   2
+
+#define LEVEL_FLAG_ACTIVE   0x0001
+#define LEVEL_FLAG_LOCKED   0x0002
+#define LEVEL_FLAG_SNAPSHOT 0x0004
+#define LEVEL_FLAG_SHARED   0x0008
+#define LEVEL_FLAG_DERIVED  0x0010
+
+#define LAT_FLAG_USED       0x0001
+#define LAT_FLAG_RESERVED   0x0002
+#define LAT_FLAG_CHAIN_END  0x0004
+
+#define LEVEL_ID_NONE   0
+#define LEVEL_ID_MASTER 1
 
 using namespace std;
 
 #pragma pack(push, 1)
 
 struct SuperBlock {
-    uint32_t magic;         
+    uint32_t magic;
+    uint32_t version;
     uint64_t totalSectors;
-    uint32_t clusterSize;   
-    uint64_t rootDirCluster;
-    uint64_t latStartCluster;
-    uint64_t latSectors;
+    uint32_t clusterSize;
+    uint64_t totalClusters;
+    
+    uint64_t litStartCluster;
+    uint64_t litClusters;
+    
+    uint64_t labPoolStart;
+    uint64_t labPoolClusters;
+    uint64_t nextFreeLAB;
+    
+    uint64_t levelRegistryCluster;
+    uint64_t levelRegistryClusters;
+    
     uint64_t journalStartCluster;
     uint64_t journalSectors;
     uint64_t lastTxId;
+    
+    uint64_t nextLevelID;
+    uint64_t totalLevels;
+    uint64_t rootLevelID;
+    
+    uint64_t rootDirCluster;
+    
     uint64_t backupSBCluster;
-    char padding[440];
+    
+    uint64_t freeClusterHint;
+    uint64_t totalFreeClusters;
+    
+    uint64_t latStartCluster;
+    uint64_t latSectors;
+    
+    char volumeName[32];
+    char padding[312];
+};
+
+struct LITEntry {
+    uint64_t labCluster;
+    uint64_t baseCluster;
+    uint32_t allocatedCount;
+    uint32_t flags;
+};
+
+struct LABEntry {
+    uint64_t nextCluster;
+    uint32_t levelID;
+    uint16_t flags;
+    uint16_t refCount;
+};
+
+struct LevelDescriptor {
+    char name[32];
+    uint64_t levelID;
+    uint64_t parentLevelID;
+    uint64_t rootContentCluster;
+    uint64_t createTime;
+    uint64_t modTime;
+    uint32_t flags;
+    uint32_t refCount;
+    uint64_t childCount;
+    uint64_t totalSize;
+    char padding[8];
 };
 
 enum EntryType {
     TYPE_FREE = 0,
     TYPE_FILE = 1,
-    TYPE_LEVELED_DIR = 2
+    TYPE_LEVELED_DIR = 2,
+    TYPE_SYMLINK = 3,
+    TYPE_HARDLINK = 4,
+    TYPE_LEVEL_MOUNT = 5
 };
 
 struct DirEntry {
     char name[32];
     uint8_t type;
-    uint64_t startCluster; 
-    uint64_t size;         
+    uint64_t startCluster;
+    uint64_t size;
     uint32_t attributes;
     uint32_t createTime;
     uint32_t modTime;
     char padding[3];
+};
+
+struct LeveledDirEntry {
+    char name[32];
+    uint8_t type;
+    uint64_t levelID;
+    uint64_t size;
+    uint32_t permissions;
+    uint32_t createTime;
+    uint32_t modTime;
+    uint8_t flags;
+    char padding[2];
 };
 
 struct JournalEntry {
@@ -74,16 +177,20 @@ struct JournalEntry {
     uint32_t opType;
     uint32_t status;
     uint64_t targetCluster;
+    uint64_t levelID;
     uint64_t timestamp;
-    char metadata[32];
+    char metadata[24];
     uint64_t checksum;
 };
 
 struct VersionEntry {
     char versionName[32];
-    uint64_t contentTableCluster; 
+    uint64_t contentTableCluster;
+    uint64_t levelID;
+    uint64_t parentLevelID;
+    uint32_t flags;
     uint8_t isActive;
-    char padding[23];
+    char padding[7];
 };
 
 #pragma pack(pop)

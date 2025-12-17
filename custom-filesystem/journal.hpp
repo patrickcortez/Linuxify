@@ -48,7 +48,7 @@ public:
         entry.status = J_PENDING;
         entry.targetCluster = targetCluster;
         entry.timestamp = time(0);
-        strncpy(entry.metadata, metadata.c_str(), 31);
+        strncpy(entry.metadata, metadata.c_str(), 23);
         
         // Calculate checksum (exclude checksum field itself)
         entry.checksum = calculateCRC64(&entry, sizeof(JournalEntry) - sizeof(uint64_t));
@@ -84,6 +84,8 @@ public:
             for (uint64_t j = 0; j < entriesPerSector; j++) {
                 if (buffer[j].txId == txId) {
                     buffer[j].status = J_COMMITTED;
+                    // Recalculate checksum after status change
+                    buffer[j].checksum = calculateCRC64(&buffer[j], sizeof(JournalEntry) - sizeof(uint64_t));
                     disk->writeSector(sectorIdx, buffer);
                     
                     // Update SuperBlock's lastTxId

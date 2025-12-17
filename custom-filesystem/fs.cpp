@@ -456,93 +456,159 @@ public:
     }
 
     bool performFormat(uint64_t diskSizeBytes) {
+        memset(&sb, 0, sizeof(sb));
         sb.magic = MAGIC;
-        sb.clusterSize = 8;
+        sb.version = LFS_VERSION;
+        sb.clusterSize = SECTORS_PER_CLUSTER;
         sb.totalSectors = diskSizeBytes / SECTOR_SIZE;
+        sb.totalClusters = sb.totalSectors / sb.clusterSize;
         
-        uint64_t totalClusters = sb.totalSectors / sb.clusterSize;
-        sb.backupSBCluster = totalClusters - 1;
+        sb.backupSBCluster = sb.totalClusters - 1;
         
-        uint64_t latBytes = totalClusters * sizeof(uint64_t);
-        sb.latSectors = (latBytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        sb.latStartCluster = 1; 
-        uint64_t latClusters = (sb.latSectors * SECTOR_SIZE + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
+        uint64_t litEntriesNeeded = (sb.totalClusters + CLUSTERS_PER_LIT_ENTRY - 1) / CLUSTERS_PER_LIT_ENTRY;
+        uint64_t litBytesNeeded = litEntriesNeeded * sizeof(LITEntry);
+        sb.litClusters = (litBytesNeeded + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
+        sb.litStartCluster = 1;
+        
+        uint64_t maxLABsNeeded = litEntriesNeeded;
+        sb.labPoolStart = sb.litStartCluster + sb.litClusters;
+        sb.labPoolClusters = maxLABsNeeded;
+        sb.nextFreeLAB = 0;
+        
+        sb.levelRegistryCluster = sb.labPoolStart + sb.labPoolClusters;
+        sb.levelRegistryClusters = 2;
         
         uint64_t journalEntries = 1024;
         uint64_t journalBytes = journalEntries * sizeof(JournalEntry);
         sb.journalSectors = (journalBytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        sb.journalStartCluster = sb.latStartCluster + latClusters;
-        uint64_t journalClusters = (sb.journalSectors * SECTOR_SIZE + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
+        sb.journalStartCluster = sb.levelRegistryCluster + sb.levelRegistryClusters;
+        uint64_t journalClusters = (sb.journalSectors + SECTORS_PER_CLUSTER - 1) / SECTORS_PER_CLUSTER;
         
         sb.rootDirCluster = sb.journalStartCluster + journalClusters;
         sb.lastTxId = 0;
         
-        if (!disk.writeSector(0, &sb)) { cout << "Failed to write primary SuperBlock.\n"; return false; }
+        sb.nextLevelID = 2;
+        sb.totalLevels = 1;
+        sb.rootLevelID = LEVEL_ID_MASTER;
         
-        if (!disk.writeSector(sb.backupSBCluster * 8, &sb)) { 
+        uint64_t reservedClusters = sb.rootDirCluster + 2;
+        sb.freeClusterHint = reservedClusters;
+        sb.totalFreeClusters = sb.totalClusters - reservedClusters - 1;
+        
+        sb.latStartCluster = sb.litStartCluster;
+        sb.latSectors = sb.litClusters * SECTORS_PER_CLUSTER;
+        
+        cout << "=== LFS v2 Hierarchical Format ===\n";
+        cout << "  Total Clusters: " << sb.totalClusters << "\n";
+        cout << "  LIT: Cluster " << sb.litStartCluster << " (" << sb.litClusters << " clusters, " << litEntriesNeeded << " entries)\n";
+        cout << "  LAB Pool: Cluster " << sb.labPoolStart << " (" << sb.labPoolClusters << " blocks)\n";
+        cout << "  Level Registry: Cluster " << sb.levelRegistryCluster << "\n";
+        cout << "  Journal: Cluster " << sb.journalStartCluster << "\n";
+        cout << "  Root Dir: Cluster " << sb.rootDirCluster << "\n\n";
+        
+        if (!disk.writeSector(0, &sb)) { cout << "Failed to write SuperBlock.\n"; return false; }
+        if (!disk.writeSector(sb.backupSBCluster * SECTORS_PER_CLUSTER, &sb)) { 
             cout << "Warning: Failed to write backup SuperBlock.\n"; 
         }
-
-        // Initialize LAT with batch writes for performance
-        cout << "Initializing Level Allocation Table (" << sb.latSectors << " sectors)...\n";
-        const uint64_t BATCH_SIZE = 64; // Write 64 sectors at once = 32KB
-        vector<uint64_t> latBatch(BATCH_SIZE * (SECTOR_SIZE / sizeof(uint64_t)), LAT_FREE);
         
-        for (uint64_t i = 0; i < sb.latSectors; i += BATCH_SIZE) {
-            uint64_t batchCount = min(BATCH_SIZE, sb.latSectors - i);
-            fill(latBatch.begin(), latBatch.end(), LAT_FREE);
-            
-            // Mark reserved clusters in this batch
-            for (uint64_t b = 0; b < batchCount; b++) {
-                uint64_t sectorIdx = i + b;
-                uint64_t startClusterIdx = sectorIdx * (SECTOR_SIZE / sizeof(uint64_t));
-                uint64_t offset = b * (SECTOR_SIZE / sizeof(uint64_t));
-                
-                for (int k = 0; k < (SECTOR_SIZE / sizeof(uint64_t)); k++) {
-                    uint64_t currentCluster = startClusterIdx + k;
-                    
-                    if (currentCluster == 0) latBatch[offset + k] = LAT_END;
-                    else if (currentCluster == sb.backupSBCluster) latBatch[offset + k] = LAT_END;
-                    else if (currentCluster >= sb.latStartCluster && currentCluster < sb.latStartCluster + latClusters) latBatch[offset + k] = LAT_END;
-                    else if (currentCluster >= sb.journalStartCluster && currentCluster < sb.journalStartCluster + journalClusters) latBatch[offset + k] = LAT_END;
-                    else if (currentCluster == sb.rootDirCluster) latBatch[offset + k] = LAT_END;
-                    else if (currentCluster == sb.rootDirCluster + 1) latBatch[offset + k] = LAT_END;
-                }
-            }
-            
-            disk.writeSector((sb.latStartCluster * 8) + i, latBatch.data(), batchCount);
-            
-            // Progress indicator every ~10%
-            if (i % (sb.latSectors / 10 + 1) == 0) {
-                cout << "  Progress: " << (i * 100 / sb.latSectors) << "%\r" << flush;
+        cout << "Initializing Level Index Table (LIT)...\n";
+        LITEntry emptyLIT[CLUSTER_SIZE / sizeof(LITEntry)];
+        memset(emptyLIT, 0, sizeof(emptyLIT));
+        
+        for (uint64_t c = 0; c < sb.litClusters; c++) {
+            for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
+                disk.writeSector((sb.litStartCluster + c) * SECTORS_PER_CLUSTER + s, 
+                    ((char*)emptyLIT) + s * SECTOR_SIZE);
             }
         }
-        cout << "  Progress: 100%\n";
-        cout << "LAT initialized with " << totalClusters << " cluster entries\n\n";
+        cout << "  LIT initialized (" << sb.litClusters << " clusters, sparse allocation ready)\n";
         
-        JournalEntry emptyEntries[SECTOR_SIZE / sizeof(JournalEntry)];
-        memset(emptyEntries, 0, sizeof(emptyEntries));
+        cout << "Initializing LAB Pool...\n";
+        LABEntry emptyLAB[LAB_ENTRIES_PER_CLUSTER];
+        memset(emptyLAB, 0, sizeof(emptyLAB));
+        for (int i = 0; i < LAB_ENTRIES_PER_CLUSTER; i++) {
+            emptyLAB[i].nextCluster = LAT_FREE;
+            emptyLAB[i].levelID = LEVEL_ID_NONE;
+            emptyLAB[i].flags = 0;
+            emptyLAB[i].refCount = 0;
+        }
+        
+        for (uint64_t c = 0; c < min(sb.labPoolClusters, (uint64_t)16); c++) {
+            for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
+                disk.writeSector((sb.labPoolStart + c) * SECTORS_PER_CLUSTER + s,
+                    ((char*)emptyLAB) + s * SECTOR_SIZE);
+            }
+        }
+        cout << "  LAB Pool initialized (" << sb.labPoolClusters << " blocks available)\n";
+        
+        cout << "Initializing Journal...\n";
+        JournalEntry emptyJournal[SECTOR_SIZE / sizeof(JournalEntry)];
+        memset(emptyJournal, 0, sizeof(emptyJournal));
         for (uint64_t i = 0; i < sb.journalSectors; i++) {
-            disk.writeSector((sb.journalStartCluster * 8) + i, emptyEntries);
+            disk.writeSector((sb.journalStartCluster * SECTORS_PER_CLUSTER) + i, emptyJournal);
         }
-
-        VersionEntry vTable[SECTOR_SIZE/sizeof(VersionEntry)];
+        cout << "  Journal initialized (" << journalEntries << " entries)\n";
+        
+        cout << "Initializing Global Level Registry...\n";
+        LevelDescriptor levelRegistry[CLUSTER_SIZE / sizeof(LevelDescriptor)];
+        memset(levelRegistry, 0, sizeof(levelRegistry));
+        
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        FILETIME ft;
+        SystemTimeToFileTime(&st, &ft);
+        uint64_t timestamp = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        
+        strcpy(levelRegistry[0].name, "master");
+        levelRegistry[0].levelID = LEVEL_ID_MASTER;
+        levelRegistry[0].parentLevelID = LEVEL_ID_NONE;
+        levelRegistry[0].rootContentCluster = sb.rootDirCluster + 1;
+        levelRegistry[0].createTime = timestamp;
+        levelRegistry[0].modTime = timestamp;
+        levelRegistry[0].flags = LEVEL_FLAG_ACTIVE;
+        levelRegistry[0].refCount = 1;
+        levelRegistry[0].childCount = 0;
+        levelRegistry[0].totalSize = 0;
+        
+        for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
+            disk.writeSector(sb.levelRegistryCluster * SECTORS_PER_CLUSTER + s,
+                ((char*)levelRegistry) + s * SECTOR_SIZE);
+        }
+        char zeros[SECTOR_SIZE] = {0};
+        for (int s = SECTORS_PER_CLUSTER; s < SECTORS_PER_CLUSTER * 2; s++) {
+            disk.writeSector(sb.levelRegistryCluster * SECTORS_PER_CLUSTER + s, zeros);
+        }
+        cout << "  Level Registry initialized with 'master' (ID: 1)\n";
+        
+        cout << "Initializing Root Directory...\n";
+        VersionEntry vTable[CLUSTER_SIZE / sizeof(VersionEntry)];
         memset(vTable, 0, sizeof(vTable));
         strcpy(vTable[0].versionName, "master");
         vTable[0].isActive = 1;
         vTable[0].contentTableCluster = sb.rootDirCluster + 1;
+        vTable[0].levelID = LEVEL_ID_MASTER;
+        vTable[0].parentLevelID = LEVEL_ID_NONE;
+        vTable[0].flags = LEVEL_FLAG_ACTIVE;
         
-        disk.writeSector(sb.rootDirCluster * 8, vTable);
-        char zeros[SECTOR_SIZE] = {0};
-        for (int i = 1; i < 8; i++) disk.writeSector(sb.rootDirCluster * 8 + i, zeros);
+        for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
+            disk.writeSector(sb.rootDirCluster * SECTORS_PER_CLUSTER + s,
+                ((char*)vTable) + s * SECTOR_SIZE);
+        }
         
-        DirEntry content[SECTOR_SIZE/sizeof(DirEntry)];
+        DirEntry content[CLUSTER_SIZE / sizeof(DirEntry)];
         memset(content, 0, sizeof(content));
-        disk.writeSector((sb.rootDirCluster + 1) * 8, content, 8);
+        for (int s = 0; s < SECTORS_PER_CLUSTER; s++) {
+            disk.writeSector((sb.rootDirCluster + 1) * SECTORS_PER_CLUSTER + s,
+                ((char*)content) + s * SECTOR_SIZE);
+        }
+        cout << "  Root directory initialized\n";
         
         disk.close();
-        cout << "Format complete. Journal initialized with " << journalEntries << " entries.\n";
-        cout << "Use 'mount auto' to access.\n";
+        cout << "\n=== LFS v2 Format Complete ===\n";
+        cout << "  Architecture: 2-Level Radix Tree HLAT\n";
+        cout << "  Total Clusters: " << sb.totalClusters << "\n";
+        cout << "  Free Clusters: " << sb.totalFreeClusters << "\n";
+        cout << "  Root Level: master (ID: 1)\n";
         return true;
     }
 
