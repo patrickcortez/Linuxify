@@ -1964,3 +1964,8 @@ cat result.log
 ./..
 git status
 git add -A
+git commit -m "Overhauled Interpreter and fixed alot of bugs"
+git remote -v
+git push turtle master
+git status
+git add -A

@@ -2,3 +2,4 @@ installer/output
 .agent
 server
 *.img
+linuxdb/nodes
