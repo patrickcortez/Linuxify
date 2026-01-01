@@ -1502,3 +1502,465 @@ mount D
 mount D
 sudo fs
 mount D
+mount D
+ls -la
+ls .
+mount D
+mount D
+mount auto
+mount auto
+mount D
+lsusb
+mount D
+mount D
+mount D
+mount D
+mount D
+mount D
+exit
+exit
+git clone https://github.com/patrickcortez/LevelFS.git
+cd LevelFs
+ls
+cat README
+cat README.md
+cd src
+cat fs.cpp
+cat mount.cpp
+cls
+ls
+rm Vulkan.txt
+touch Vulkan.md
+help
+var
+var list
+var list
+echo $(words[0])
+echo $(words[0])
+help
+pstree
+clear
+help
+lsusb
+curl
+clear
+cd test
+lvc status
+lvc add
+lvc add -A
+lvc commit -v 1.2
+lvc
+lvc versions
+lvc status
+cd
+var list
+cd $(dirs[0])
+ls
+cd ..
+cd LevelFs
+ls
+cd bin
+ls
+sudo ./mount auto
+sudo .\mount auto
+sudo ./fs
+sudo ./fs
+sudo .\mount auto
+sudo ./mount auto
+sudo ./fs
+sudo ./mount auto
+./mount auto
+.\mount auto
+setfacl --help
+cd "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin"
+sudo ./mount auto
+sudo ./mount auto
+registry
+registry add mount "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin"
+registry delete mount
+registry add mount "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin"
+registry delete mount
+registry add mount "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin\mount.exe"
+mount
+registry add mount "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin\fs.exe"
+fs
+mount
+registry delete mount
+registry add fs "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin\fs.exe"
+registry add mount "C:\Users\patri\OneDrive\Documents\Projects\LevelFS\bin\mount.exe"
+clear
+sudo mount auto
+setup admin
+sudo mount auto
+cd mount
+mount
+mount auto
+mount auto
+clear
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+mount auto
+ssh cortez@192.168.254.183
+ssh cortez@192.168.254.183
+sudo ssh cortez@192.168.254.183
+clear
+cd test
+ls
+touch file.txt
+ls
+nano file.txt
+lino file.txt
+scp file.txt cortez@192.168.254.18:~/
+scp file.txt cortez@192.168.254.183:~/
+Windux
+help
+cd ./
+exit
+head
+help
+addr2line
+ld
+ls
+basename
+fg
+clear
+ls
+cd scoop
+ls
+tree
+ls -la .
+ls
+/scoop
+ls
+/OneDrive
+./scoop
+./..
+wsl
+sed
+lino
+clear
+help
+help
+help
+tui
+tui
+cd ./OneDrive/Documents/Projects/Funux
+ls
+ls -la
+git
+clear
+make
+mysql
+sudo mysql
+tui
+windux
+declare --help
+declare http="Nani"
+declare
+var
+declare LAN="On.OFF"
+help
+lin
+export -p MASTER="LINOS_TORVARDS"
+echo MASTER
+echo $MASTER
+env
+echo $OS
+cd $MASTER
+ls
+mkdir $MASTER
+ls
+rmdir $MASTER
+sudo rmdir $MASTER
+rm -rf $MASTER
+ls
+lino README.md
+cat README.md
+cat README.md | grep -n "#" > log.txt
+cat README.md | grep -n "#"
+cat README.md | grep -n "#" > log.txt
+cat README.md | grep -n "#"
+ls > result.txt
+ls
+cat log.txt
+cat result.txt > log.txt
+ls
+cat log.txt
+ks
+ls
+rm log.txt
+c++
+clear
+exit
+var
+var list
+echo $(words[1])
+var insert words git
+$(words[3]) $(words[0])
+$(words[3]) $(words[0])
+$(words[3]) $(words[0])
+$(words[0])
+$(words[2])
+$(words[3])
+var list
+$(words[3])
+git
+$(words[3])
+var insert words lino
+$(words[4])
+$(words[2])
+echo $(words[2])
+echo $(words[3])
+echo $(words[4])
+var
+echo ./saved Games
+echo $(words[3])
+$(words[3]) $(words[0])
+$(words[3])
+$(words[4])
+$(words[4])
+$(words[4]) Linemen.txt
+mkdir test-repo
+cd test-repo
+lvc
+lvc init
+ls
+ls
+ls -la
+ls -la .lvc
+clear
+lino config.json
+ls
+lvc add -A
+lvc status
+lvc commit -v 1.0
+lino config.json
+lvc status
+lvc
+lvc add -A
+lvc commit -v 1.1
+lvc diff 1.0 1.1
+lvc diff 1.0 1.0
+mkdir src
+cd src
+ping myass.com
+cd test repo
+lvc status
+lvc versions
+cd ..
+cd test-repo
+lvc status
+ls
+cd  src
+ls
+touch main.cpp
+lvc status
+cd ..
+lvc status
+lvc add -A
+cd src
+ls
+lino main.cpp
+cat main.cpp
+g++ main.cpp
+ls
+mv main.cpp ../bin
+cd ..
+ls
+/bin
+./bin
+ls
+\bin
+/bin
+ls
+rm bin
+mkdir bin
+cd src
+g++ main.cpp -o hello.exe
+ls
+lvc
+mv a.exe ../bin
+cd ..
+ls
+/bin
+./bin
+ls
+./a.exe
+./..
+./..
+./Onedrive/Documents
+../
+./Documents
+./Projects/Linuxify ./linuxifu=y.exe
+./Projects/Linuxify ./linuxifuy.exe
+./Projects/Linuxify ./linuxify.exe
+./Projects/Linuxify
+./cmds
+ls
+..
+..
+..
+..
+..
+..
+.
+.
+./
+./.
+././././
+tui
+nexplore
+ls
+cd patri
+ls
+cd test
+ls
+ls | grep -n ".node"
+cd folder
+ls
+..
+./File
+ls
+node
+..
+node init --size 100 --password --maxfile 0 Main
+node list
+nexplore main
+node mount main
+nexplore main
+node mount main
+nexplore main.node
+tui
+dwadaswddwadsads
+tui
+tui
+tui
+tui
+ddawdHellodHello
+hello
+Helpp
+help
+help
+windux
+ls
+clear
+./test-repo/
+ls
+./src
+ls
+ls
+./..
+./bin
+ls
+./a.exe
+../..
+ls
+mkdir test-repo
+ls
+touch test-repo/readme.md
+./test-repo/
+cat readme.md
+tui
+declare
+help
+registry
+registry refresh
+registry
+registry list
+exit
+chout
+registry
+registry add testg "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\git.sh"
+testg
+./OneDrive/Documents/Projects/Linuxify/scripts
+ls
+./git.sh
+registry
+registry delete testg
+cd scripts
+ls
+./git.sh
+cd scripts
+;s
+./git.sh help
+cd scripts
+./git.sh help
+exit
+./scripts/
+./git.sh
+./scripts/
+./git.sh help
+./scripts/
+./git.sh help
+lish
+lish
+./scripts/
+./git.sh help
+echo ok
+./scripts/
+./git.sh help
+./scripts/
+./git.sh help
+exit
+var list
+./$(dirs[0])
+./OneDrive\Documents\Projects\Linuxify
+./scripts/
+git.sh help
+./git.sh help
+./git.sh help
+cd $(dirs[0])
+./scripts/
+./git.sh help
+./git.sh info
+./git.sh graph
+cd $(dirs[0])
+./scripts
+ls
+./git.sh help
+./git.sh log 20
+cd $(dirs[0])
+./scripts/
+git.sh help
+./git.sh help
+registry add testg "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts"
+clear
+cd ..
+testg help
+registry list
+registry
+registry delete testg
+./scripts/
+registry add testg "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\git.sh"
+cls
+testg help
+./..
+testg status
+exit
+./test-repo/
+testg
+testg status
+ls
+cd src
+ls
+cd ..
+ls
+testg status
+cd $(dirs[0])
+cd scripts
+echo "C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts"
+ls | grep -n ".sh" > result.log
+cat result.log
+./..
+git status
+git add -A

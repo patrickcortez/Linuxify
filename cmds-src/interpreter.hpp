@@ -13,6 +13,8 @@
 #include <sstream>
 #include <functional>
 #include <regex>
+#include <chrono>
+#include <io.h>
 #include <windows.h>
 
 namespace Bash {
@@ -35,10 +37,13 @@ enum class TokenType {
     REDIRECT_OUT,   // >
     REDIRECT_APPEND,// >>
     REDIRECT_IN,    // <
+    REDIRECT_STDERR,// 2> or 2>>
+    REDIRECT_FD,    // 2>&1 or &>
     AND,            // &&
     OR,             // ||
     SEMICOLON,      // ;
     AMPERSAND,      // &
+    NOT,            // !
     
     // Grouping
     LPAREN,         // (
@@ -126,6 +131,25 @@ private:
     int line = 1;
     int column = 1;
     
+    // Timeout protection
+    std::chrono::steady_clock::time_point startTime;
+    size_t iterations = 0;
+    static constexpr size_t MAX_ITERATIONS = 500000;
+    static constexpr int TIMEOUT_SECONDS = 5;
+    
+    void checkLimits() {
+        if (++iterations > MAX_ITERATIONS) {
+            throw std::runtime_error("Lexer: exceeded maximum iterations");
+        }
+        if ((iterations % 1000) == 0) {  // Check time every 1000 iterations
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - startTime).count();
+            if (elapsed > TIMEOUT_SECONDS) {
+                throw std::runtime_error("Lexer: timeout exceeded");
+            }
+        }
+    }
+    
     // Keyword map
     std::map<std::string, TokenType> keywords = {
         {"if", TokenType::KW_IF},
@@ -164,6 +188,7 @@ private:
             column++;
         }
         pos++;
+        checkLimits();
     }
     
     void skipWhitespace() {
@@ -186,7 +211,10 @@ private:
                     case '\\': value += '\\'; break;
                     case '"': value += '"'; break;
                     case '\'': value += '\''; break;
-                    default: value += current(); break;
+                    default: 
+                        value += '\\';  // Preserve backslash for unknown escapes
+                        value += current(); 
+                        break;
                 }
             } else {
                 value += current();
@@ -283,7 +311,7 @@ private:
     }
 
 public:
-    explicit Lexer(const std::string& src) : source(src) {}
+    explicit Lexer(const std::string& src) : source(src), startTime(std::chrono::steady_clock::now()) {}
     
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
@@ -326,6 +354,30 @@ public:
             }
             
             // Operators
+            
+            // Handle file descriptor redirections: 2>, 2>>, 2>&1
+            if (current() == '2' && (peek() == '>' || (peek() == '&' && peek(2) == '>'))) {
+                advance(); // skip '2'
+                if (current() == '>') {
+                    advance();
+                    if (current() == '>') {
+                        advance();
+                        tokens.push_back(Token(TokenType::REDIRECT_STDERR, "2>>", startLine, startCol));
+                    } else if (current() == '&') {
+                        advance();
+                        if (current() == '1') {
+                            advance();
+                            tokens.push_back(Token(TokenType::REDIRECT_FD, "2>&1", startLine, startCol));
+                        } else {
+                            tokens.push_back(Token(TokenType::REDIRECT_STDERR, "2>", startLine, startCol));
+                        }
+                    } else {
+                        tokens.push_back(Token(TokenType::REDIRECT_STDERR, "2>", startLine, startCol));
+                    }
+                    continue;
+                }
+            }
+            
             if (current() == '|') {
                 advance();
                 if (current() == '|') {
@@ -342,6 +394,9 @@ public:
                 if (current() == '&') {
                     advance();
                     tokens.push_back(Token(TokenType::AND, "&&", startLine, startCol));
+                } else if (current() == '>') {
+                    advance();
+                    tokens.push_back(Token(TokenType::REDIRECT_FD, "&>", startLine, startCol));
                 } else {
                     tokens.push_back(Token(TokenType::AMPERSAND, "&", startLine, startCol));
                 }
@@ -404,6 +459,12 @@ public:
             if (current() == ']') {
                 advance();
                 tokens.push_back(Token(TokenType::RBRACKET, "]", startLine, startCol));
+                continue;
+            }
+            
+            if (current() == '!') {
+                advance();
+                tokens.push_back(Token(TokenType::NOT, "!", startLine, startCol));
                 continue;
             }
             
@@ -518,6 +579,13 @@ struct AndChainNode : ASTNode {
     std::string type() const override { return "AndChain"; }
 };
 
+// Negated command: ! command (inverts exit code)
+struct NegatedCommandNode : ASTNode {
+    std::shared_ptr<ASTNode> command;
+    
+    std::string type() const override { return "NegatedCommand"; }
+};
+
 struct BreakNode : ASTNode {
     int levels = 1;
     std::string type() const override { return "Break"; }
@@ -558,6 +626,21 @@ class Parser {
 private:
     std::vector<Token> tokens;
     size_t pos = 0;
+    size_t iterations = 0;
+    static constexpr size_t MAX_ITERATIONS = 100000;  // Safety limit
+    std::chrono::steady_clock::time_point startTime;
+    static constexpr int TIMEOUT_SECONDS = 10;  // 10 second timeout
+    
+    void checkLimits() {
+        if (++iterations > MAX_ITERATIONS) {
+            throw std::runtime_error("Parser: exceeded maximum iterations (possible infinite loop)");
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - startTime).count();
+        if (elapsed > TIMEOUT_SECONDS) {
+            throw std::runtime_error("Parser: timeout exceeded");
+        }
+    }
     
     Token current() const {
         return pos < tokens.size() ? tokens[pos] : Token(TokenType::END_OF_FILE, "");
@@ -568,7 +651,10 @@ private:
         return p < tokens.size() ? tokens[p] : Token(TokenType::END_OF_FILE, "");
     }
     
-    void advance() { pos++; }
+    void advance() { 
+        pos++; 
+        checkLimits();
+    }
     
     bool check(TokenType type) const {
         return current().type == type;
@@ -596,13 +682,17 @@ private:
                !check(TokenType::SEMICOLON) && !check(TokenType::KW_THEN) && !check(TokenType::KW_DO) &&
                !check(TokenType::KW_DONE) && !check(TokenType::KW_FI) && !check(TokenType::KW_ELSE) &&
                !check(TokenType::KW_ELIF) && !check(TokenType::KW_FOR) && !check(TokenType::KW_WHILE) &&
-               !check(TokenType::KW_IF)) {
+               !check(TokenType::KW_IF) && !check(TokenType::RBRACE) && !check(TokenType::LBRACE) &&
+               !check(TokenType::KW_ESAC) && !check(TokenType::KW_IN) && !check(TokenType::KW_CASE)) {
             
-            if (check(TokenType::REDIRECT_OUT) || check(TokenType::REDIRECT_APPEND)) {
+            if (check(TokenType::REDIRECT_OUT) || check(TokenType::REDIRECT_APPEND) ||
+                check(TokenType::REDIRECT_STDERR) || check(TokenType::REDIRECT_FD)) {
                 std::string redirType = current().value;
                 advance();
                 if (check(TokenType::WORD) || check(TokenType::STRING)) {
-                    cmd->redirects.push_back({redirType, current().value});
+                    std::string target = current().value;
+                    if (target == "/dev/null") target = "NUL";
+                    cmd->redirects.push_back({redirType, target});
                     advance();
                 }
             } else if (check(TokenType::AMPERSAND)) {
@@ -827,11 +917,15 @@ private:
             // Parse patterns (pattern1 | pattern2 | ...)
             std::vector<std::string> patterns;
             while (!check(TokenType::RPAREN) && !check(TokenType::END_OF_FILE)) {
-                if (check(TokenType::WORD) || check(TokenType::STRING) || check(TokenType::NUMBER)) {
+                if (check(TokenType::WORD) || check(TokenType::STRING) || 
+                    check(TokenType::NUMBER) || check(TokenType::VARIABLE)) {
                     patterns.push_back(current().value);
                     advance();
                 } else if (check(TokenType::PIPE)) {
                     advance();  // Skip | separator between patterns
+                } else if (check(TokenType::NOT)) {
+                    // Handle patterns starting with ! like --help being tokenized oddly
+                    advance();
                 } else {
                     advance();  // Skip unexpected tokens
                 }
@@ -849,8 +943,22 @@ private:
                     break;
                 }
                 
+                // Safety: Check if we're at the start of a new case pattern
+                // This happens if we see WORD|WORD|...) pattern
+                if ((check(TokenType::WORD) || check(TokenType::STRING) || check(TokenType::NUMBER)) &&
+                    (peek().type == TokenType::PIPE || peek().type == TokenType::RPAREN)) {
+                    break;  // New pattern starting, exit this body
+                }
+                
+                size_t posBefore = pos;
                 auto stmt = parseStatement();
-                if (stmt) body.push_back(stmt);
+                if (stmt) {
+                    body.push_back(stmt);
+                } else if (pos == posBefore) {
+                    // parseStatement didn't advance and returned null - break to avoid infinite loop
+                    if (!check(TokenType::END_OF_FILE)) advance();
+                    break;
+                }
                 
                 // Skip statement separator
                 while (check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
@@ -969,11 +1077,32 @@ private:
             }
         }
         
-        return result;
+        return result; //return result
     }
     
     std::shared_ptr<ASTNode> parseStatement() {
         skipNewlines();
+        
+        // Skip tokens that shouldn't appear at statement start (edge cases from control flow parsing)
+        while (check(TokenType::OR) || check(TokenType::AND) || 
+               check(TokenType::KW_THEN) || check(TokenType::KW_DO) ||
+               check(TokenType::KW_DONE) || check(TokenType::KW_FI) ||
+               check(TokenType::KW_ELSE) || check(TokenType::KW_ELIF) ||
+               check(TokenType::KW_ESAC) || check(TokenType::KW_IN) ||
+               check(TokenType::RPAREN) || check(TokenType::SEMICOLON)) {
+            advance();
+            skipNewlines();
+        }
+        
+        if (check(TokenType::END_OF_FILE)) return nullptr;
+        
+        // Handle ! negation
+        if (check(TokenType::NOT)) {
+            advance();  // skip !
+            auto negated = std::make_shared<NegatedCommandNode>();
+            negated->command = parseStatement();
+            return negated;
+        }
         
         if (check(TokenType::KW_IF)) {
             return parseIf();
@@ -1064,15 +1193,20 @@ private:
     }
 
 public:
-    explicit Parser(const std::vector<Token>& toks) : tokens(toks) {}
+    explicit Parser(const std::vector<Token>& toks) : tokens(toks), startTime(std::chrono::steady_clock::now()) {}
     
     std::vector<std::shared_ptr<ASTNode>> parse() {
         std::vector<std::shared_ptr<ASTNode>> program;
         
         while (!check(TokenType::END_OF_FILE)) {
+            size_t posBefore = pos;
+            
             auto stmt = parseStatement();
             if (stmt) {
                 program.push_back(stmt);
+            } else if (pos == posBefore) {
+                // parseStatement didn't advance and returned null - skip token to avoid infinite loop
+                advance();
             }
             
             // Skip statement separators
@@ -1095,7 +1229,25 @@ private:
     std::vector<std::vector<std::string>> positionalArgsStack;  // Stack for function call args ($1-$9)
     int lastExitCode = 0;
     std::string currentDir;
-    bool debugMode = false;
+    bool debugMode = false;  // Set true for debug output
+    bool exitOnError = false;  // set -e mode
+    
+    // Timeout protection
+    std::chrono::steady_clock::time_point startTime;
+    size_t executeCount = 0;
+    static constexpr size_t MAX_EXECUTIONS = 50000;
+    static constexpr int EXEC_TIMEOUT_SECONDS = 30;  // 30 second timeout
+    
+    void checkExecutionLimits() {
+        if (++executeCount > MAX_EXECUTIONS) {
+            throw std::runtime_error("Executor: exceeded maximum execution steps");
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - startTime).count();
+        if (elapsed > EXEC_TIMEOUT_SECONDS) {
+            throw std::runtime_error("Executor: execution timeout exceeded");
+        }
+    }
     
     // Built-in commands
     std::map<std::string, std::function<int(const std::vector<std::string>&)>> builtins;
@@ -1105,11 +1257,49 @@ private:
     
     void setupBuiltins() {
         builtins["echo"] = [this](const std::vector<std::string>& args) {
-            for (size_t i = 1; i < args.size(); i++) {
-                if (i > 1) std::cout << " ";
-                std::cout << expandVariables(args[i]);
+            bool newline = true;
+            bool interpret = false;
+            size_t start = 1;
+            
+            // Parse flags
+            while (start < args.size()) {
+                if (args[start] == "-n") { newline = false; start++; }
+                else if (args[start] == "-e") { interpret = true; start++; }
+                else if (args[start] == "-ne" || args[start] == "-en") { newline = false; interpret = true; start++; }
+                else break;
             }
-            std::cout << "\n";
+            
+            for (size_t i = start; i < args.size(); i++) {
+                if (i > start) std::cout << " ";
+                std::string text = expandVariables(args[i]);
+                
+                if (interpret) {
+                    // Handle escape sequences
+                    std::string out;
+                    for (size_t j = 0; j < text.size(); j++) {
+                        if (text[j] == '\\' && j + 1 < text.size()) {
+                            char next = text[j + 1];
+                            if (next == 'n') { out += '\n'; j++; }
+                            else if (next == 't') { out += '\t'; j++; }
+                            else if (next == 'r') { out += '\r'; j++; }
+                            else if (next == '\\') { out += '\\'; j++; }
+                            else if (next == '0' && j + 4 < text.size() && text[j+2] == '3' && text[j+3] == '3' && text[j+4] == '[') {
+                                // Handle \033[ ANSI escape - convert to actual ESC
+                                out += '\033';
+                                j += 3;  // Skip \033
+                            }
+                            else out += text[j];
+                        } else {
+                            out += text[j];
+                        }
+                    }
+                    std::cout << out;
+                } else {
+                    std::cout << text;
+                }
+            }
+            if (newline) std::cout << "\n";
+            std::cout.flush();
             return 0;
         };
         
@@ -1145,8 +1335,17 @@ private:
         };
         
         builtins["set"] = [this](const std::vector<std::string>& args) {
-            for (const auto& [name, value] : variables) {
-                std::cout << name << "=" << value << "\n";
+            if (args.size() > 1) {
+                for (size_t i = 1; i < args.size(); i++) {
+                    if (args[i] == "-e") exitOnError = true;
+                    else if (args[i] == "+e") exitOnError = false;
+                    else if (args[i] == "-x") debugMode = true;
+                    else if (args[i] == "+x") debugMode = false;
+                }
+            } else {
+                for (const auto& [name, value] : variables) {
+                    std::cout << name << "=" << value << "\n";
+                }
             }
             return 0;
         };
@@ -1155,13 +1354,49 @@ private:
         builtins["false"] = [](const std::vector<std::string>&) { return 1; };
         
         builtins["read"] = [this](const std::vector<std::string>& args) {
-            std::string varName = args.size() > 1 ? args[1] : "REPLY";
+            std::string prompt;
+            std::string varName = "REPLY";
+            bool silent = false;
+            
+            for (size_t i = 1; i < args.size(); i++) {
+                if (args[i] == "-p" && i + 1 < args.size()) {
+                    prompt = args[++i];
+                } else if (args[i] == "-s") {
+                    silent = true;
+                } else if (args[i][0] != '-') {
+                    varName = args[i];
+                }
+            }
+            
+            if (!prompt.empty()) {
+                std::cout << prompt;
+                std::cout.flush();
+            }
+            
             std::string line;
             if (std::getline(std::cin, line)) {
                 variables[varName] = line;
+                if (!silent && prompt.empty()) std::cout << "\n";
                 return 0;
             }
             return 1;
+        };
+        
+        builtins["date"] = [this](const std::vector<std::string>& args) {
+            std::time_t now = std::time(nullptr);
+            std::tm* local = std::localtime(&now);
+            char buffer[256];
+            
+            std::string format = "%c";  // Default: full date/time
+            for (size_t i = 1; i < args.size(); i++) {
+                if (args[i][0] == '+') {
+                    format = args[i].substr(1);
+                }
+            }
+            
+            std::strftime(buffer, sizeof(buffer), format.c_str(), local);
+            std::cout << buffer << "\n";
+            return 0;
         };
         
         builtins["sleep"] = [](const std::vector<std::string>& args) {
@@ -1212,6 +1447,20 @@ private:
         
         builtins["pwd"] = [this](const std::vector<std::string>&) {
             std::cout << currentDir << "\n";
+            return 0;
+        };
+        
+        builtins["local"] = [this](const std::vector<std::string>& args) {
+            for (size_t i = 1; i < args.size(); i++) {
+                size_t eq = args[i].find('=');
+                if (eq != std::string::npos) {
+                    std::string name = args[i].substr(0, eq);
+                    std::string value = expandVariables(args[i].substr(eq + 1));
+                    variables[name] = value;
+                } else {
+                    variables[args[i]] = "";
+                }
+            }
             return 0;
         };
         
@@ -1365,10 +1614,47 @@ private:
             }
         }
         
+        // Handle ${VAR:-default} - parameter with default value
+        std::regex defaultRegex("\\$\\{([a-zA-Z_][a-zA-Z0-9_]*|[0-9]+):-([^}]*)\\}");
+        std::smatch defMatch;
+        std::string temp = result;
+        while (std::regex_search(temp, defMatch, defaultRegex)) {
+            std::string varName = defMatch[1];
+            std::string defaultVal = defMatch[2];
+            std::string varValue;
+            
+            // Check if it's a positional parameter
+            bool isPositional = !varName.empty() && std::isdigit(varName[0]);
+            if (isPositional) {
+                int idx = std::stoi(varName);
+                if (!positionalArgsStack.empty() && (size_t)idx < positionalArgsStack.back().size()) {
+                    varValue = positionalArgsStack.back()[idx];
+                }
+            } else {
+                if (variables.count(varName)) {
+                    varValue = variables[varName];
+                } else {
+                    char* envVal = getenv(varName.c_str());
+                    if (envVal) varValue = envVal;
+                }
+            }
+            
+            // Use default if empty
+            if (varValue.empty()) {
+                varValue = defaultVal;
+            }
+            
+            size_t pos = result.find(defMatch[0]);
+            if (pos != std::string::npos) {
+                result.replace(pos, defMatch[0].length(), varValue);
+            }
+            temp = defMatch.suffix();
+        }
+        
         // Handle $VAR and ${VAR}
         std::regex varRegex("\\$\\{?([a-zA-Z_][a-zA-Z0-9_]*)\\}?");
         std::smatch match;
-        std::string temp = result;
+        temp = result;
         
         while (std::regex_search(temp, match, varRegex)) {
             std::string varName = match[1];
@@ -1547,9 +1833,81 @@ private:
         
         return (int)exitCode;
     }
+    
+    int executeExternalWithRedirects(const std::vector<std::string>& args, 
+                                     const std::vector<std::pair<std::string, std::string>>& redirects) {
+        if (args.empty()) return 0;
+        
+        std::string cmdLine;
+        for (const auto& arg : args) {
+            if (!cmdLine.empty()) cmdLine += " ";
+            std::string expanded = expandVariables(arg);
+            if (expanded.find(' ') != std::string::npos) {
+                cmdLine += "\"" + expanded + "\"";
+            } else {
+                cmdLine += expanded;
+            }
+        }
+        
+        for (const auto& redir : redirects) {
+            std::string target = redir.second;
+            if (target == "/dev/null") target = "NUL";
+            
+            if (redir.first == ">") {
+                cmdLine += " > \"" + target + "\"";
+            } else if (redir.first == ">>") {
+                cmdLine += " >> \"" + target + "\"";
+            } else if (redir.first == "2>") {
+                cmdLine += " 2> \"" + target + "\"";
+            } else if (redir.first == "2>>") {
+                cmdLine += " 2>> \"" + target + "\"";
+            } else if (redir.first == "2>&1") {
+                cmdLine += " 2>&1";
+            } else if (redir.first == "&>") {
+                cmdLine += " > \"" + target + "\" 2>&1";
+            }
+        }
+        
+
+        std::string winCmd = "cmd.exe /c " + cmdLine;
+        
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
+        
+        char cmdBuffer[8192];
+        strncpy_s(cmdBuffer, winCmd.c_str(), sizeof(cmdBuffer) - 1);
+        
+        if (!CreateProcessA(
+            NULL,
+            cmdBuffer,
+            NULL,
+            NULL,
+            FALSE,
+            0,
+            NULL,
+            currentDir.c_str(),
+            &si,
+            &pi
+        )) {
+            std::cerr << "lish: command not found: " << args[0] << "\n";
+            return 127;
+        }
+        
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        
+        return (int)exitCode;
+    }
 
 public:
-    Executor() {
+    Executor() : startTime(std::chrono::steady_clock::now()) {
         char buf[MAX_PATH];
         GetCurrentDirectoryA(MAX_PATH, buf);
         currentDir = buf;
@@ -1584,6 +1942,8 @@ public:
     int execute(std::shared_ptr<ASTNode> node) {
         if (!node) return 0;
         
+        checkExecutionLimits();  // Timeout and iteration protection
+        
         if (debugMode) {
             std::cout << "[DEBUG] Executing: " << node->type() << "\n";
         }
@@ -1606,9 +1966,64 @@ public:
             
             std::string cmdName = expandedArgs[0];
             
-            // Check built-ins
-            if (builtins.count(cmdName)) {
+            if (debugMode) {
+                std::cerr << "[DEBUG EXEC] Command: " << cmdName;
+                for (size_t i = 1; i < expandedArgs.size() && i < 4; i++) {
+                    std::cerr << " " << expandedArgs[i];
+                }
+                if (expandedArgs.size() > 4) std::cerr << " ...";
+                std::cerr << "\n";
+                std::cerr.flush();
+            }
+            
+            // Check built-ins (but not if there are redirections that need special handling)
+            if (builtins.count(cmdName) && cmd->redirects.empty()) {
                 lastExitCode = builtins[cmdName](expandedArgs);
+                return lastExitCode;
+            }
+            
+            // Handle built-ins with redirections by saving/restoring stdout
+            if (builtins.count(cmdName) && !cmd->redirects.empty()) {
+                FILE* savedStdout = nullptr;
+                FILE* savedStderr = nullptr;
+                bool hasStdoutRedir = false;
+                bool hasStderrRedir = false;
+                bool mergeStderr = false;
+                std::string stdoutFile, stderrFile;
+                bool appendStdout = false, appendStderr = false;
+                
+                for (const auto& redir : cmd->redirects) {
+                    if (redir.first == ">" || redir.first == ">>") {
+                        stdoutFile = redir.second;
+                        appendStdout = (redir.first == ">>");
+                        hasStdoutRedir = true;
+                    } else if (redir.first == "2>" || redir.first == "2>>") {
+                        stderrFile = redir.second;
+                        appendStderr = (redir.first == "2>>");
+                        hasStderrRedir = true;
+                    } else if (redir.first == "2>&1" || redir.first == "&>") {
+                        mergeStderr = true;
+                        if (redir.first == "&>") {
+                            stdoutFile = redir.second;
+                            hasStdoutRedir = true;
+                        }
+                    }
+                }
+                
+                if (hasStdoutRedir) {
+                    savedStdout = freopen(stdoutFile.c_str(), appendStdout ? "a" : "w", stdout);
+                }
+                if (hasStderrRedir && !mergeStderr) {
+                    savedStderr = freopen(stderrFile.c_str(), appendStderr ? "a" : "w", stderr);
+                }
+                if (mergeStderr && hasStdoutRedir) {
+                    _dup2(_fileno(stdout), _fileno(stderr));
+                }
+                
+                lastExitCode = builtins[cmdName](expandedArgs);
+                
+                if (savedStdout) freopen("CON", "w", stdout);
+                if (savedStderr) freopen("CON", "w", stderr);
                 return lastExitCode;
             }
             
@@ -1627,8 +2042,8 @@ public:
                 return lastExitCode;
             }
             
-            // External command
-            lastExitCode = executeExternal(expandedArgs);
+            // External command - apply redirections to command line
+            lastExitCode = executeExternalWithRedirects(expandedArgs, cmd->redirects);
             return lastExitCode;
         }
         
@@ -1721,6 +2136,11 @@ public:
         if (auto caseNode = std::dynamic_pointer_cast<CaseNode>(node)) {
             std::string value = expandVariables(caseNode->expression);
             
+            if (debugMode) {
+                std::cerr << "[DEBUG EXEC] Case statement, expression = '" << value << "'\n";
+                std::cerr.flush();
+            }
+            
             for (const auto& branch : caseNode->branches) {
                 bool matched = false;
                 
@@ -1796,6 +2216,13 @@ public:
             return lastExitCode;
         }
         
+        // Negated command: ! command (inverts exit code)
+        if (auto negNode = std::dynamic_pointer_cast<NegatedCommandNode>(node)) {
+            int result = execute(negNode->command);
+            lastExitCode = (result == 0) ? 1 : 0;
+            return lastExitCode;
+        }
+        
         if (auto breakNode = std::dynamic_pointer_cast<BreakNode>(node)) {
             throw BreakException(breakNode->levels);
         }
@@ -1812,6 +2239,10 @@ public:
     }
     
     int run(const std::vector<std::shared_ptr<ASTNode>>& program) {
+        // Reset execution limits for each run
+        startTime = std::chrono::steady_clock::now();
+        executeCount = 0;
+        
         for (auto& node : program) {
             execute(node);
         }

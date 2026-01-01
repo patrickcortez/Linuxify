@@ -32,6 +32,8 @@
 #include "system_info.hpp"
 #include "networking.hpp"
 #include "cmds-src/interpreter.hpp"
+#include "cmds-src/auto-suggest.hpp"
+#include "cmds-src/auto-nav.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -183,13 +185,14 @@ private:
     static const WORD COLOR_DEFAULT = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;  // White
 
     // Re-render input line with syntax highlighting
-    // promptStartRow: the console row where the prompt started (tracked by caller)
-    void renderInputWithHighlight(const std::string& input, int cursorPos, int promptStartRow) {
+    // promptStartRow: the console row where the prompt started (tracked by caller, updated if scroll occurs)
+    void renderInputWithHighlight(const std::string& input, int cursorPos, int& promptStartRow) {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         GetConsoleScreenBufferInfo(hConsole, &csbi);
         
         int consoleWidth = csbi.dwSize.X;
+        int consoleHeight = csbi.dwSize.Y;
         int promptLen = 9 + (int)currentDir.length() + 2;  // "linuxify:" + currentDir + "$ "
         
         // Calculate how many lines the current content spans
@@ -197,9 +200,18 @@ private:
         int numLines = (totalLen + consoleWidth - 1) / consoleWidth;
         if (numLines < 1) numLines = 1;
         
-        // Use the provided start row (don't recalculate - avoids drift)
+        // Check if content would extend beyond buffer and adjust for scroll
         int startRow = promptStartRow;
         if (startRow < 0) startRow = 0;
+        
+        // If rendering would exceed console height, console will scroll
+        // Adjust startRow to account for the scroll
+        int linesNeeded = startRow + numLines;
+        if (linesNeeded > consoleHeight) {
+            int scrollAmount = linesNeeded - consoleHeight;
+            startRow = std::max(0, startRow - scrollAmount);
+            promptStartRow = startRow;  // Update caller's reference
+        }
         
         // Clear all lines that could contain our input (clear a few extra to be safe)
         COORD clearPos;
@@ -207,7 +219,7 @@ private:
         for (int i = 0; i < numLines + 2; i++) {
             clearPos.X = 0;
             clearPos.Y = (SHORT)(startRow + i);
-            if (clearPos.Y < csbi.dwSize.Y) {  // Don't clear beyond buffer
+            if (clearPos.Y < consoleHeight) {  // Don't clear beyond buffer
                 FillConsoleOutputCharacterA(hConsole, ' ', consoleWidth, clearPos, &written);
             }
         }
@@ -216,6 +228,7 @@ private:
         COORD startPos;
         startPos.X = 0;
         startPos.Y = (SHORT)startRow;
+
         SetConsoleCursorPosition(hConsole, startPos);
         
         // Reprint prompt
@@ -296,6 +309,42 @@ private:
         SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
         std::cout.flush();
         
+        // Show inline auto-suggestion (faint text)
+        auto result = AutoSuggest::getSuggestions(input, (int)input.length(), currentDir);
+        std::string suggestionSuffix;
+        
+        if (!result.suggestions.empty()) {
+            std::string bestMatch = result.suggestions[0];
+            
+            if (result.isPath) {
+                // For paths, show the completion part
+                std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
+                if (bestMatch.length() > 0) {
+                    // Get just the filename portion that matches
+                    fs::path tokenPath(currentToken);
+                    std::string prefix = tokenPath.filename().string();
+                    if (bestMatch.length() > prefix.length() && 
+                        AutoSuggest::findCommonPrefix({bestMatch.substr(0, prefix.length()), prefix}).length() == prefix.length()) {
+                        suggestionSuffix = bestMatch.substr(prefix.length());
+                    }
+                }
+            } else {
+                // For commands, show remaining characters
+                if (bestMatch.length() > input.length() && 
+                    bestMatch.substr(0, input.length()) == input) {
+                    suggestionSuffix = bestMatch.substr(input.length());
+                }
+            }
+        }
+        
+        if (!suggestionSuffix.empty()) {
+            // Display suggestion in dark gray (faint)
+            SetConsoleTextAttribute(hConsole, FOREGROUND_INTENSITY);
+            std::cout << suggestionSuffix;
+            SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
+            std::cout.flush();
+        }
+        
         // Position cursor at the correct location (accounting for wrapping)
         int totalCursorPos = promptLen + cursorPos;
         COORD cursorCoord;
@@ -364,6 +413,46 @@ private:
                 if (cursorPos < (int)input.length()) {
                     cursorPos++;
                     renderInputWithHighlight(input, cursorPos, promptStartRow);
+                } else {
+                    // At end of input - accept inline suggestion if available
+                    auto result = AutoSuggest::getSuggestions(input, cursorPos, currentDir);
+                    if (!result.suggestions.empty()) {
+                        std::string bestMatch = result.suggestions[0];
+                        std::string suggestionSuffix;
+                        
+                        if (result.isPath) {
+                            // For paths, get the completion part
+                            std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
+                            fs::path tokenPath(currentToken);
+                            std::string prefix = tokenPath.filename().string();
+                            std::string lowerPrefix = prefix;
+                            std::string lowerBest = bestMatch;
+                            std::transform(lowerPrefix.begin(), lowerPrefix.end(), lowerPrefix.begin(), ::tolower);
+                            std::transform(lowerBest.begin(), lowerBest.end(), lowerBest.begin(), ::tolower);
+                            
+                            if (bestMatch.length() > prefix.length() && 
+                                lowerBest.substr(0, prefix.length()) == lowerPrefix) {
+                                suggestionSuffix = bestMatch.substr(prefix.length());
+                            }
+                        } else {
+                            // For commands
+                            std::string lowerInput = input;
+                            std::string lowerBest = bestMatch;
+                            std::transform(lowerInput.begin(), lowerInput.end(), lowerInput.begin(), ::tolower);
+                            std::transform(lowerBest.begin(), lowerBest.end(), lowerBest.begin(), ::tolower);
+                            
+                            if (bestMatch.length() > input.length() && 
+                                lowerBest.substr(0, input.length()) == lowerInput) {
+                                suggestionSuffix = bestMatch.substr(input.length());
+                            }
+                        }
+                        
+                        if (!suggestionSuffix.empty()) {
+                            input += suggestionSuffix;
+                            cursorPos = (int)input.length();
+                            renderInputWithHighlight(input, cursorPos, promptStartRow);
+                        }
+                    }
                 }
             } else if (vk == VK_UP) {
                 // History up
@@ -398,6 +487,92 @@ private:
                 input.clear();
                 cursorPos = 0;
                 break;
+            } else if (vk == VK_TAB) {
+                // Tab - auto-complete
+                auto result = AutoSuggest::getSuggestions(input, cursorPos, currentDir);
+                
+                if (!result.suggestions.empty()) {
+                    if (result.suggestions.size() == 1) {
+                        // Single match - complete it
+                        std::string completion = result.suggestions[0];
+                        if (result.isPath) {
+                            // Replace from replaceStart to cursorPos
+                            std::string before = input.substr(0, result.replaceStart);
+                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
+                            
+                            // Get parent path if any
+                            std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
+                            fs::path tokenPath(currentToken);
+                            std::string parentPart;
+                            if (!currentToken.empty() && currentToken.back() != '/' && currentToken.back() != '\\') {
+                                fs::path parent = tokenPath.parent_path();
+                                if (!parent.empty()) {
+                                    parentPart = parent.string();
+                                    if (parentPart.back() != '/' && parentPart.back() != '\\') {
+                                        parentPart += "/";
+                                    }
+                                }
+                            } else {
+                                parentPart = currentToken;
+                            }
+                            
+                            input = before + parentPart + completion + after;
+                            cursorPos = (int)(before.length() + parentPart.length() + completion.length());
+                        } else {
+                            // Command completion
+                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
+                            input = completion + " " + after;
+                            cursorPos = (int)completion.length() + 1;
+                        }
+                        renderInputWithHighlight(input, cursorPos, promptStartRow);
+                    } else {
+                        // Multiple matches - show them and complete to common prefix
+                        std::cout << std::endl;
+                        
+                        // Display suggestions in columns
+                        CONSOLE_SCREEN_BUFFER_INFO csbiTab;
+                        GetConsoleScreenBufferInfo(hConsole, &csbiTab);
+                        int termWidth = csbiTab.dwSize.X;
+                        
+                        size_t maxLen = 0;
+                        for (const auto& s : result.suggestions) {
+                            if (s.length() > maxLen) maxLen = s.length();
+                        }
+                        int colWidth = (int)maxLen + 2;
+                        int numCols = std::max(1, termWidth / colWidth);
+                        
+                        int col = 0;
+                        for (const auto& s : result.suggestions) {
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                            std::cout << s;
+                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                            
+                            col++;
+                            if (col >= numCols) {
+                                std::cout << std::endl;
+                                col = 0;
+                            } else {
+                                int padding = colWidth - (int)s.length();
+                                for (int p = 0; p < padding; p++) std::cout << ' ';
+                            }
+                        }
+                        if (col != 0) std::cout << std::endl;
+                        
+                        // Complete to common prefix
+                        if (!result.completionText.empty() && result.completionText.length() > result.replaceLength) {
+                            std::string before = input.substr(0, result.replaceStart);
+                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
+                            input = before + result.completionText + after;
+                            cursorPos = (int)(before.length() + result.completionText.length());
+                        }
+                        
+                        // Get new start row and re-render
+                        GetConsoleScreenBufferInfo(hConsole, &csbiTab);
+                        promptStartRow = csbiTab.dwCursorPosition.Y;
+                        printPrompt();
+                        renderInputWithHighlight(input, cursorPos, promptStartRow);
+                    }
+                }
             } else if (ch >= 32 && ch < 127) {
                 // Printable character
                 input.insert(cursorPos, 1, ch);
@@ -6890,7 +7065,12 @@ private:
             if (interpreterName == "default" || interpreterName == "lish" || 
                 interpreterName == "bash" || interpreterName == "sh") {
                 // Use the internal interpreter directly - run the script!
-                runScript(fullPath);
+                // Pass args (excluding script name) to the script
+                std::vector<std::string> scriptArgs;
+                for (size_t i = 1; i < args.size(); i++) {
+                    scriptArgs.push_back(args[i]);
+                }
+                runScript(fullPath, scriptArgs);
                 return;
             }
             
@@ -7378,7 +7558,125 @@ public:
         size_t writePos = processedInput.find(">");
         size_t pipePos = findSinglePipe(processedInput);
         
-        // Handle output redirection
+        // Handle PIPE + REDIRECTION together (e.g., ls | grep ".txt" > log.txt)
+        // Check if we have both a pipe AND output redirection
+        if (pipePos != std::string::npos && 
+            (appendPos != std::string::npos || writePos != std::string::npos)) {
+            
+            // Find the last pipe position
+            size_t lastPipePos = pipePos;
+            size_t tempPos = pipePos;
+            while ((tempPos = findSinglePipe(processedInput, tempPos + 1)) != std::string::npos) {
+                lastPipePos = tempPos;
+            }
+            
+            // Determine redirect position (prefer >> over > if >> comes first)
+            bool append = (appendPos != std::string::npos && 
+                          (writePos == std::string::npos || appendPos < writePos));
+            size_t redirectPos = append ? appendPos : writePos;
+            
+            // Only handle here if redirection comes AFTER the last pipe
+            if (redirectPos != std::string::npos && redirectPos > lastPipePos) {
+                size_t skip = append ? 2 : 1;
+                
+                // Extract pipeline (before >) and output file (after >)
+                std::string pipelinePart = processedInput.substr(0, redirectPos);
+                std::string filePart = processedInput.substr(redirectPos + skip);
+                
+                // Trim
+                pipelinePart.erase(pipelinePart.find_last_not_of(" \t") + 1);
+                filePart.erase(0, filePart.find_first_not_of(" \t"));
+                filePart.erase(filePart.find_last_not_of(" \t") + 1);
+                
+                if (filePart.empty()) {
+                    printError("Syntax error: missing filename after redirect");
+                    return true;
+                }
+                
+                std::string outputFile = resolvePath(filePart);
+                
+                // Execute the pipeline and capture output
+                std::vector<std::string> commands;
+                std::string remaining = pipelinePart;
+                size_t pPos;
+                
+                while ((pPos = findSinglePipe(remaining)) != std::string::npos) {
+                    std::string cmd = remaining.substr(0, pPos);
+                    cmd.erase(0, cmd.find_first_not_of(" \t"));
+                    cmd.erase(cmd.find_last_not_of(" \t") + 1);
+                    commands.push_back(cmd);
+                    remaining = remaining.substr(pPos + 1);
+                }
+                remaining.erase(0, remaining.find_first_not_of(" \t"));
+                remaining.erase(remaining.find_last_not_of(" \t") + 1);
+                commands.push_back(remaining);
+                
+                // Execute pipeline
+                std::string pipedOutput;
+                
+                for (size_t i = 0; i < commands.size(); ++i) {
+                    std::vector<std::string> tokens = tokenize(commands[i]);
+                    if (tokens.empty()) continue;
+                    
+                    std::string& cmd = tokens[0];
+                    
+                    if (i == 0) {
+                        std::string cmdToRun = commands[i];
+                        if (cmd == "ls" || cmd == "dir") {
+                            if (cmdToRun.find("-1") == std::string::npos && cmdToRun.find(" -l") == std::string::npos) {
+                                cmdToRun = cmd + " -1";
+                                for (size_t j = 1; j < tokens.size(); j++) {
+                                    cmdToRun += " " + tokens[j];
+                                }
+                            }
+                        }
+                        pipedOutput = executeAndCapture(cmdToRun);
+                    } else {
+                        std::ostringstream capturedOutput;
+                        std::streambuf* oldCout = std::cout.rdbuf();
+                        std::cout.rdbuf(capturedOutput.rdbuf());
+                        
+                        if (cmd == "grep") cmdGrep(tokens, pipedOutput);
+                        else if (cmd == "head") cmdHead(tokens, pipedOutput);
+                        else if (cmd == "tail") cmdTail(tokens, pipedOutput);
+                        else if (cmd == "wc") cmdWc(tokens, pipedOutput);
+                        else if (cmd == "sort") cmdSort(tokens, pipedOutput);
+                        else if (cmd == "uniq") cmdUniq(tokens, pipedOutput);
+                        else if (cmd == "cut") cmdCut(tokens, pipedOutput);
+                        else if (cmd == "tr") cmdTr(tokens, pipedOutput);
+                        else if (cmd == "sed") cmdSed(tokens, pipedOutput);
+                        else if (cmd == "awk") cmdAwk(tokens, pipedOutput);
+                        else if (cmd == "tee") cmdTee(tokens, pipedOutput);
+                        else if (cmd == "xargs") cmdXargs(tokens, pipedOutput);
+                        else if (cmd == "rev") cmdRev(tokens, pipedOutput);
+                        else std::cout << pipedOutput;
+                        
+                        std::cout.rdbuf(oldCout);
+                        pipedOutput = capturedOutput.str();
+                    }
+                }
+                
+                // Write pipeline output to file
+                std::ofstream file;
+                if (append) {
+                    file.open(outputFile, std::ios::app);
+                } else {
+                    file.open(outputFile, std::ios::out);
+                }
+                
+                if (!file) {
+                    printError("Cannot open file: " + filePart);
+                    return true;
+                }
+                
+                file << pipedOutput;
+                file.close();
+                
+                return true;
+            }
+        }
+        
+        // Handle output redirection (simple case without pipes before it)
         if (appendPos != std::string::npos || (writePos != std::string::npos && (appendPos == std::string::npos || writePos < appendPos))) {
             bool append = (appendPos != std::string::npos && (writePos == std::string::npos || appendPos <= writePos));
             size_t pos = append ? appendPos : writePos;
@@ -7434,6 +7732,7 @@ public:
             
             return true;
         }
+
         
         // Handle pipes
         if (pipePos != std::string::npos) {
@@ -7849,6 +8148,17 @@ public:
             // Check for redirection or pipes first
             if (handleRedirection(input)) {
                 continue;  // Redirection handled the command
+            }
+
+            // Fish-like auto-cd: if input is a path to a directory, auto-navigate
+            if (AutoNav::isNavigablePath(input, currentDir)) {
+                std::string targetDir = AutoNav::getResolvedDirectory(input, currentDir);
+                try {
+                    if (fs::exists(targetDir) && fs::is_directory(targetDir)) {
+                        currentDir = fs::canonical(targetDir).string();
+                        continue;
+                    }
+                } catch (...) {}
             }
 
             std::vector<std::string> tokens = tokenize(input);
