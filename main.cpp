@@ -34,6 +34,7 @@
 #include "cmds-src/interpreter.hpp"
 #include "cmds-src/auto-suggest.hpp"
 #include "cmds-src/auto-nav.hpp"
+#include "cmds-src/arith.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -1621,11 +1622,21 @@ private:
             if (end >= text.length()) break;
             
             if (text[end] == '(') {
-                size_t close = text.find(')', end + 1);
-                if (close != std::string::npos) {
+                // Find matching closing paren (handle nested parens)
+                int parenDepth = 1;
+                size_t close = end + 1;
+                while (close < text.length() && parenDepth > 0) {
+                    if (text[close] == '(') parenDepth++;
+                    else if (text[close] == ')') parenDepth--;
+                    close++;
+                }
+                close--;  // Point to the actual closing paren
+                
+                if (close < text.length()) {
                     std::string inner = text.substr(end + 1, close - end - 1);
                     std::string value;
                     
+                    // Check if this is array access $(arr[idx])
                     size_t bracket = inner.find('[');
                     if (bracket != std::string::npos && inner.back() == ']') {
                         std::string arrName = inner.substr(0, bracket);
@@ -1639,7 +1650,11 @@ private:
                                 }
                             } catch (...) {}
                         }
-                    } else {
+                    } 
+                    // Check if this is a simple variable $(VAR) - no spaces, known as variable
+                    else if (inner.find(' ') == std::string::npos && 
+                             inner.find('\t') == std::string::npos) {
+                        // First try as variable
                         auto it = sessionEnv.find(inner);
                         if (it != sessionEnv.end()) {
                             value = it->second;
@@ -1647,7 +1662,50 @@ private:
                             char* envVal = nullptr;
                             size_t len;
                             _dupenv_s(&envVal, &len, inner.c_str());
-                            if (envVal) { value = envVal; free(envVal); }
+                            if (envVal) { 
+                                value = envVal; 
+                                free(envVal); 
+                            } else {
+                                // Try as arithmetic expression first
+                                if (Arith::isArithmeticExpression(inner)) {
+                                    try {
+                                        value = Arith::evaluate(inner);
+                                    } catch (...) {
+                                        // Not valid arithmetic - treat as command substitution
+                                        value = executeAndCapture(inner);
+                                        while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+                                            value.pop_back();
+                                        }
+                                    }
+                                } else {
+                                    // Not a known variable - treat as command substitution
+                                    value = executeAndCapture(inner);
+                                    // Trim trailing newlines from command output
+                                    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+                                        value.pop_back();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Contains spaces - check for arithmetic first, then command substitution
+                    else {
+                        // Try as arithmetic expression first
+                        if (Arith::isArithmeticExpression(inner)) {
+                            try {
+                                value = Arith::evaluate(inner);
+                            } catch (...) {
+                                value = executeAndCapture(inner);
+                                while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+                                    value.pop_back();
+                                }
+                            }
+                        } else {
+                            value = executeAndCapture(inner);
+                            // Trim trailing newlines from command output
+                            while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+                                value.pop_back();
+                            }
                         }
                     }
                     text = text.substr(0, pos) + value + text.substr(close + 1);
@@ -6438,6 +6496,20 @@ private:
         std::vector<std::string> expandedTokens = expandTokens(tokens);
         const std::string& cmd = expandedTokens[0];
         lastExitCode = 0;
+
+        std::string fullInput;
+        for (size_t i = 0; i < expandedTokens.size(); i++) {
+            if (i > 0) fullInput += " ";
+            fullInput += expandedTokens[i];
+        }
+        if (Arith::isArithmeticExpression(fullInput)) {
+            try {
+                std::string result = Arith::evaluate(fullInput);
+                std::cout << result << std::endl;
+                return;
+            } catch (const std::exception& e) {
+            }
+        }
 
         try {
         if (cmd == "pwd") {

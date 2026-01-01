@@ -1969,3 +1969,24 @@ git remote -v
 git push turtle master
 git status
 git add -A
+git commit -m "Removed Nodes"
+git push turtle master
+funux
+clear
+help
+basename "C:\Users\patri"
+pwd | basename
+basename "$(pwd)"
+basename "$pwd"
+basename "$(pwd)"
+find
+2 + 2
+2 + 2
+(2 + 2) /2
+echo "$(2+2)"
+echo "$(curl)"
+clear
+echo "$(nexplore)"
+echo "$(2+2)"
+cd "$(2+2)"
+cd "$(dirs[0])"
