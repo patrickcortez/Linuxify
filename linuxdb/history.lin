@@ -1990,3 +1990,75 @@ echo "$(nexplore)"
 echo "$(2+2)"
 cd "$(2+2)"
 cd "$(dirs[0])"
+echo "$(nexplore)"
+echo "$(git)"
+echo "$(echo "$(pwd)")"
+echo "$(unknown)"
+git
+mysql
+clear
+echo "$(mysql)"
+echo "$(popen)"
+ls | grep -n ".txt" > log.txt
+cat log.txt
+nexplore > log.txt
+lvc > log.txt
+echo "$(>)"
+echo "$(;)"
+echo "$(kid)"
+echo "$(cmd)"
+setup
+upset
+source
+cmd
+powershell
+gitbash
+gitb
+gbash
+ubuntu
+wsl
+ls | grep -n ".txt"
+ls | grep -n ".txt" > log.txt
+cat log.txt
+echo hello
+echo "$(echo hello)"
+ping -t google.com | grep -n "time="
+ping google.com | grep -n "time="
+ping -t google.com | grep -n "time="
+ls | grep -n "hello"|| echo "NO hello found"
+ls | grep -n ".txt"|| echo "NO hello found"
+ls | grep -n ".txt" > log.txt|| echo "NO hello found"
+help
+rustc
+cargp
+cargo
+./$(dirs[0])
+./ $(dirs[0])
+cd $(dirs[0])
+./..
+mkdir PPOS
+./PPOS
+git clone https://github.com/torvalds/linux.git
+echo "status" | git
+git "$(echo status)"
+pacman
+clear
+pacman
+clear
+c++
+where g++
+where c++
+C++
+c++
+b++
+g
+g+
+g--
+./..
+./linuxify/
+ls
+./test/
+ls
+c++ comment_policy_test.cpp
+where c++
+cat comment_policy_test.cpp

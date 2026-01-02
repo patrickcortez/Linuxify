@@ -35,6 +35,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Add Linuxify to system PATH"; GroupDescription: "System Integration:"
 Name: "addtoterminal"; Description: "Add Linuxify to Windows Terminal"; GroupDescription: "System Integration:"
 Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"
+Name: "installheader"; Description: "Install linuxify.hpp to system include paths (MinGW/MSVC)"; GroupDescription: "Developer Tools:"
 
 [Files]
 ; Main executables
@@ -56,6 +57,15 @@ Source: "{#SourcePath}\toolchain\*"; DestDir: "{app}\toolchain"; Flags: ignoreve
 
 ; Lino syntax highlighting plugins
 Source: "{#SourcePath}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; Linuxify API header for developers
+Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{app}"; Flags: ignoreversion
+; Install to bundled MinGW include path
+Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{app}\toolchain\compiler\mingw64\include"; Tasks: installheader; Flags: ignoreversion
+; Install to system MinGW if exists
+Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{code:GetMinGWIncludePath}"; Tasks: installheader; Flags: ignoreversion skipifsourcedoesntexist; Check: MinGWExists
+; Install to MSVC include if exists  
+Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{code:GetMSVCIncludePath}"; Tasks: installheader; Flags: ignoreversion skipifsourcedoesntexist; Check: MSVCExists
 
 [Dirs]
 Name: "{app}\cmds"
@@ -115,6 +125,51 @@ begin
     exit;
   end;
   Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+end;
+
+function MinGWExists(): boolean;
+begin
+  Result := DirExists('C:\msys64\mingw64\include') or 
+            DirExists('C:\mingw64\include') or
+            DirExists('C:\MinGW\include');
+end;
+
+function GetMinGWIncludePath(Param: string): string;
+begin
+  if DirExists('C:\msys64\mingw64\include') then
+    Result := 'C:\msys64\mingw64\include'
+  else if DirExists('C:\mingw64\include') then
+    Result := 'C:\mingw64\include'
+  else if DirExists('C:\MinGW\include') then
+    Result := 'C:\MinGW\include'
+  else
+    Result := '';
+end;
+
+function MSVCExists(): boolean;
+var
+  VSPath: string;
+begin
+  Result := False;
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE, 
+    'SOFTWARE\Microsoft\VisualStudio\SxS\VS7', '17.0', VSPath) then
+    Result := True
+  else if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+    'SOFTWARE\Microsoft\VisualStudio\SxS\VS7', '16.0', VSPath) then
+    Result := True;
+end;
+
+function GetMSVCIncludePath(Param: string): string;
+var
+  VSPath: string;
+begin
+  Result := '';
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+    'SOFTWARE\Microsoft\VisualStudio\SxS\VS7', '17.0', VSPath) then
+    Result := VSPath + 'VC\Tools\MSVC\include'
+  else if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+    'SOFTWARE\Microsoft\VisualStudio\SxS\VS7', '16.0', VSPath) then
+    Result := VSPath + 'VC\Tools\MSVC\include';
 end;
 
 procedure AddWindowsTerminalProfile();

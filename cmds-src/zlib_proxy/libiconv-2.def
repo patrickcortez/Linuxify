@@ -1,0 +1,11 @@
+EXPORTS
+_libiconv_version=libiconv_orig._libiconv_version
+iconv_canonicalize=libiconv_orig.iconv_canonicalize
+libiconv=libiconv_orig.libiconv
+libiconv_close=libiconv_orig.libiconv_close
+libiconv_open=libiconv_orig.libiconv_open
+libiconv_open_into=libiconv_orig.libiconv_open_into
+libiconv_set_relocation_prefix=libiconv_orig.libiconv_set_relocation_prefix
+libiconvctl=libiconv_orig.libiconvctl
+libiconvlist=libiconv_orig.libiconvlist
+locale_charset=libiconv_orig.locale_charset
