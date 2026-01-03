@@ -36,6 +36,7 @@
 #include "cmds-src/auto-suggest.hpp"
 #include "cmds-src/auto-nav.hpp"
 #include "cmds-src/arith.hpp"
+#include "cmds-src/wsl_proxy/lxss_kernel.hpp"
 #include "shell_api.hpp"
 
 // Global process manager instance
@@ -6348,6 +6349,8 @@ private:
             std::cout << "  setup admin        Enable sudo command for Windows (requires admin)\n";
             std::cout << "  setup cron         Configure cron daemon (auto-start at boot)\n";
             std::cout << "  setup windux       Add 'Open in Windux' to Explorer right-click menu\n";
+            std::cout << "  setup integrate    Install WSL kernel proxy for extended features\n";
+            std::cout << "  setup defaultshell Make Linuxify the default system shell\n";
             return;
         }
         
@@ -6786,6 +6789,164 @@ private:
                 printError("Some entries failed. Try running as Administrator.");
             }
             
+        } else if (action == "integrate") {
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Installing WSL Kernel Proxy...\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            char exePathBuf[MAX_PATH];
+            GetModuleFileNameA(NULL, exePathBuf, MAX_PATH);
+            fs::path proxyDll = fs::path(exePathBuf).parent_path() / "cmds-src" / "wsl_proxy" / "wslapi.dll";
+            
+            if (!fs::exists(proxyDll)) {
+                printError("Proxy DLL not found. Build it first with:");
+                std::cout << "  cd cmds-src/wsl_proxy\n";
+                std::cout << "  g++ -shared -o wslapi.dll wslapi.cpp wslapi.def -lntdll\n";
+                return;
+            }
+            
+            WCHAR systemPath[MAX_PATH];
+            GetSystemDirectoryW(systemPath, MAX_PATH);
+            fs::path origDll = fs::path(systemPath) / "wslapi.dll";
+            fs::path backupDll = fs::path(systemPath) / "wslapi_orig.dll";
+            
+            std::cout << "[1/3] Checking existing WSL API...\n";
+            if (!fs::exists(origDll)) {
+                printError("wslapi.dll not found in System32. WSL may not be installed.");
+                return;
+            }
+            
+            std::cout << "[2/3] Backing up original DLL...\n";
+            if (!fs::exists(backupDll)) {
+                try {
+                    fs::copy_file(origDll, backupDll);
+                    std::cout << "  Backed up to: " << backupDll.string() << "\n";
+                } catch (const std::exception& e) {
+                    printError(std::string("Failed to backup: ") + e.what());
+                    return;
+                }
+            } else {
+                std::cout << "  Backup already exists\n";
+            }
+            
+            std::cout << "[3/3] Installing proxy DLL...\n";
+            try {
+                fs::copy_file(proxyDll, origDll, fs::copy_options::overwrite_existing);
+                printSuccess("WSL Kernel Proxy installed!");
+                std::cout << "\nRun 'wsltest' to verify kernel access.\n";
+            } catch (const std::exception& e) {
+                printError(std::string("Failed to install: ") + e.what());
+                std::cout << "The file may be in use. Try:\n";
+                std::cout << "  1. Close all WSL/Linux processes\n";
+                std::cout << "  2. Run: wsl --shutdown\n";
+                std::cout << "  3. Try again\n";
+            }
+            
+        } else if (action == "defaultshell") {
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "Setting Linuxify as Default Shell...\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            char exePathBuf[MAX_PATH];
+            GetModuleFileNameA(NULL, exePathBuf, MAX_PATH);
+            std::string linuxifyPath = exePathBuf;
+            
+            bool allSuccess = true;
+            
+            std::cout << "[1/3] Setting ComSpec environment variable...\n";
+            HKEY hEnvKey;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                0, KEY_SET_VALUE, &hEnvKey) == ERROR_SUCCESS) {
+                
+                if (RegSetValueExA(hEnvKey, "ComSpec", 0, REG_SZ,
+                    (const BYTE*)linuxifyPath.c_str(),
+                    (DWORD)(linuxifyPath.length() + 1)) == ERROR_SUCCESS) {
+                    std::cout << "  ComSpec -> " << linuxifyPath << "\n";
+                } else {
+                    printError("Failed to set ComSpec");
+                    allSuccess = false;
+                }
+                RegCloseKey(hEnvKey);
+            } else {
+                printError("Failed to open environment registry");
+                allSuccess = false;
+            }
+            
+            std::cout << "[2/3] Setting as Windows Terminal default...\n";
+            std::string settingsPath = std::string(getenv("LOCALAPPDATA")) + 
+                "\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json";
+            
+            if (fs::exists(settingsPath)) {
+                try {
+                    std::ifstream inFile(settingsPath);
+                    std::string content((std::istreambuf_iterator<char>(inFile)),
+                                        std::istreambuf_iterator<char>());
+                    inFile.close();
+                    
+                    size_t defaultPos = content.find("\"defaultProfile\"");
+                    if (defaultPos != std::string::npos) {
+                        size_t guidStart = content.find("\"", defaultPos + 16);
+                        size_t guidEnd = content.find("\"", guidStart + 1);
+                        if (guidStart != std::string::npos && guidEnd != std::string::npos) {
+                            size_t linuxifyPos = content.find("\"name\": \"Linuxify\"");
+                            if (linuxifyPos != std::string::npos) {
+                                size_t guidSearchStart = linuxifyPos;
+                                while (guidSearchStart > 0 && content[guidSearchStart] != '{') guidSearchStart--;
+                                size_t lgStart = content.rfind("\"guid\":", linuxifyPos);
+                                if (lgStart != std::string::npos) {
+                                    size_t lgGuidStart = content.find("\"", lgStart + 7);
+                                    size_t lgGuidEnd = content.find("\"", lgGuidStart + 1);
+                                    std::string linuxifyGuid = content.substr(lgGuidStart, lgGuidEnd - lgGuidStart + 1);
+                                    content.replace(guidStart, guidEnd - guidStart + 1, linuxifyGuid);
+                                    
+                                    std::ofstream outFile(settingsPath);
+                                    outFile << content;
+                                    outFile.close();
+                                    std::cout << "  Windows Terminal default set to Linuxify\n";
+                                }
+                            } else {
+                                std::cout << "  Linuxify profile not found in Terminal. Run installer first.\n";
+                            }
+                        }
+                    }
+                } catch (...) {
+                    std::cout << "  Could not modify Windows Terminal settings\n";
+                }
+            } else {
+                std::cout << "  Windows Terminal not installed (optional)\n";
+            }
+            
+            std::cout << "[3/3] Setting 'Open command window here' to Linuxify...\n";
+            HKEY hKey;
+            std::string cmdPath = "\"" + linuxifyPath + "\"";
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, 
+                "Directory\\Background\\shell\\cmd\\command", 0, NULL, 0,
+                KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                RegSetValueExA(hKey, NULL, 0, REG_SZ, 
+                    (const BYTE*)cmdPath.c_str(), (DWORD)(cmdPath.length() + 1));
+                RegCloseKey(hKey);
+                std::cout << "  Explorer 'Open command window here' -> Linuxify\n";
+            }
+            
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, 
+                "Directory\\shell\\cmd\\command", 0, NULL, 0,
+                KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                std::string cmdWithDir = cmdPath;
+                RegSetValueExA(hKey, NULL, 0, REG_SZ, 
+                    (const BYTE*)cmdWithDir.c_str(), (DWORD)(cmdWithDir.length() + 1));
+                RegCloseKey(hKey);
+            }
+            
+            std::cout << "\n";
+            if (allSuccess) {
+                printSuccess("Linuxify is now the default shell!");
+                std::cout << "Changes take effect after:\n";
+                std::cout << "  - Log out and back in, OR\n";
+                std::cout << "  - Restart Explorer (taskkill /f /im explorer.exe && explorer)\n";
+                std::cout << "\nTo revert: set ComSpec back to C:\\Windows\\system32\\cmd.exe\n";
+            }
+            
         } else {
             printError("Unknown setup action: " + action);
         }
@@ -6851,6 +7012,68 @@ private:
             cmdLin(expandedTokens);
         } else if (cmd == "setup") {
             cmdSetup(expandedTokens);
+        } else if (cmd == "wsltest") {
+            HANDLE hCon = GetStdHandle(STD_OUTPUT_HANDLE);
+            SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "WSL Kernel Access Test\n";
+            SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            std::cout << std::string(40, '=') << "\n\n";
+            
+            std::cout << "[1] Proxy Status: ";
+            if (LxssKernel::IsWslProxyInstalled()) {
+                std::string ver = LxssKernel::GetProxyVersion();
+                SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "ACTIVE";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                if (!ver.empty()) std::cout << " (v" << ver << ")";
+                std::cout << "\n";
+            } else {
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                std::cout << "NOT INSTALLED";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << " - Run 'setup integrate'\n";
+            }
+            
+            std::cout << "[2] LXSS Driver: ";
+            if (LxssKernel::IsLxcoreDriverLoaded()) {
+                SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "LOADED\n";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            } else {
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                std::cout << "NOT FOUND\n";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            }
+            
+            std::cout << "[3] Kernel Device: ";
+            LxssKernel::LxssDevice device;
+            if (device.Open()) {
+                SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                std::cout << "OPEN";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << " (\\Device\\lxss)\n";
+                
+                std::cout << "[4] Subsystem Query: ";
+                LxssKernel::SubsystemInfo info = device.QuerySubsystem();
+                if (info.available) {
+                    SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                    std::cout << "SUCCESS\n";
+                    SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                } else {
+                    SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+                    std::cout << "IOCTL FAILED";
+                    SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                    std::cout << " (Error: " << device.GetLastError() << ")\n";
+                }
+            } else {
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_INTENSITY);
+                std::cout << "FAILED";
+                SetConsoleTextAttribute(hCon, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                std::cout << " (Error: " << device.GetLastError() << ")\n";
+                std::cout << "  Note: WSL must be installed and enabled\n";
+            }
+            
+            std::cout << "\n";
         } else if (cmd == "registry") {
             // Registry management commands
             if (expandedTokens.size() > 1 && expandedTokens[1] == "refresh") {

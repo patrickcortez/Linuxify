@@ -35,6 +35,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Add Linuxify to system PATH"; GroupDescription: "System Integration:"
 Name: "addtoterminal"; Description: "Add Linuxify to Windows Terminal"; GroupDescription: "System Integration:"
 Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"
+Name: "installwslproxy"; Description: "Install WSL Kernel Proxy (enables extended kernel access)"; GroupDescription: "System Integration:"
+Name: "defaultshell"; Description: "Set Linuxify as default system shell (replaces CMD)"; GroupDescription: "System Integration:"; Flags: unchecked
 Name: "installheader"; Description: "Install linuxify.hpp to system include paths (MinGW/MSVC)"; GroupDescription: "Developer Tools:"
 
 [Files]
@@ -67,6 +69,12 @@ Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{code:GetMinGWIncludePath}"; Tas
 ; Install to MSVC include if exists  
 Source: "{#SourcePath}\linuxify.hpp"; DestDir: "{code:GetMSVCIncludePath}"; Tasks: installheader; Flags: ignoreversion skipifsourcedoesntexist; Check: MSVCExists
 
+; WSL Proxy DLL and sources (stored with app, installed to System32 via code)
+Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.dll"; DestDir: "{app}\wsl_proxy"; Tasks: installwslproxy; Flags: ignoreversion
+Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.cpp"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
+Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.def"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
+Source: "{#SourcePath}\cmds-src\wsl_proxy\lxss_kernel.hpp"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
+
 [Dirs]
 Name: "{app}\cmds"
 Name: "{app}\linuxdb"
@@ -91,6 +99,12 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 
 ; Register crond to run at SYSTEM boot (not just user login)
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LinuxifyCrond"; ValueData: """{app}\cmds\crond.exe"""; Tasks: installcron; Flags: uninsdeletevalue
+
+; Set Linuxify as default system shell (ComSpec)
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: string; ValueName: "ComSpec"; ValueData: "{app}\linuxify.exe"; Tasks: defaultshell
+; Replace "Open command window here" with Linuxify
+Root: HKCR; Subkey: "Directory\Background\shell\cmd\command"; ValueType: string; ValueName: ""; ValueData: """{app}\linuxify.exe"""; Tasks: defaultshell
+Root: HKCR; Subkey: "Directory\shell\cmd\command"; ValueType: string; ValueName: ""; ValueData: """{app}\linuxify.exe"""; Tasks: defaultshell
 
 ; Open in Windux Context Menu (Directory Background - right-click in folder empty space)
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Windux"; ValueType: string; ValueName: ""; ValueData: "Open in Windux"; Flags: uninsdeletekey
@@ -214,11 +228,38 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ProxyDll, OrigDll, BackupDll: string;
+  ErrorCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
     if IsTaskSelected('addtoterminal') then
       AddWindowsTerminalProfile();
+    
+    // Install WSL Kernel Proxy
+    if IsTaskSelected('installwslproxy') then
+    begin
+      ProxyDll := ExpandConstant('{app}\wsl_proxy\wslapi.dll');
+      OrigDll := ExpandConstant('{sys}\wslapi.dll');
+      BackupDll := ExpandConstant('{sys}\wslapi_orig.dll');
+      
+      // Only proceed if original wslapi.dll exists (WSL is installed)
+      if FileExists(OrigDll) then
+      begin
+        // Backup original if not already backed up
+        if not FileExists(BackupDll) then
+        begin
+          FileCopy(OrigDll, BackupDll, False);
+        end;
+        
+        // Try to copy proxy DLL to System32
+        if FileCopy(ProxyDll, OrigDll, False) then
+          Log('WSL Proxy installed successfully')
+        else
+          Log('WSL Proxy installation failed - file may be in use');
+      end;
+    end;
   end;
 end;
 
@@ -249,5 +290,15 @@ begin
     RegDeleteValue(HKEY_LOCAL_MACHINE,
       'Software\Microsoft\Windows\CurrentVersion\Run',
       'LinuxifyCrond');
+    
+    // Restore original wslapi.dll if we installed proxy
+    begin
+      if FileExists(ExpandConstant('{sys}\wslapi_orig.dll')) then
+      begin
+        FileCopy(ExpandConstant('{sys}\wslapi_orig.dll'), 
+                 ExpandConstant('{sys}\wslapi.dll'), False);
+        DeleteFile(ExpandConstant('{sys}\wslapi_orig.dll'));
+      end;
+    end;
   end;
 end;

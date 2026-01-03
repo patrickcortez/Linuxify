@@ -1,0 +1,16 @@
+; Compile: g++ -shared -o wslapi.dll wslapi.cpp wslapi.def -lntdll
+; Install: copy wslapi.dll %SystemRoot%\System32\ (as admin)
+; Original: renamed to wslapi_orig.dll
+
+LIBRARY wslapi
+EXPORTS
+    WslConfigureDistribution=wslapi_orig.WslConfigureDistribution
+    WslGetDistributionConfiguration=wslapi_orig.WslGetDistributionConfiguration
+    WslIsDistributionRegistered=wslapi_orig.WslIsDistributionRegistered
+    WslLaunch=wslapi_orig.WslLaunch
+    WslLaunchInteractive=wslapi_orig.WslLaunchInteractive
+    WslRegisterDistribution=wslapi_orig.WslRegisterDistribution
+    WslUnregisterDistribution=wslapi_orig.WslUnregisterDistribution
+    WslProxyGetVersion
+    WslProxyIsActive
+    LxssKernelQuery
