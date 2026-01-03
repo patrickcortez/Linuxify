@@ -345,8 +345,21 @@ const wchar_t* praiseMsgs[] = {L"Nice Shot!", L"Damn Son", L"Daddy Chill"};
 
 int highScore = 0;
 
+void GetHighScorePath(wchar_t* path) {
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    wchar_t* lastBackSlash = wcsrchr(exePath, L'\\');
+    wchar_t* lastForwardSlash = wcsrchr(exePath, L'/');
+    wchar_t* lastSlash = lastBackSlash;
+    if (lastForwardSlash && (!lastSlash || lastForwardSlash > lastSlash)) lastSlash = lastForwardSlash;
+    if (lastSlash) *lastSlash = L'\0';
+    swprintf(path, MAX_PATH, L"%ls\\highscore.dat", exePath);
+}
+
 void LoadHighScore() {
-    FILE* f = fopen("highscore.dat", "rb");
+    wchar_t path[MAX_PATH];
+    GetHighScorePath(path);
+    FILE* f = _wfopen(path, L"rb");
     if (f) {
         fread(&highScore, sizeof(int), 1, f);
         fclose(f);
@@ -354,7 +367,9 @@ void LoadHighScore() {
 }
 
 void SaveHighScore() {
-    FILE* f = fopen("highscore.dat", "wb");
+    wchar_t path[MAX_PATH];
+    GetHighScorePath(path);
+    FILE* f = _wfopen(path, L"wb");
     if (f) {
         fwrite(&highScore, sizeof(int), 1, f);
         fclose(f);
@@ -1221,7 +1236,7 @@ void ShootBullet() {
     bullets.push_back(b);
     
     isFiring = true;
-    fireTimer = 0.15f;
+    fireTimer = 0.30f;
     
     PlayGunSound();
 }
