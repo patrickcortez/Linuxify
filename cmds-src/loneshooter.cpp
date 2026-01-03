@@ -1,8 +1,9 @@
 /*
- * DoomLike - Open World 2.5D Raycaster
- * Compile: g++ -o spritegame.exe spritegame.cpp -lgdi32 -mwindows -O2
- * Run: ./spritegame.exe
+ * LoneShooter - Open World 2.5D Raycaster
+ * Compile: g++ -o LoneShooter.exe loneshooter.cpp -lgdi32 -mwindows -O2
+ * Run: ./LoneShooter.exe
  * Controls: WASD=Move, Arrows=Look, ESC=Quit
+ * By Patrick Andrew Cortez
  */
 
 #define UNICODE
@@ -75,6 +76,29 @@ bool isReloading = false;
 float reloadTimer = 0;
 float reloadDuration = 3.0f;
 float gunReloadOffset = 0;
+
+int score = 0;
+float scoreTimer = 0;
+wchar_t scoreMsg[64] = L"";
+const wchar_t* praiseMsgs[] = {L"Nice Shot!", L"Damn Son", L"Daddy Chill"};
+
+int highScore = 0;
+
+void LoadHighScore() {
+    FILE* f = fopen("highscore.dat", "rb");
+    if (f) {
+        fread(&highScore, sizeof(int), 1, f);
+        fclose(f);
+    }
+}
+
+void SaveHighScore() {
+    FILE* f = fopen("highscore.dat", "wb");
+    if (f) {
+        fwrite(&highScore, sizeof(int), 1, f);
+        fclose(f);
+    }
+}
 
 HWND hMainWnd;
 DWORD* backBufferPixels = NULL;
@@ -527,6 +551,7 @@ void UpdateEnemies(float deltaTime) {
         if (dist < 1.0f) {
             player.health -= 1;
             if (player.health <= 0) {
+                score = 0;
                 player.health = 100;
                 player.x = 32.0f;
                 player.y = 32.0f;
@@ -613,6 +638,16 @@ void UpdateBullets(float deltaTime) {
             if (sqrtf(dx*dx + dy*dy) < 0.8f) {
                 enemy.active = false;
                 b.active = false;
+                
+                score++;
+                if (score > highScore) {
+                    highScore = score;
+                    SaveHighScore();
+                }
+                scoreTimer = 3.0f;
+                int msgIndex = rand() % 3;
+                wcscpy(scoreMsg, praiseMsgs[msgIndex]);
+                
                 Enemy newEnemy;
                 do {
                     newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
@@ -836,6 +871,31 @@ void RenderGame(HDC hdc) {
     }
     TextOutW(hdc, 10, 50, ammoText, (int)wcslen(ammoText));
     
+    wchar_t scoreText[128];
+    swprintf(scoreText, 128, L"Score: %d  High Score: %d", score, highScore);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    TextOutW(hdc, 10, 90, scoreText, (int)wcslen(scoreText));
+    
+    if (scoreTimer > 0) {
+        HFONT hFont = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        
+        SetTextColor(hdc, RGB(255, 215, 0)); // Gold color
+        SetBkMode(hdc, TRANSPARENT);
+        
+        wchar_t pointText[] = L"+1";
+        SIZE size;
+        GetTextExtentPoint32W(hdc, pointText, 2, &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 - 40, pointText, 2);
+        
+        GetTextExtentPoint32W(hdc, scoreMsg, (int)wcslen(scoreMsg), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 + 10, scoreMsg, (int)wcslen(scoreMsg));
+        
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFont);
+    }
+
+    
     SetTextColor(hdc, RGB(255, 255, 255));
     wchar_t info[128];
     swprintf(info, 128, L"WASD=Move | Arrows=Look | SPACE=Shoot | R=Reload | ESC=Quit");
@@ -856,6 +916,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             float deltaTime = (currentTime - lastTime) / 1000.0f;
             lastTime = currentTime;
             if (deltaTime > 0.1f) deltaTime = 0.1f;
+            
+            if (scoreTimer > 0) scoreTimer -= deltaTime;
+            
             UpdatePlayer(deltaTime);
             UpdateEnemies(deltaTime);
             UpdateClouds(deltaTime);
@@ -899,6 +962,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrevInstance; (void)lpCmdLine;
     
+    LoadHighScore();
     TryLoadAssets();
     GenerateWorld();
     SpawnEnemies();
@@ -910,13 +974,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = L"DoomLikeClass";
+    wc.lpszClassName = L"LoneShooterClass";
     RegisterClassExW(&wc);
     
     RECT windowRect = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
     AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
     
-    hMainWnd = CreateWindowExW(0, L"DoomLikeClass", L"DoomLike - Open World Survival",
+    hMainWnd = CreateWindowExW(0, L"LoneShooterClass", L"LoneShooter - Open World Survival",
         (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX),
         CW_USEDEFAULT, CW_USEDEFAULT, 
         windowRect.right - windowRect.left, windowRect.bottom - windowRect.top,
