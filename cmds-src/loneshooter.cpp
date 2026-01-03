@@ -1361,10 +1361,7 @@ void UpdateEnemies(float deltaTime) {
             }
         }
         
-        int neededShooters = meleeCount / 3;
-        int shootersToSpawn = neededShooters - shooterCount;
-        
-        for (int i = 0; i < shootersToSpawn; i++) {
+        if (shooterCount == 0 && meleeCount >= 3) {
             Enemy shooter;
             do {
                 shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
@@ -1841,6 +1838,17 @@ void DrawMinimap(HDC hdc) {
                 DeleteObject(enemyBrush);
             }
         }
+    }
+    
+    for (int i = 0; i < 6; i++) {
+        int cx = offsetX + (int)(claws[i].x * cellSize);
+        int cy = offsetY + (int)(claws[i].y * cellSize);
+        
+        HBRUSH clawBrush = CreateSolidBrush(RGB(255, 0, 255)); // Bright Magenta
+        oldBrush = (HBRUSH)SelectObject(hdc, clawBrush);
+        Rectangle(hdc, cx - 4, cy - 4, cx + 4, cy + 4);
+        SelectObject(hdc, oldBrush);
+        DeleteObject(clawBrush);
     }
 }
 
