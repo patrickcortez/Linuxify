@@ -1,6 +1,6 @@
 /*
  * LoneShooter - Open World 2.5D Raycaster
- * Compile: g++ -o LoneShooter.exe loneshooter.cpp -lgdi32 -mwindows -O2
+ * Compile: g++ -o cmds/LoneShooter.exe loneshooter.cpp -lgdi32 -lwinmm -mwindows -O2
  * Run: ./LoneShooter.exe
  * Controls: WASD=Move, Arrows=Look, ESC=Quit
  * By Patrick Andrew Cortez
@@ -19,6 +19,8 @@
 #include <mmsystem.h>
 
 volatile bool musicRunning = true;
+extern bool bossActive;
+extern bool preBossPhase;
 HMIDIOUT hMidiOut;
 
 void MidiMsg(DWORD msg) {
@@ -83,10 +85,6 @@ void PlayScoreSound() {
 }
 
 void BackgroundMusic(void* arg) {
-    // Wait for init? Assuming InitAudio called before thread start.
-    
-    // Doom-ish E1M1 Riff Pattern
-    // E2 open string chugging with chromatic logic
     const int E2 = 40;
     const int E3 = 52; 
     const int D3 = 50;
@@ -96,51 +94,81 @@ void BackgroundMusic(void* arg) {
     const int A2 = 45;
 
     while (musicRunning) {
-        // Main Riff: E E E E E E D E E E E E C E E E A# E E B E D# E
-        int riff[] = { E2, E3, E2, D3, E2, C3, E2, AS2, E2, B2, E2 };
-        
-        // Sustained Bass
-        NoteOn(1, E2-12, 100);
+        if (preBossPhase) {
+            // Silence during buildup
+            Sleep(100);
+            continue;
+        }
+        if (bossActive) {
+            // Scary Boss Music: Low drones, dissonant chords, fast tempo
+            SetInstrument(0, 30); // Distortion Guitar
+            SetInstrument(1, 32); // Acoustic Bass
+            
+            // Minor 2nd drone - very unsettling
+            NoteOn(1, 28, 100); // E1 low drone
+            NoteOn(1, 29, 80);  // F1 - dissonant with E
+            
+            for (int i = 0; i < 8 && musicRunning && bossActive; i++) {
+                // Staccato power chords descending chromatically
+                int note = E3 - i;
+                NoteOn(0, note, 120);
+                NoteOn(0, note + 6, 120); // Tritone - devil's interval
+                Sleep(100);
+                NoteOff(0, note);
+                NoteOff(0, note + 6);
+                
+                // Drum hits
+                NoteOn(9, 36, 127); // Kick
+                Sleep(100);
+            }
+            
+            NoteOff(1, 28);
+            NoteOff(1, 29);
+            
+            // Crash and rebuild tension
+            NoteOn(9, 49, 127); // Crash
+            NoteOn(9, 38, 127); // Snare
+            Sleep(200);
+        } else {
+            // Normal Action Music
+            int riff[] = { E2, E3, E2, D3, E2, C3, E2, AS2, E2, B2, E2 };
+            
+            NoteOn(1, E2-12, 100);
 
-        for (int i = 0; i < 11; i++) {
-            if (!musicRunning) break;
-            int note = riff[i];
+            for (int i = 0; i < 11; i++) {
+                if (!musicRunning || bossActive) break;
+                int note = riff[i];
+                
+                NoteOn(0, note, 110);
+                NoteOn(0, note + 7, 110);
+                
+                Sleep(150);
+                
+                NoteOff(0, note);
+                NoteOff(0, note + 7);
+                
+                if (i < 10) {
+                     NoteOn(0, E2, 80);
+                     NoteOn(0, E2+7, 80);
+                     Sleep(150);
+                     NoteOff(0, E2);
+                     NoteOff(0, E2+7);
+                }
+            }
             
-            // Power chord
-            NoteOn(0, note, 110);
-            NoteOn(0, note + 7, 110);
-            
+            NoteOn(9, 38, 127);
+            Sleep(150);
+            NoteOn(9, 38, 127);
+            NoteOn(9, 49, 127);
             Sleep(150);
             
-            // Release main chord but Bass can stay
-            NoteOff(0, note);
-            NoteOff(0, note + 7);
-            
-            // Chugging gap (Fast mute)
-            if (i < 10) {
-                 NoteOn(0, E2, 80);
-                 NoteOn(0, E2+7, 80);
-                 Sleep(150);
-                 NoteOff(0, E2);
-                 NoteOff(0, E2+7);
-            }
+            NoteOff(1, E2-12);
         }
-        
-        // Drum Fill / Loop Turnaround
-        NoteOn(9, 38, 127); // Snare
-        Sleep(150);
-        NoteOn(9, 38, 127); // Snare
-        NoteOn(9, 49, 127); // Crash
-        Sleep(150);
-        
-        // Restart loop immediately (no gap)
-        // Bass continues or re-triggers
-        NoteOff(1, E2-12);
     }
 }
 
-const int SCREEN_WIDTH = 800;
-const int SCREEN_HEIGHT = 600;
+const int SCREEN_WIDTH = 1024;
+const int SCREEN_HEIGHT = 768;
 const int MAP_WIDTH = 64;
 const int MAP_HEIGHT = 64;
 const float PI = 3.14159265f;
@@ -180,12 +208,121 @@ struct Bullet {
     bool active;
 };
 
-Player player = {32.0f, 32.0f, 0.0f, 0.0f, 100};
+// --- 3D Engine Structs (Ported from LoneMaker) ---
+struct Vec3 { float x, y, z; };
+struct Mat4 { float m[4][4]; };
+struct Vertex { Vec3 pos; };
+struct Triangle { int p1, p2, p3; DWORD color; bool selected; };
+struct Object3D {
+    Vec3 pos;
+    Vec3 rot;
+    std::vector<Vertex> verts;
+    std::vector<Triangle> tris;
+};
+
+// --- 3D Math ---
+Vec3 Add(Vec3 a, Vec3 b) { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
+Vec3 Sub(Vec3 a, Vec3 b) { return {a.x-b.x, a.y-b.y, a.z-b.z}; }
+Vec3 Mul(Vec3 v, float s) { return {v.x*s, v.y*s, v.z*s}; }
+float Dot(Vec3 a, Vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+Vec3 Cross(Vec3 a, Vec3 b) { return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
+float Length(Vec3 v) { return sqrtf(Dot(v, v)); }
+Vec3 Normalize(Vec3 v) { float l = Length(v); if(l==0) return {0,0,0}; return Mul(v, 1.0f/l); }
+
+Mat4 MatrixIdentity() {
+    Mat4 mat = {0};
+    mat.m[0][0] = 1; mat.m[1][1] = 1; mat.m[2][2] = 1; mat.m[3][3] = 1;
+    return mat;
+}
+Mat4 MatrixRotationY(float angle) {
+    Mat4 mat = MatrixIdentity();
+    mat.m[0][0] = cosf(angle); mat.m[0][2] = -sinf(angle);
+    mat.m[2][0] = sinf(angle); mat.m[2][2] = cosf(angle);
+    return mat;
+}
+Mat4 MatrixRotationX(float angle) {
+    Mat4 mat = MatrixIdentity();
+    mat.m[1][1] = cosf(angle); mat.m[1][2] = -sinf(angle);
+    mat.m[2][1] = sinf(angle); mat.m[2][2] = cosf(angle);
+    return mat;
+}
+Mat4 MatrixTranslation(float x, float y, float z) {
+    Mat4 mat = MatrixIdentity();
+    mat.m[3][0] = x; mat.m[3][1] = y; mat.m[3][2] = z;
+    return mat;
+}
+Mat4 MatrixPerspective(float fov, float aspect, float znear, float zfar) {
+    Mat4 mat = {0};
+    float tanHalf = tanf(fov / 2.0f);
+    mat.m[0][0] = 1.0f / (aspect * tanHalf);
+    mat.m[1][1] = 1.0f / tanHalf;
+    mat.m[2][2] = zfar / (zfar - znear);
+    mat.m[2][3] = 1.0f;
+    mat.m[3][2] = (-zfar * znear) / (zfar - znear);
+    return mat;
+}
+Mat4 MatrixMultiply(Mat4 a, Mat4 b) {
+    Mat4 c = {0};
+    for(int i=0; i<4; i++) for(int j=0; j<4; j++) for(int k=0; k<4; k++)
+        c.m[i][j] += a.m[i][k] * b.m[k][j];
+    return c;
+}
+Vec3 TransformPoint(Mat4 m, Vec3 i) {
+    Vec3 o;
+    o.x = i.x * m.m[0][0] + i.y * m.m[1][0] + i.z * m.m[2][0] + m.m[3][0];
+    o.y = i.x * m.m[0][1] + i.y * m.m[1][1] + i.z * m.m[2][1] + m.m[3][1];
+    o.z = i.x * m.m[0][2] + i.y * m.m[1][2] + i.z * m.m[2][2] + m.m[3][2];
+    float w = i.x * m.m[0][3] + i.y * m.m[1][3] + i.z * m.m[2][3] + m.m[3][3];
+    if (w != 0.0f) { o.x /= w; o.y /= w; o.z /= w; }
+    return o;
+}
+float EdgeFunc(int x1, int y1, int x2, int y2, int px, int py) {
+    return (float)((px - x1) * (y2 - y1) - (py - y1) * (x2 - x1));
+}
+
+// Spawn Player at (10, 32) facing East (0.0) towards center (32, 32)
+
+struct Fireball {
+    float x, y;
+    float dirX, dirY;
+    float speed;
+    bool active;
+};
+
+struct Medkit {
+    float x, y;
+    bool active;
+    float respawnTimer;
+    static const float RESPAWN_TIME;
+    static const int HEAL_AMOUNT = 20;
+};
+const float Medkit::RESPAWN_TIME = 20.0f;
+
+Player player = {10.0f, 32.0f, 0.0f, 0.0f, 100};
 std::vector<Enemy> enemies;
 std::vector<TreeSprite> trees;
 std::vector<Cloud> clouds;
 std::vector<Bullet> bullets;
+std::vector<Fireball> fireballs;
+Medkit medkit = {0, 0, false, 0};
+
+bool bossActive = false;
+bool preBossPhase = false;
+float preBossTimer = 0;
+float bossEventTimer = 0;
+float fireballSpawnTimer = 0;
+int bossHealth = 20;
+float bossHurtTimer = 0;
+float playerHurtTimer = 0;
+bool bossDead = false;
+bool victoryScreen = false;
+
+std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
+
+// Prototypes
+void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
+void Render3DScene();
 
 float gunSwayX = 0, gunSwayY = 0;
 float gunSwayPhase = 0;
@@ -243,6 +380,18 @@ int gunW = 0, gunH = 0;
 int gunfireW = 0, gunfireH = 0;
 int bulletW = 0, bulletH = 0;
 int healthbarW = 0, healthbarH = 0;
+DWORD* spirePixels = NULL;
+int spireW = 0, spireH = 0;
+DWORD* spireAwakePixels = NULL;
+int spireAwakeW = 0, spireAwakeH = 0;
+DWORD* spireHurtPixels = NULL;
+int spireHurtW = 0, spireHurtH = 0;
+DWORD* spireDeathPixels = NULL;
+int spireDeathW = 0, spireDeathH = 0;
+DWORD* fireballPixels = NULL;
+int fireballW = 0, fireballH = 0;
+DWORD* medkitPixels = NULL;
+int medkitW = 0, medkitH = 0;
 
 bool keys[256] = {false};
 wchar_t loadStatus[256] = L"Loading...";
@@ -313,7 +462,26 @@ void TryLoadAssets() {
         healthbarPixels[i] = LoadBMPPixels(path, &healthbarW, &healthbarH);
     }
     
-    swprintf(loadStatus, 256, L"G:%ls H:%ls", gunPixels ? L"OK" : L"X", healthbarPixels[10] ? L"OK" : L"X");
+    // Load Spire Sprite
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_resting.bmp", exePath);
+    spirePixels = LoadBMPPixels(path, &spireW, &spireH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_awake.bmp", exePath);
+    spireAwakePixels = LoadBMPPixels(path, &spireAwakeW, &spireAwakeH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\Spire_hurt.bmp", exePath);
+    spireHurtPixels = LoadBMPPixels(path, &spireHurtW, &spireHurtH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\Spire_Death.bmp", exePath);
+    spireDeathPixels = LoadBMPPixels(path, &spireDeathW, &spireDeathH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\fireball.bmp", exePath);
+    fireballPixels = LoadBMPPixels(path, &fireballW, &fireballH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\items\\Medkit.bmp", exePath);
+    medkitPixels = LoadBMPPixels(path, &medkitW, &medkitH);
+
+    swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X");
 }
 
 void GenerateWorld() {
@@ -388,6 +556,16 @@ void GenerateWorld() {
     }
 }
 
+void SpawnMedkit() {
+    do {
+        medkit.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+        medkit.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+    } while (worldMap[(int)medkit.x][(int)medkit.y] != 0 || 
+             sqrtf((medkit.x - 32)*(medkit.x - 32) + (medkit.y - 32)*(medkit.y - 32)) < 5.0f);
+    medkit.active = true;
+    medkit.respawnTimer = 0;
+}
+
 void SpawnEnemies() {
     enemies.clear();
     for (int i = 0; i < 3; i++) {
@@ -408,6 +586,23 @@ inline DWORD MakeColor(int r, int g, int b) {
     return (r << 16) | (g << 8) | b;
 }
 
+inline DWORD BlendWithFog(int r, int g, int b, float dist, float fogStart, float fogEnd) {
+    // Fog color (gray-blue for normal, dark red for boss)
+    int fogR = bossActive ? 40 : 80;
+    int fogG = bossActive ? 20 : 85;
+    int fogB = bossActive ? 20 : 90;
+    
+    float fogFactor = (dist - fogStart) / (fogEnd - fogStart);
+    if (fogFactor < 0) fogFactor = 0;
+    if (fogFactor > 1) fogFactor = 1;
+    
+    r = (int)(r * (1 - fogFactor) + fogR * fogFactor);
+    g = (int)(g * (1 - fogFactor) + fogG * fogFactor);
+    b = (int)(b * (1 - fogFactor) + fogB * fogFactor);
+    
+    return MakeColor(r, g, b);
+}
+
 void CastRays() {
     for (int x = 0; x < SCREEN_WIDTH; x++) {
         float rayAngle = (player.angle - FOV / 2.0f) + ((float)x / SCREEN_WIDTH) * FOV;
@@ -419,14 +614,14 @@ void CastRays() {
         int wallType = 0;
         
         float stepSize = 0.02f;
-        while (!hitWall && distanceToWall < 30.0f) {
+        while (!hitWall && distanceToWall < 90.0f) {
             distanceToWall += stepSize;
             int testX = (int)(player.x + rayDirX * distanceToWall);
             int testY = (int)(player.y + rayDirY * distanceToWall);
             
             if (testX < 0 || testX >= MAP_WIDTH || testY < 0 || testY >= MAP_HEIGHT) {
                 hitWall = true;
-                distanceToWall = 30.0f;
+                distanceToWall = 90.0f;
                 wallType = 3;
             } else if (worldMap[testX][testY] > 0) {
                 hitWall = true;
@@ -435,11 +630,6 @@ void CastRays() {
         }
         
         float correctedDist = distanceToWall * cosf(rayAngle - player.angle);
-        if (wallType == 3) {
-            zBuffer[x] = 100.0f;
-        } else {
-            zBuffer[x] = correctedDist;
-        }
         
         int ceiling, floorLine;
         if (wallType == 3) {
@@ -452,24 +642,37 @@ void CastRays() {
         
         for (int y = 0; y < SCREEN_HEIGHT; y++) {
             if (y <= SCREEN_HEIGHT / 2 + (int)player.pitch) {
+                // Sky
                 float skyGradient = (float)y / (SCREEN_HEIGHT / 2);
-                int r = (int)(30 + 80 * (1 - skyGradient));
-                int g = (int)(60 + 120 * (1 - skyGradient));
-                int b = (int)(100 + 155 * (1 - skyGradient));
+                int r, g, b;
+                
+                if (bossActive) {
+                    // Red Sky
+                    r = (int)(150 + 100 * (1 - skyGradient));
+                    g = (int)(20 * (1 - skyGradient));
+                    b = (int)(20 * (1 - skyGradient));
+                } else {
+                    r = (int)(30 + 80 * (1 - skyGradient));
+                    g = (int)(60 + 120 * (1 - skyGradient));
+                    b = (int)(100 + 155 * (1 - skyGradient));
+                }
+                
                 backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
+                zBuffer[y * SCREEN_WIDTH + x] = 1000.0f; // Infinite depth
             }
             
             if (y > SCREEN_HEIGHT / 2 + (int)player.pitch) {
+                // Floor
                 float rowDist = (SCREEN_HEIGHT / 2.0f) / (y - SCREEN_HEIGHT / 2.0f);
                 float floorX = player.x + cosf(rayAngle) * rowDist;
                 float floorY = player.y + sinf(rayAngle) * rowDist;
+                
                 if (grassPixels && grassW > 0) {
                     int texX = (int)(fmodf(floorX, 1.0f) * grassW);
                     int texY = (int)(fmodf(floorY, 1.0f) * grassH);
                     if (texX < 0) texX += grassW;
                     if (texY < 0) texY += grassH;
-                    texX = texX % grassW;
-                    texY = texY % grassH;
+                    texX %= grassW; texY %= grassH;
                     DWORD col = grassPixels[texY * grassW + texX];
                     int bb = (col >> 0) & 0xFF;
                     int gg = (col >> 8) & 0xFF;
@@ -479,15 +682,18 @@ void CastRays() {
                     backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(
                         (int)(rr * shade), (int)(gg * shade), (int)(bb * shade));
                 } else {
-                    float shade = 1.0f - (rowDist / 20.0f);
-                    if (shade < 0.15f) shade = 0.15f;
+                    float shade = 1.0f - (rowDist / 40.0f);
+                    if (shade < 0.1f) shade = 0.1f;
                     int c = (int)(80 * shade);
                     backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(c/2, c, c/2);
                 }
+                
+                zBuffer[y * SCREEN_WIDTH + x] = rowDist;
             }
             
             if (wallType != 3 && y >= ceiling && y <= floorLine) {
-                float shade = 1.0f - (correctedDist / 25.0f);
+                // Wall
+                float shade = 1.0f - (correctedDist / 50.0f);
                 if (shade < 0.1f) shade = 0.1f;
                 int r, g, b;
                 if (wallType == 2) {
@@ -496,12 +702,137 @@ void CastRays() {
                     r = (int)(140 * shade); g = (int)(100 * shade); b = (int)(60 * shade);
                 }
                 backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
+                
+                zBuffer[y * SCREEN_WIDTH + x] = correctedDist;
             }
         }
     }
 }
 
-void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dist) {
+// --- 3D Rasterizer ---
+void RasterizeTri(Vec3 v1, Vec3 v2, Vec3 v3, DWORD color) {
+    int x1 = (int)((v1.x + 1) * 0.5f * SCREEN_WIDTH);
+    int y1 = (int)((1 - v1.y) * 0.5f * SCREEN_HEIGHT);
+    int x2 = (int)((v2.x + 1) * 0.5f * SCREEN_WIDTH);
+    int y2 = (int)((1 - v2.y) * 0.5f * SCREEN_HEIGHT);
+    int x3 = (int)((v3.x + 1) * 0.5f * SCREEN_WIDTH);
+    int y3 = (int)((1 - v3.y) * 0.5f * SCREEN_HEIGHT);
+    
+    int minX = std::max(0, std::min(x1, std::min(x2, x3)));
+    int minY = std::max(0, std::min(y1, std::min(y2, y3)));
+    int maxX = std::min(SCREEN_WIDTH-1, std::max(x1, std::max(x2, x3)));
+    int maxY = std::min(SCREEN_HEIGHT-1, std::max(y1, std::max(y2, y3)));
+    
+    float area = EdgeFunc(x1, y1, x2, y2, x3, y3);
+    if(area == 0) return;
+    
+    for(int y=minY; y<=maxY; y++) {
+        for(int x=minX; x<=maxX; x++) {
+            float w0 = EdgeFunc(x2, y2, x3, y3, x, y);
+            float w1 = EdgeFunc(x3, y3, x1, y1, x, y);
+            float w2 = EdgeFunc(x1, y1, x2, y2, x, y);
+            
+            bool inside = (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0);
+            
+            if(inside) {
+                w0/=area; w1/=area; w2/=area;
+                float z = 1.0f / (w0/v1.z + w1/v2.z + w2/v3.z);
+                
+                // Z-Buffer Check
+                if(z < zBuffer[y * SCREEN_WIDTH + x]) {
+                    zBuffer[y * SCREEN_WIDTH + x] = z;
+                    backBufferPixels[y * SCREEN_WIDTH + x] = color;
+                }
+            }
+        }
+    }
+}
+
+void LoadModelCurrentDir(const wchar_t* filename, float x, float z) {
+    // Helper to find file in current dir or assets
+    FILE* f = _wfopen(filename, L"rb");
+    if(!f) return;
+    
+    int magic, objCount;
+    fread(&magic, 4, 1, f);
+    fread(&objCount, 4, 1, f);
+    for(int i=0; i<objCount; i++) {
+        Object3D obj;
+        fread(&obj.pos, sizeof(Vec3), 1, f);
+        fread(&obj.rot, sizeof(Vec3), 1, f);
+        
+        // Offset & Scale
+        float scale = 5.0f;
+        obj.pos.x = (obj.pos.x * scale) + x;
+        obj.pos.y = (obj.pos.y * scale); // Ground level
+        obj.pos.z = (obj.pos.z * scale) + z;
+        
+        for(auto& v : obj.verts) {
+            v.pos = Mul(v.pos, scale);
+        }
+        
+        int vCount, tCount;
+        fread(&vCount, 4, 1, f);
+        fread(&tCount, 4, 1, f);
+        obj.verts.resize(vCount);
+        obj.tris.resize(tCount);
+        fread(obj.verts.data(), sizeof(Vertex), vCount, f);
+        fread(obj.tris.data(), sizeof(Triangle), tCount, f);
+        scene3D.push_back(obj);
+    }
+    fclose(f);
+}
+
+void Render3DScene() {
+    Vec3 lightDir = Normalize({0.5f, 1.0f, -0.5f});
+    
+    Mat4 matTrans = MatrixTranslation(-player.x, -2.0f, -player.y);
+    
+    Mat4 matRotY = MatrixRotationY(-player.angle + PI/2);
+    Mat4 matRotX = MatrixRotationX(-player.pitch/100.0f);
+    Mat4 matProj = MatrixPerspective(FOV, (float)SCREEN_WIDTH/SCREEN_HEIGHT, 0.1f, 100.0f);
+    
+    Mat4 matView = MatrixMultiply(matRotX, MatrixMultiply(matRotY, matTrans));
+    // Actually MatrixMultiply order: M = R * T
+    
+    for(auto& obj : scene3D) {
+        Mat4 modelMat = MatrixMultiply(MatrixRotationY(obj.rot.y), MatrixTranslation(obj.pos.x, obj.pos.y, obj.pos.z));
+        // We accumulate transformation
+        
+        for(auto& tri : obj.tris) {
+            Vec3 v1 = TransformPoint(modelMat, obj.verts[tri.p1].pos);
+            Vec3 v2 = TransformPoint(modelMat, obj.verts[tri.p2].pos);
+            Vec3 v3 = TransformPoint(modelMat, obj.verts[tri.p3].pos);
+            
+            // Lighting
+            Vec3 normal = Normalize(Cross(Sub(v2,v1), Sub(v3,v1)));
+            float intensity = Dot(normal, lightDir);
+            if(intensity < 0.2f) intensity = 0.2f;
+            
+            // View Points
+            Vec3 tv1 = TransformPoint(matView, v1);
+            Vec3 tv2 = TransformPoint(matView, v2);
+            Vec3 tv3 = TransformPoint(matView, v3);
+            
+            // Clip
+            if(tv1.z < 0.1f || tv2.z < 0.1f || tv3.z < 0.1f) continue;
+            
+            // Project
+            Vec3 p1 = TransformPoint(matProj, tv1);
+            Vec3 p2 = TransformPoint(matProj, tv2);
+            Vec3 p3 = TransformPoint(matProj, tv3);
+            
+            DWORD c = tri.color;
+            int r = (c >> 16) & 0xFF; int g = (c >> 8) & 0xFF; int b = (c) & 0xFF;
+            r*=intensity; g*=intensity; b*=intensity;
+            DWORD litColor = (r<<16)|(g<<8)|b;
+            
+            RasterizeTri(p1, p2, p3, litColor);
+        }
+    }
+}
+
+void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dist, float scale) {
     if (dist < 0.5f || dist > 50.0f) return;
     
     float dx = sx - player.x;
@@ -512,8 +843,10 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
     if (fabsf(spriteAngle) > FOV) return;
     
     float spriteScreenX = (0.5f + spriteAngle / FOV) * SCREEN_WIDTH;
-    float spriteHeight = (SCREEN_HEIGHT / dist);
-    float spriteWidth = spriteHeight;
+    float spriteHeight = (SCREEN_HEIGHT / dist) * scale;
+    float spriteWidth = spriteHeight; // Assumption: square aspect ratio sprites
+    // If spire is tall, maybe aspectRatio adjustment needed? 
+    // For now assuming scale affects both dimensions uniformly.
     
     int floorLineAtDist = SCREEN_HEIGHT / 2 + (int)((SCREEN_HEIGHT / 2.0f) / dist) + (int)player.pitch;
     int drawEndY = floorLineAtDist;
@@ -523,12 +856,14 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
     
     for (int x = drawStartX; x < drawEndX; x++) {
         if (x < 0 || x >= SCREEN_WIDTH) continue;
-        if (dist > zBuffer[x]) continue;
         
         float texX = (float)(x - drawStartX) / spriteWidth;
         
         for (int y = drawStartY; y < drawEndY; y++) {
             if (y < 0 || y >= SCREEN_HEIGHT) continue;
+            
+            // 2D Z-Check
+            if (dist > zBuffer[y * SCREEN_WIDTH + x]) continue;
             
             float texY = (float)(y - drawStartY) / spriteHeight;
             
@@ -553,15 +888,57 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
 }
 
 void RenderSprites() {
-    struct SpriteRender { float x, y, dist; int type; };
+    struct SpriteRender { float x, y, dist; int type; float scale; };
     std::vector<SpriteRender> allSprites;
     
+    // Spire
+    DWORD* sPix;
+    int sW, sH;
+    if (bossDead) {
+        sPix = spireDeathPixels;
+        sW = spireDeathW;
+        sH = spireDeathH;
+    } else if (bossHurtTimer > 0 && bossActive) {
+        sPix = spireHurtPixels;
+        sW = spireHurtW;
+        sH = spireHurtH;
+    } else if (bossActive) {
+        sPix = spireAwakePixels;
+        sW = spireAwakeW;
+        sH = spireAwakeH;
+    } else {
+        sPix = spirePixels;
+        sW = spireW;
+        sH = spireH;
+    }
+    
+    float dx = 32.0f - player.x;
+    float dy = 32.0f - player.y;
+    float dist = sqrtf(dx*dx + dy*dy);
+    allSprites.push_back({32.0f, 32.0f, dist, 2, 8.0f});
+
+    // Fireballs
+    for(auto& fb : fireballs) {
+        if(!fb.active) continue;
+        float fdx = fb.x - player.x;
+        float fdy = fb.y - player.y;
+        float fdist = sqrtf(fdx*fdx + fdy*fdy);
+        allSprites.push_back({fb.x, fb.y, fdist, 3, 2.0f});
+    }
+    
+    if (medkit.active) {
+        float mdx = medkit.x - player.x;
+        float mdy = medkit.y - player.y;
+        float mdist = sqrtf(mdx*mdx + mdy*mdy);
+        allSprites.push_back({medkit.x, medkit.y, mdist, 4, 0.8f});
+    }
+
     for (auto& tree : trees) {
         float dx = tree.x - player.x;
         float dy = tree.y - player.y;
         float dist = sqrtf(dx*dx + dy*dy);
         if (dist < 50.0f) {
-            allSprites.push_back({tree.x, tree.y, dist, 0});
+            allSprites.push_back({tree.x, tree.y, dist, 0, 1.0f});
         }
     }
     
@@ -570,7 +947,7 @@ void RenderSprites() {
             float dx = enemy.x - player.x;
             float dy = enemy.y - player.y;
             float dist = sqrtf(dx*dx + dy*dy);
-            allSprites.push_back({enemy.x, enemy.y, dist, 1});
+            allSprites.push_back({enemy.x, enemy.y, dist, 1, 1.0f});
         }
     }
     
@@ -580,9 +957,15 @@ void RenderSprites() {
     
     for (auto& sp : allSprites) {
         if (sp.type == 0) {
-            RenderSprite(treePixels, treeW, treeH, sp.x, sp.y, sp.dist);
-        } else {
-            RenderSprite(npcPixels, npcW, npcH, sp.x, sp.y, sp.dist);
+            RenderSprite(treePixels, treeW, treeH, sp.x, sp.y, sp.dist, sp.scale);
+        } else if (sp.type == 1) {
+            RenderSprite(npcPixels, npcW, npcH, sp.x, sp.y, sp.dist, sp.scale);
+        } else if (sp.type == 2) {
+            RenderSprite(sPix, sW, sH, sp.x, sp.y, sp.dist, sp.scale);
+        } else if (sp.type == 3) {
+            RenderSprite(fireballPixels, fireballW, fireballH, sp.x, sp.y, sp.dist, sp.scale);
+        } else if (sp.type == 4) {
+            RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale);
         }
     }
 }
@@ -674,10 +1057,16 @@ void UpdateEnemies(float deltaTime) {
         
         if (dist < 1.0f) {
             player.health -= 1;
+            playerHurtTimer = 0.3f;
             if (player.health <= 0) {
+                if (bossActive) {
+                    // Exit game on boss death
+                    PostQuitMessage(0);
+                    return;
+                }
                 score = 0;
                 player.health = 100;
-                player.x = 32.0f;
+                player.x = 10.0f;
                 player.y = 32.0f;
                 SpawnEnemies();
             }
@@ -685,6 +1074,95 @@ void UpdateEnemies(float deltaTime) {
         
         enemy.distance = dist;
     }
+        // Duplicate lines removed
+    
+    // Pre-Boss Phase (10s silence before awakening)
+    if (preBossPhase && !bossActive) {
+        preBossTimer -= deltaTime;
+        if (preBossTimer <= 0) {
+            preBossPhase = false;
+            bossActive = true;
+            bossEventTimer = 3.0f;
+            
+            // Spawn 15 enemies for boss fight
+            for(int i=0; i<15; i++) {
+                Enemy enemy;
+                enemy.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                enemy.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+                if(sqrtf((enemy.x - player.x)*(enemy.x - player.x) + (enemy.y - player.y)*(enemy.y - player.y)) < 10.0f) {
+                    enemy.x = 32; enemy.y = 5;
+                }
+                enemy.active = true;
+                enemy.speed = 1.5f + (rand() % 100) / 100.0f;
+                enemy.distance = 0;
+                enemies.push_back(enemy);
+            }
+        }
+    }
+    
+    // Boss Logic
+    if (bossActive) { 
+        if (bossEventTimer > 0) bossEventTimer -= deltaTime;
+        
+        fireballSpawnTimer -= deltaTime;
+        if (fireballSpawnTimer <= 0) {
+            Fireball fb;
+            fb.x = 32.0f;
+            fb.y = 32.0f;
+            float dx = player.x - 32.0f;
+            float dy = player.y - 32.0f;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if(dist > 0) {
+                fb.dirX = dx/dist;
+                fb.dirY = dy/dist;
+            } else {
+                fb.dirX = 1; fb.dirY = 0;
+            }
+            fb.speed = 5.0f; // Slow, dodgeable
+            fb.active = true;
+            fireballs.push_back(fb);
+            
+            fireballSpawnTimer = 2.0f; // Every 2 seconds
+        }
+    }
+    
+    // Update Fireballs
+    for(auto& fb : fireballs) {
+        if(!fb.active) continue;
+        
+        fb.x += fb.dirX * fb.speed * deltaTime;
+        fb.y += fb.dirY * fb.speed * deltaTime;
+        
+        float dx = player.x - fb.x;
+        float dy = player.y - fb.y;
+        if (sqrtf(dx*dx + dy*dy) < 0.5f) {
+            player.health -= 10;
+            playerHurtTimer = 0.3f;
+            fb.active = false;
+        }
+        
+        if(fb.x < 0 || fb.x > MAP_WIDTH || fb.y < 0 || fb.y > MAP_HEIGHT) fb.active = false;
+    }
+    
+    if (!medkit.active) {
+        medkit.respawnTimer -= deltaTime;
+        if (medkit.respawnTimer <= 0) {
+            SpawnMedkit();
+        }
+    } else {
+        float mdx = player.x - medkit.x;
+        float mdy = player.y - medkit.y;
+        float mdist = sqrtf(mdx*mdx + mdy*mdy);
+        if (mdist < 1.0f) {
+            player.health += Medkit::HEAL_AMOUNT;
+            if (player.health > 100) player.health = 100;
+            medkit.active = false;
+            medkit.respawnTimer = Medkit::RESPAWN_TIME;
+        }
+    }
+    
+    if (bossHurtTimer > 0) bossHurtTimer -= deltaTime;
+    if (playerHurtTimer > 0) playerHurtTimer -= deltaTime;
 }
 
 void UpdateGun(float deltaTime) {
@@ -780,20 +1258,62 @@ void UpdateBullets(float deltaTime) {
                 
                 PlayScoreSound();
                 
+                // Check Score for Boss Trigger
+                if (score >= 20 && !bossActive && !preBossPhase) {
+                    preBossPhase = true;
+                    preBossTimer = 10.0f; // 10 seconds of silence
+                    
+                    // Despawn all enemies
+                    for (auto& e : enemies) e.active = false;
+                    enemies.clear();
+                    
+                    scoreTimer = 0; // Clear score text
+                }
+                
                 scoreTimer = 3.0f;
                 int msgIndex = rand() % 3;
                 wcscpy(scoreMsg, praiseMsgs[msgIndex]);
                 
-                Enemy newEnemy;
-                do {
-                    newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
-                    newEnemy.y = 5.0f + (rand() % 540) / 10.0f;
-                } while (sqrtf((newEnemy.x - player.x)*(newEnemy.x - player.x) + (newEnemy.y - player.y)*(newEnemy.y - player.y)) < 15.0f);
-                newEnemy.active = true;
-                newEnemy.speed = 1.5f + (rand() % 100) / 100.0f;
-                newEnemy.distance = 0;
-                enemies.push_back(newEnemy);
+                // Only spawn replacement enemy if not in pre-boss phase
+                if (!preBossPhase) {
+                    Enemy newEnemy;
+                    do {
+                        newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
+                        newEnemy.y = 5.0f + (rand() % 540) / 10.0f;
+                    } while (sqrtf((newEnemy.x - player.x)*(newEnemy.x - player.x) + (newEnemy.y - player.y)*(newEnemy.y - player.y)) < 15.0f);
+                    newEnemy.active = true;
+                    newEnemy.speed = 1.5f + (rand() % 100) / 100.0f;
+                    newEnemy.distance = 0;
+                    enemies.push_back(newEnemy);
+                }
                 break;
+            }
+        }
+        
+        if (bossActive && bossHealth > 0) {
+            float bdx = b.x - 32.0f;
+            float bdy = b.y - 32.0f;
+            if (sqrtf(bdx*bdx + bdy*bdy) < 2.5f) {
+                bossHealth--;
+                bossHurtTimer = 2.0f;
+                b.active = false;
+                PlayScoreSound();
+                
+                if (bossHealth <= 0) {
+                    bossActive = false;
+                    bossDead = true;
+                    victoryScreen = true;
+                    musicRunning = false;
+                    score += 50;
+                    if (score > highScore) {
+                        highScore = score;
+                        SaveHighScore();
+                    }
+                    
+                    for (auto& e : enemies) e.active = false;
+                    enemies.clear();
+                    fireballs.clear();
+                }
             }
         }
     }
@@ -802,32 +1322,32 @@ void UpdateBullets(float deltaTime) {
 }
 
 void DrawMinimap(HDC hdc) {
-    int mapSize = 150;
-    int cellSize = mapSize / MAP_WIDTH;
-    if (cellSize < 1) cellSize = 1;
-    int offsetX = SCREEN_WIDTH - mapSize - 10;
+    int cellSize = 3;
+    int mapDrawWidth = MAP_WIDTH * cellSize;
+    int mapDrawHeight = MAP_HEIGHT * cellSize;
+    
+    int offsetX = SCREEN_WIDTH - mapDrawWidth - 10;
     int offsetY = 10;
     
     HBRUSH bgBrush = CreateSolidBrush(RGB(20, 20, 20));
-    RECT bgRect = {offsetX - 2, offsetY - 2, offsetX + mapSize + 2, offsetY + mapSize + 2};
+    RECT bgRect = {offsetX - 3, offsetY - 3, offsetX + mapDrawWidth + 3, offsetY + mapDrawHeight + 3};
     FillRect(hdc, &bgRect, bgBrush);
     DeleteObject(bgBrush);
     
-    int viewRange = 20;
-    int startX = (int)player.x - viewRange/2;
-    int startY = (int)player.y - viewRange/2;
-    
-    for (int dy = 0; dy < viewRange; dy++) {
-        for (int dx = 0; dx < viewRange; dx++) {
-            int mx = startX + dx;
-            int my = startY + dy;
-            if (mx >= 0 && mx < MAP_WIDTH && my >= 0 && my < MAP_HEIGHT) {
-                RECT cell = {offsetX + dx * (mapSize/viewRange), offsetY + dy * (mapSize/viewRange),
-                            offsetX + (dx + 1) * (mapSize/viewRange), offsetY + (dy + 1) * (mapSize/viewRange)};
+    for (int y = 0; y < MAP_HEIGHT; y++) {
+        for (int x = 0; x < MAP_WIDTH; x++) {
+            if (worldMap[x][y] > 0) {
+                RECT cell = {
+                    offsetX + x * cellSize, 
+                    offsetY + y * cellSize,
+                    offsetX + (x + 1) * cellSize, 
+                    offsetY + (y + 1) * cellSize
+                };
                 COLORREF color;
-                if (worldMap[mx][my] == 2) color = RGB(0, 80, 0);
-                else if (worldMap[mx][my] == 1) color = RGB(100, 60, 30);
+                if (worldMap[x][y] == 2) color = RGB(0, 80, 0);
+                else if (worldMap[x][y] == 1) color = RGB(100, 60, 30);
                 else color = RGB(40, 60, 30);
+                
                 HBRUSH brush = CreateSolidBrush(color);
                 FillRect(hdc, &cell, brush);
                 DeleteObject(brush);
@@ -835,22 +1355,63 @@ void DrawMinimap(HDC hdc) {
         }
     }
     
-    int playerScreenX = offsetX + mapSize/2;
-    int playerScreenY = offsetY + mapSize/2;
+    int playerScreenX = offsetX + (int)(player.x * cellSize);
+    int playerScreenY = offsetY + (int)(player.y * cellSize);
+    
+    float triSize = 10.0f;
+    POINT tri[3];
+    tri[0].x = playerScreenX + (int)(cosf(player.angle) * triSize);
+    tri[0].y = playerScreenY + (int)(sinf(player.angle) * triSize);
+    tri[1].x = playerScreenX + (int)(cosf(player.angle + 2.4f) * triSize * 0.5f);
+    tri[1].y = playerScreenY + (int)(sinf(player.angle + 2.4f) * triSize * 0.5f);
+    tri[2].x = playerScreenX + (int)(cosf(player.angle - 2.4f) * triSize * 0.5f);
+    tri[2].y = playerScreenY + (int)(sinf(player.angle - 2.4f) * triSize * 0.5f);
+    
+    HPEN greenPen = CreatePen(PS_SOLID, 2, RGB(0, 255, 0));
     HBRUSH playerBrush = CreateSolidBrush(RGB(0, 255, 0));
+    HPEN oldPen = (HPEN)SelectObject(hdc, greenPen);
     HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, playerBrush);
-    Ellipse(hdc, playerScreenX - 3, playerScreenY - 3, playerScreenX + 3, playerScreenY + 3);
+    Polygon(hdc, tri, 3);
+    SelectObject(hdc, oldPen);
     SelectObject(hdc, oldBrush);
+    DeleteObject(greenPen);
     DeleteObject(playerBrush);
+    
+    MoveToEx(hdc, playerScreenX, playerScreenY, NULL);
+    HPEN fovPen = CreatePen(PS_SOLID, 1, RGB(0, 200, 0));
+    SelectObject(hdc, fovPen);
+    int fovLen = 20;
+    LineTo(hdc, playerScreenX + (int)(cosf(player.angle) * fovLen), playerScreenY + (int)(sinf(player.angle) * fovLen));
+    SelectObject(hdc, oldPen);
+    DeleteObject(fovPen);
+    
+    int spireScreenX = offsetX + (int)(32 * cellSize);
+    int spireScreenY = offsetY + (int)(32 * cellSize);
+    HBRUSH spireBrush = CreateSolidBrush(RGB(255, 165, 0));
+    oldBrush = (HBRUSH)SelectObject(hdc, spireBrush);
+    Ellipse(hdc, spireScreenX - 6, spireScreenY - 6, spireScreenX + 6, spireScreenY + 6);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(spireBrush);
+    
+    if (medkit.active) {
+        int medkitScreenX = offsetX + (int)(medkit.x * cellSize);
+        int medkitScreenY = offsetY + (int)(medkit.y * cellSize);
+        HBRUSH medkitBrush = CreateSolidBrush(RGB(0, 150, 255));
+        oldBrush = (HBRUSH)SelectObject(hdc, medkitBrush);
+        Ellipse(hdc, medkitScreenX - 4, medkitScreenY - 4, medkitScreenX + 4, medkitScreenY + 4);
+        SelectObject(hdc, oldBrush);
+        DeleteObject(medkitBrush);
+    }
     
     for (auto& enemy : enemies) {
         if (enemy.active) {
-            int ex = offsetX + (int)((enemy.x - startX) * (mapSize/viewRange));
-            int ey = offsetY + (int)((enemy.y - startY) * (mapSize/viewRange));
-            if (ex > offsetX && ex < offsetX + mapSize && ey > offsetY && ey < offsetY + mapSize) {
+            int ex = offsetX + (int)(enemy.x * cellSize);
+            int ey = offsetY + (int)(enemy.y * cellSize);
+            
+            if (ex >= offsetX && ex < offsetX + mapDrawWidth && ey >= offsetY && ey < offsetY + mapDrawHeight) {
                 HBRUSH enemyBrush = CreateSolidBrush(RGB(255, 0, 0));
                 oldBrush = (HBRUSH)SelectObject(hdc, enemyBrush);
-                Ellipse(hdc, ex - 2, ey - 2, ex + 2, ey + 2);
+                Ellipse(hdc, ex - 3, ey - 3, ex + 3, ey + 3);
                 SelectObject(hdc, oldBrush);
                 DeleteObject(enemyBrush);
             }
@@ -867,14 +1428,20 @@ void UpdatePlayer(float deltaTime) {
     if (keys['W'] || keys[VK_UP]) {
         float newX = player.x + cosf(player.angle) * moveSpeed;
         float newY = player.y + sinf(player.angle) * moveSpeed;
+        if ((newX-32)*(newX-32) + (player.y-32)*(player.y-32) < 4.0f) newX = player.x;
         if (worldMap[(int)newX][(int)player.y] == 0) player.x = newX;
+        
+        if ((player.x-32)*(player.x-32) + (newY-32)*(newY-32) < 4.0f) newY = player.y;
         if (worldMap[(int)player.x][(int)newY] == 0) player.y = newY;
         isMoving = true;
     }
     if (keys['S'] || keys[VK_DOWN]) {
         float newX = player.x - cosf(player.angle) * moveSpeed;
         float newY = player.y - sinf(player.angle) * moveSpeed;
+        if ((newX-32)*(newX-32) + (player.y-32)*(player.y-32) < 4.0f) newX = player.x;
         if (worldMap[(int)newX][(int)player.y] == 0) player.x = newX;
+        
+        if ((player.x-32)*(player.x-32) + (newY-32)*(newY-32) < 4.0f) newY = player.y;
         if (worldMap[(int)player.x][(int)newY] == 0) player.y = newY;
         isMoving = true;
     }
@@ -882,7 +1449,10 @@ void UpdatePlayer(float deltaTime) {
         float strafeAngle = player.angle - PI / 2;
         float newX = player.x + cosf(strafeAngle) * moveSpeed;
         float newY = player.y + sinf(strafeAngle) * moveSpeed;
+        if ((newX-32)*(newX-32) + (player.y-32)*(player.y-32) < 4.0f) newX = player.x;
         if (worldMap[(int)newX][(int)player.y] == 0) player.x = newX;
+        
+        if ((player.x-32)*(player.x-32) + (newY-32)*(newY-32) < 4.0f) newY = player.y;
         if (worldMap[(int)player.x][(int)newY] == 0) player.y = newY;
         isMoving = true;
     }
@@ -890,7 +1460,10 @@ void UpdatePlayer(float deltaTime) {
         float strafeAngle = player.angle + PI / 2;
         float newX = player.x + cosf(strafeAngle) * moveSpeed;
         float newY = player.y + sinf(strafeAngle) * moveSpeed;
+        if ((newX-32)*(newX-32) + (player.y-32)*(player.y-32) < 4.0f) newX = player.x;
         if (worldMap[(int)newX][(int)player.y] == 0) player.x = newX;
+        
+        if ((player.x-32)*(player.x-32) + (newY-32)*(newY-32) < 4.0f) newY = player.y;
         if (worldMap[(int)player.x][(int)newY] == 0) player.y = newY;
         isMoving = true;
     }
@@ -958,9 +1531,27 @@ void RenderGun() {
 
 void RenderGame(HDC hdc) {
     CastRays();
+    // Render3DScene(); // Disabled
     RenderClouds();
     RenderSprites();
     RenderGun();
+    
+    if (playerHurtTimer > 0) {
+        float intensity = playerHurtTimer / 0.3f;
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
+            DWORD col = backBufferPixels[i];
+            int r = (col >> 16) & 0xFF;
+            int g = (col >> 8) & 0xFF;
+            int b = col & 0xFF;
+            r = (int)(r + (255 - r) * intensity * 0.5f);
+            g = (int)(g * (1.0f - intensity * 0.5f));
+            b = (int)(b * (1.0f - intensity * 0.5f));
+            if (r > 255) r = 255;
+            if (g < 0) g = 0;
+            if (b < 0) b = 0;
+            backBufferPixels[i] = MakeColor(r, g, b);
+        }
+    }
     
     int hbIndex = player.health / 10;
     if (hbIndex > 10) hbIndex = 10;
@@ -1041,19 +1632,108 @@ void RenderGame(HDC hdc) {
         SelectObject(hdc, hOldFont);
         DeleteObject(hFont);
     }
+    
+    // Pre-Boss Phase: Shaking "God has awoken" text
+    if (bossActive && bossEventTimer > 0) {
+        HFONT hFont = CreateFontW(60, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        SetTextColor(hdc, RGB(255, 0, 0));
+        SetBkMode(hdc, TRANSPARENT);
+        
+        int shakeX = (rand() % 10) - 5;
+        int shakeY = (rand() % 10) - 5;
+        
+        TextOutW(hdc, SCREEN_WIDTH/2 - 200 + shakeX, SCREEN_HEIGHT/2 - 100 + shakeY, L"God has awoken", 14);
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFont);
+        
+        SetTextColor(hdc, RGB(255, 255, 255));
+    }
 
     
     SetTextColor(hdc, RGB(255, 255, 255));
     wchar_t info[128];
     swprintf(info, 128, L"WASD=Move | Arrows=Look | SPACE=Shoot | R=Reload | ESC=Quit");
     TextOutW(hdc, 10, SCREEN_HEIGHT - 25, info, (int)wcslen(info));
+    
+    if (victoryScreen) {
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
+            DWORD col = backBufferPixels[i];
+            int r = (col >> 16) & 0xFF;
+            int g = (col >> 8) & 0xFF;
+            int b = col & 0xFF;
+            r = (int)(r * 0.3f + 255 * 0.7f);
+            g = (int)(g * 0.3f + 255 * 0.7f);
+            b = (int)(b * 0.3f + 255 * 0.7f);
+            backBufferPixels[i] = MakeColor(r, g, b);
+        }
+        
+        BITMAPINFO bi2 = {};
+        bi2.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi2.bmiHeader.biWidth = SCREEN_WIDTH;
+        bi2.bmiHeader.biHeight = -SCREEN_HEIGHT;
+        bi2.bmiHeader.biPlanes = 1;
+        bi2.bmiHeader.biBitCount = 32;
+        SetDIBitsToDevice(hdc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
+            backBufferPixels, &bi2, DIB_RGB_COLORS);
+        
+        HFONT hBigFont = CreateFontW(72, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hMedFont = CreateFontW(36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hBtnFont = CreateFontW(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        
+        SetBkMode(hdc, TRANSPARENT);
+        
+        HFONT hOldFont = (HFONT)SelectObject(hdc, hBigFont);
+        SetTextColor(hdc, RGB(0, 150, 0));
+        const wchar_t* wonText = L"You Won!";
+        SIZE size;
+        GetTextExtentPoint32W(hdc, wonText, (int)wcslen(wonText), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 150, wonText, (int)wcslen(wonText));
+        
+        SelectObject(hdc, hMedFont);
+        SetTextColor(hdc, RGB(50, 50, 50));
+        wchar_t hsText[128];
+        swprintf(hsText, 128, L"Final Score: %d", score);
+        GetTextExtentPoint32W(hdc, hsText, (int)wcslen(hsText), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 240, hsText, (int)wcslen(hsText));
+        
+        swprintf(hsText, 128, L"High Score: %d", highScore);
+        GetTextExtentPoint32W(hdc, hsText, (int)wcslen(hsText), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 290, hsText, (int)wcslen(hsText));
+        
+        SelectObject(hdc, hBtnFont);
+        
+        RECT playAgainBtn = {SCREEN_WIDTH/2 - 120, 380, SCREEN_WIDTH/2 + 120, 430};
+        RECT exitBtn = {SCREEN_WIDTH/2 - 120, 450, SCREEN_WIDTH/2 + 120, 500};
+        
+        HBRUSH greenBrush = CreateSolidBrush(RGB(0, 180, 0));
+        HBRUSH redBrush = CreateSolidBrush(RGB(180, 0, 0));
+        FillRect(hdc, &playAgainBtn, greenBrush);
+        FillRect(hdc, &exitBtn, redBrush);
+        DeleteObject(greenBrush);
+        DeleteObject(redBrush);
+        
+        SetTextColor(hdc, RGB(255, 255, 255));
+        const wchar_t* playText = L"Play Again";
+        GetTextExtentPoint32W(hdc, playText, (int)wcslen(playText), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 392, playText, (int)wcslen(playText));
+        
+        const wchar_t* exitText = L"Exit";
+        GetTextExtentPoint32W(hdc, exitText, (int)wcslen(exitText), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 462, exitText, (int)wcslen(exitText));
+        
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hBigFont);
+        DeleteObject(hMedFont);
+        DeleteObject(hBtnFont);
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
             backBufferPixels = new DWORD[SCREEN_WIDTH * SCREEN_HEIGHT];
-            zBuffer = new float[SCREEN_WIDTH];
+            zBuffer = new float[SCREEN_WIDTH * SCREEN_HEIGHT];
             SetTimer(hwnd, 1, 16, NULL);
             return 0;
         }
@@ -1082,12 +1762,48 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case WM_KEYDOWN:
+            if (victoryScreen) return 0;
             keys[wParam & 0xFF] = true;
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             return 0;
         case WM_KEYUP:
+            if (victoryScreen) return 0;
             keys[wParam & 0xFF] = false;
             return 0;
+        case WM_LBUTTONDOWN: {
+            if (victoryScreen) {
+                int mx = LOWORD(lParam);
+                int my = HIWORD(lParam);
+                RECT playAgainBtn = {SCREEN_WIDTH/2 - 120, 380, SCREEN_WIDTH/2 + 120, 430};
+                RECT exitBtn = {SCREEN_WIDTH/2 - 120, 450, SCREEN_WIDTH/2 + 120, 500};
+                
+                if (mx >= playAgainBtn.left && mx <= playAgainBtn.right && my >= playAgainBtn.top && my <= playAgainBtn.bottom) {
+                    victoryScreen = false;
+                    bossDead = false;
+                    bossActive = false;
+                    preBossPhase = false;
+                    bossHealth = 20;
+                    score = 0;
+                    player.health = 100;
+                    player.x = 10.0f;
+                    player.y = 32.0f;
+                    player.angle = 0.0f;
+                    ammo = maxAmmo;
+                    enemies.clear();
+                    fireballs.clear();
+                    bullets.clear();
+                    SpawnEnemies();
+                    SpawnMedkit();
+                    musicRunning = true;
+                    _beginthread(BackgroundMusic, 0, NULL);
+                }
+                
+                if (mx >= exitBtn.left && mx <= exitBtn.right && my >= exitBtn.top && my <= exitBtn.bottom) {
+                    PostQuitMessage(0);
+                }
+            }
+            return 0;
+        }
         case WM_DESTROY:
             musicRunning = false;
             CleanupAudio();
@@ -1101,6 +1817,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (gunPixels) delete[] gunPixels;
             if (gunfirePixels) delete[] gunfirePixels;
             if (bulletPixels) delete[] bulletPixels;
+            if (medkitPixels) delete[] medkitPixels;
             for (int i = 0; i < 11; i++) if (healthbarPixels[i]) delete[] healthbarPixels[i];
             PostQuitMessage(0);
             return 0;
@@ -1115,6 +1832,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     TryLoadAssets();
     GenerateWorld();
     SpawnEnemies();
+    SpawnMedkit();
     
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);

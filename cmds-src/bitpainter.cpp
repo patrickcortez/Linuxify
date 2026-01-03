@@ -28,6 +28,7 @@
 #define IDM_TOOL_FILL   2003
 #define IDM_ZOOM_IN     3001
 #define IDM_ZOOM_OUT    3002
+#define IDM_ZOOM_MODE   3003
 #define IDC_CANVAS      4001
 
 #define TRANSPARENT_COLOR 0xFFFFFFFF
@@ -167,6 +168,60 @@ bool isModified = false;
 int paletteHeight = 40;
 int toolbarHeight = 30;
 HWND hMainWnd;
+int scrollX = 0;
+int scrollY = 0;
+bool zoomMode = false;
+
+void UpdateScrollbars() {
+    RECT clientRect;
+    GetClientRect(hMainWnd, &clientRect);
+    int canvasAreaTop = toolbarHeight;
+    int canvasAreaBottom = clientRect.bottom - paletteHeight;
+    int canvasAreaHeight = canvasAreaBottom - canvasAreaTop;
+    int canvasAreaWidth = clientRect.right;
+    int pixelSize = zoomLevel;
+    int canvasWidth = canvas.width * pixelSize;
+    int canvasHeight = canvas.height * pixelSize;
+    SCROLLINFO si = {};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    if (canvasWidth > canvasAreaWidth) {
+        si.nMin = 0;
+        si.nMax = canvasWidth;
+        si.nPage = canvasAreaWidth;
+        if (scrollX > canvasWidth - canvasAreaWidth) scrollX = canvasWidth - canvasAreaWidth;
+        if (scrollX < 0) scrollX = 0;
+        si.nPos = scrollX;
+        SetScrollInfo(hMainWnd, SB_HORZ, &si, TRUE);
+        EnableScrollBar(hMainWnd, SB_HORZ, ESB_ENABLE_BOTH);
+    } else {
+        scrollX = 0;
+        si.nMin = 0;
+        si.nMax = 0;
+        si.nPage = 0;
+        si.nPos = 0;
+        SetScrollInfo(hMainWnd, SB_HORZ, &si, TRUE);
+        EnableScrollBar(hMainWnd, SB_HORZ, ESB_DISABLE_BOTH);
+    }
+    if (canvasHeight > canvasAreaHeight) {
+        si.nMin = 0;
+        si.nMax = canvasHeight;
+        si.nPage = canvasAreaHeight;
+        if (scrollY > canvasHeight - canvasAreaHeight) scrollY = canvasHeight - canvasAreaHeight;
+        if (scrollY < 0) scrollY = 0;
+        si.nPos = scrollY;
+        SetScrollInfo(hMainWnd, SB_VERT, &si, TRUE);
+        EnableScrollBar(hMainWnd, SB_VERT, ESB_ENABLE_BOTH);
+    } else {
+        scrollY = 0;
+        si.nMin = 0;
+        si.nMax = 0;
+        si.nPage = 0;
+        si.nPos = 0;
+        SetScrollInfo(hMainWnd, SB_VERT, &si, TRUE);
+        EnableScrollBar(hMainWnd, SB_VERT, ESB_DISABLE_BOTH);
+    }
+}
 
 void UpdateTitle() {
     wchar_t title[MAX_PATH + 50];
@@ -284,8 +339,12 @@ void DrawCanvas(HDC hdc, RECT& clientRect) {
     int canvasHeight = canvas.height * pixelSize;
     int offsetX = (canvasAreaWidth - canvasWidth) / 2;
     int offsetY = canvasAreaTop + (canvasAreaHeight - canvasHeight) / 2;
-    if (offsetX < 0) offsetX = 0;
-    if (offsetY < canvasAreaTop) offsetY = canvasAreaTop;
+    if (canvasWidth > canvasAreaWidth) {
+        offsetX = -scrollX;
+    }
+    if (canvasHeight > canvasAreaHeight) {
+        offsetY = canvasAreaTop - scrollY;
+    }
     HDC memDC = CreateCompatibleDC(hdc);
     HBITMAP memBitmap = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
     HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
@@ -347,8 +406,12 @@ bool GetCanvasCoords(LPARAM lParam, RECT& clientRect, int& outX, int& outY) {
     int canvasHeight = canvas.height * pixelSize;
     int offsetX = (canvasAreaWidth - canvasWidth) / 2;
     int offsetY = canvasAreaTop + (canvasAreaHeight - canvasHeight) / 2;
-    if (offsetX < 0) offsetX = 0;
-    if (offsetY < canvasAreaTop) offsetY = canvasAreaTop;
+    if (canvasWidth > canvasAreaWidth) {
+        offsetX = -scrollX;
+    }
+    if (canvasHeight > canvasAreaHeight) {
+        offsetY = canvasAreaTop - scrollY;
+    }
     outX = (mx - offsetX) / pixelSize;
     outY = (my - offsetY) / pixelSize;
     return outX >= 0 && outX < canvas.width && outY >= 0 && outY < canvas.height;
@@ -731,6 +794,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             AppendMenuW(hViewMenu, MF_STRING, IDM_GRID, L"Show &Grid\tG");
             AppendMenuW(hViewMenu, MF_STRING, IDM_TRANSPARENT_BG, L"&Transparent Background\tT");
             AppendMenuW(hViewMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hViewMenu, MF_STRING, IDM_ZOOM_MODE, L"&Zoom Mode\tM");
             AppendMenuW(hViewMenu, MF_STRING, IDM_ZOOM_IN, L"Zoom &In\t+");
             AppendMenuW(hViewMenu, MF_STRING, IDM_ZOOM_OUT, L"Zoom &Out\t-");
             HMENU hToolMenu = CreatePopupMenu();
@@ -797,8 +861,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     canvas.setPixel(cx, cy, currentColor);
                     isModified = true;
                 } else if (currentTool == TOOL_ERASER) {
-                    canvas.setPixel(cx, cy, useTransparentBg ? TRANSPARENT_COLOR : RGB(255, 255, 255));
-                    isModified = true;
+                    if (canvas.getPixel(cx, cy) != TRANSPARENT_COLOR) {
+                        canvas.setPixel(cx, cy, useTransparentBg ? TRANSPARENT_COLOR : RGB(255, 255, 255));
+                        isModified = true;
+                    }
                 } else if (currentTool == TOOL_FILL) {
                     canvas.floodFill(cx, cy, currentColor);
                     isModified = true;
@@ -818,8 +884,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         canvas.setPixel(cx, cy, currentColor);
                         isModified = true;
                     } else if (currentTool == TOOL_ERASER) {
-                        canvas.setPixel(cx, cy, useTransparentBg ? TRANSPARENT_COLOR : RGB(255, 255, 255));
-                        isModified = true;
+                        if (canvas.getPixel(cx, cy) != TRANSPARENT_COLOR) {
+                            canvas.setPixel(cx, cy, useTransparentBg ? TRANSPARENT_COLOR : RGB(255, 255, 255));
+                            isModified = true;
+                        }
                     }
                     UpdateTitle();
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -844,9 +912,61 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_MOUSEWHEEL: {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            if (delta > 0 && zoomLevel < 50) zoomLevel += 2;
-            if (delta < 0 && zoomLevel > 2) zoomLevel -= 2;
-            InvalidateRect(hwnd, NULL, TRUE);
+            bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+            if (zoomMode) {
+                if (delta > 0 && zoomLevel < 50) zoomLevel += 2;
+                if (delta < 0 && zoomLevel > 2) zoomLevel -= 2;
+                UpdateScrollbars();
+                InvalidateRect(hwnd, NULL, TRUE);
+            } else if (shift) {
+                int scrollAmount = 30;
+                if (delta > 0) scrollX -= scrollAmount;
+                if (delta < 0) scrollX += scrollAmount;
+                UpdateScrollbars();
+                InvalidateRect(hwnd, NULL, TRUE);
+            } else {
+                int scrollAmount = 30;
+                if (delta > 0) scrollY -= scrollAmount;
+                if (delta < 0) scrollY += scrollAmount;
+                UpdateScrollbars();
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            return 0;
+        }
+        case WM_HSCROLL: {
+            SCROLLINFO si = {};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            GetScrollInfo(hwnd, SB_HORZ, &si);
+            int oldPos = scrollX;
+            switch (LOWORD(wParam)) {
+                case SB_LINELEFT: scrollX -= 10; break;
+                case SB_LINERIGHT: scrollX += 10; break;
+                case SB_PAGELEFT: scrollX -= si.nPage; break;
+                case SB_PAGERIGHT: scrollX += si.nPage; break;
+                case SB_THUMBTRACK: scrollX = si.nTrackPos; break;
+                case SB_THUMBPOSITION: scrollX = si.nTrackPos; break;
+            }
+            UpdateScrollbars();
+            if (scrollX != oldPos) InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        case WM_VSCROLL: {
+            SCROLLINFO si = {};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            GetScrollInfo(hwnd, SB_VERT, &si);
+            int oldPos = scrollY;
+            switch (LOWORD(wParam)) {
+                case SB_LINEUP: scrollY -= 10; break;
+                case SB_LINEDOWN: scrollY += 10; break;
+                case SB_PAGEUP: scrollY -= si.nPage; break;
+                case SB_PAGEDOWN: scrollY += si.nPage; break;
+                case SB_THUMBTRACK: scrollY = si.nTrackPos; break;
+                case SB_THUMBPOSITION: scrollY = si.nTrackPos; break;
+            }
+            UpdateScrollbars();
+            if (scrollY != oldPos) InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         }
         case WM_KEYDOWN: {
@@ -863,6 +983,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) { SendMessage(hwnd, WM_COMMAND, IDM_ZOOM_OUT, 0); return 0; }
             if (wParam == 'G') { SendMessage(hwnd, WM_COMMAND, IDM_GRID, 0); return 0; }
             if (wParam == 'T') { SendMessage(hwnd, WM_COMMAND, IDM_TRANSPARENT_BG, 0); return 0; }
+            if (wParam == 'M') { SendMessage(hwnd, WM_COMMAND, IDM_ZOOM_MODE, 0); return 0; }
             return 0;
         }
         case WM_COMMAND: {
@@ -872,7 +993,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         canvas.clear(useTransparentBg);
                         currentFilePath[0] = 0;
                         isModified = false;
+                        scrollX = 0;
+                        scrollY = 0;
                         UpdateTitle();
+                        UpdateScrollbars();
                         InvalidateRect(hwnd, NULL, TRUE);
                     }
                     break;
@@ -890,7 +1014,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         if (LoadBMP(filename)) {
                             wcscpy(currentFilePath, filename);
                             isModified = false;
+                            scrollX = 0;
+                            scrollY = 0;
                             UpdateTitle();
+                            UpdateScrollbars();
                             InvalidateRect(hwnd, NULL, TRUE);
                         } else {
                             MessageBoxW(hwnd, L"Failed to open file!\nOnly 24-bit BMP files are supported.", L"Error", MB_OK | MB_ICONERROR);
@@ -961,10 +1088,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     CheckMenuItem(GetMenu(hwnd), IDM_TRANSPARENT_BG, useTransparentBg ? MF_CHECKED : MF_UNCHECKED);
                     break;
                 case IDM_ZOOM_IN:
-                    if (zoomLevel < 50) { zoomLevel += 2; InvalidateRect(hwnd, NULL, TRUE); }
+                    if (zoomLevel < 50) { zoomLevel += 2; UpdateScrollbars(); InvalidateRect(hwnd, NULL, TRUE); }
                     break;
                 case IDM_ZOOM_OUT:
-                    if (zoomLevel > 2) { zoomLevel -= 2; InvalidateRect(hwnd, NULL, TRUE); }
+                    if (zoomLevel > 2) { zoomLevel -= 2; UpdateScrollbars(); InvalidateRect(hwnd, NULL, TRUE); }
+                    break;
+                case IDM_ZOOM_MODE:
+                    zoomMode = !zoomMode;
+                    CheckMenuItem(GetMenu(hwnd), IDM_ZOOM_MODE, zoomMode ? MF_CHECKED : MF_UNCHECKED);
                     break;
                 case IDM_TOOL_PENCIL:
                     currentTool = TOOL_PENCIL;
@@ -982,6 +1113,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case WM_SIZE:
+            UpdateScrollbars();
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         case WM_CLOSE:
@@ -1010,7 +1142,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
     RegisterClassExW(&wc);
     hMainWnd = CreateWindowExW(0, L"BitPainterClass", L"BitPainter - Untitled",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         NULL, NULL, hInstance, NULL);
     ShowWindow(hMainWnd, nCmdShow);
     UpdateWindow(hMainWnd);
