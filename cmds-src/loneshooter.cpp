@@ -15,6 +15,129 @@
 #include <ctime>
 #include <vector>
 #include <algorithm>
+#include <process.h>
+#include <mmsystem.h>
+
+volatile bool musicRunning = true;
+HMIDIOUT hMidiOut;
+
+void MidiMsg(DWORD msg) {
+    midiOutShortMsg(hMidiOut, msg);
+}
+
+void NoteOn(int ch, int note, int vel) {
+    MidiMsg(0x90 | ch | (note << 8) | (vel << 16));
+}
+
+void NoteOff(int ch, int note) {
+    MidiMsg(0x80 | ch | (note << 8));
+}
+
+void SetInstrument(int ch, int instr) {
+    MidiMsg(0xC0 | ch | (instr << 8));
+}
+
+void SetVolume(int ch, int vol) {
+    MidiMsg(0xB0 | ch | (7 << 8) | (vol << 16));
+}
+
+void InitAudio() {
+    midiOutOpen(&hMidiOut, MIDI_MAPPER, 0, 0, CALLBACK_NULL);
+    
+    // Mix Volumes
+    SetVolume(0, 85);  // Music Guitar (Lower)
+    SetVolume(1, 100); // Music Bass
+    SetVolume(2, 127); // GUN (Max)
+    SetInstrument(2, 127); // Gunshot
+    SetVolume(3, 127); // Score (Max)
+    SetInstrument(3, 112); // Tinkle Bell (Better than Glock?)
+    SetVolume(9, 127); // Drums (Max)
+    
+    SetInstrument(0, 30); // Distortion Guitar (More sustain)
+    SetInstrument(1, 33); // Fingered Bass
+}
+
+void CleanupAudio() {
+    midiOutReset(hMidiOut);
+    midiOutClose(hMidiOut);
+}
+
+void PlayGunSound() {
+    NoteOn(2, 45, 127); // Low Gunshot
+    NoteOn(9, 36, 127); // Kick
+    NoteOn(9, 57, 127); // Crash Cymbal (Explosive)
+}
+
+void PlayReloadSound(int stage) {
+    if (stage == 0) NoteOn(9, 37, 100); // Side Stick (Click out)
+    if (stage == 1) NoteOn(9, 75, 90);  // Claves (Click in)
+    if (stage == 2) NoteOn(9, 39, 100); // Hand Clap (Slide/Slap)
+}
+
+void PlayStepSound() {
+    NoteOn(9, 42, 40); // Quiet Hi-Hat
+}
+
+void PlayScoreSound() {
+    NoteOn(3, 84, 127); // High Ding
+}
+
+void BackgroundMusic(void* arg) {
+    // Wait for init? Assuming InitAudio called before thread start.
+    
+    // Doom-ish E1M1 Riff Pattern
+    // E2 open string chugging with chromatic logic
+    const int E2 = 40;
+    const int E3 = 52; 
+    const int D3 = 50;
+    const int C3 = 48;
+    const int B2 = 47;
+    const int AS2 = 46;
+    const int A2 = 45;
+
+    while (musicRunning) {
+        // Main Riff: E E E E E E D E E E E E C E E E A# E E B E D# E
+        int riff[] = { E2, E3, E2, D3, E2, C3, E2, AS2, E2, B2, E2 };
+        
+        // Sustained Bass
+        NoteOn(1, E2-12, 100);
+
+        for (int i = 0; i < 11; i++) {
+            if (!musicRunning) break;
+            int note = riff[i];
+            
+            // Power chord
+            NoteOn(0, note, 110);
+            NoteOn(0, note + 7, 110);
+            
+            Sleep(150);
+            
+            // Release main chord but Bass can stay
+            NoteOff(0, note);
+            NoteOff(0, note + 7);
+            
+            // Chugging gap (Fast mute)
+            if (i < 10) {
+                 NoteOn(0, E2, 80);
+                 NoteOn(0, E2+7, 80);
+                 Sleep(150);
+                 NoteOff(0, E2);
+                 NoteOff(0, E2+7);
+            }
+        }
+        
+        // Drum Fill / Loop Turnaround
+        NoteOn(9, 38, 127); // Snare
+        Sleep(150);
+        NoteOn(9, 38, 127); // Snare
+        NoteOn(9, 49, 127); // Crash
+        Sleep(150);
+        
+        // Restart loop immediately (no gap)
+        // Bass continues or re-triggers
+        NoteOff(1, E2-12);
+    }
+}
 
 const int SCREEN_WIDTH = 800;
 const int SCREEN_HEIGHT = 600;
@@ -76,6 +199,7 @@ bool isReloading = false;
 float reloadTimer = 0;
 float reloadDuration = 3.0f;
 float gunReloadOffset = 0;
+int reloadStage = 0;
 
 int score = 0;
 float scoreTimer = 0;
@@ -578,6 +702,12 @@ void UpdateGun(float deltaTime) {
     
     if (isReloading) {
         reloadTimer += deltaTime;
+        
+        // Sound Logic
+        if (reloadTimer > 0.1f && reloadStage == 0) { PlayReloadSound(0); reloadStage++; }
+        if (reloadTimer > 1.4f && reloadStage == 1) { PlayReloadSound(1); reloadStage++; }
+        if (reloadTimer > 2.2f && reloadStage == 2) { PlayReloadSound(2); reloadStage++; }
+        
         if (reloadTimer < reloadDuration / 2) {
             gunReloadOffset = (reloadTimer / (reloadDuration / 2)) * 300;
         } else if (reloadTimer < reloadDuration) {
@@ -595,6 +725,7 @@ void StartReload() {
     if (isReloading || ammo == maxAmmo) return;
     isReloading = true;
     reloadTimer = 0;
+    reloadStage = 0;
 }
 
 void ShootBullet() {
@@ -613,6 +744,8 @@ void ShootBullet() {
     
     isFiring = true;
     fireTimer = 0.15f;
+    
+    PlayGunSound();
 }
 
 void UpdateBullets(float deltaTime) {
@@ -644,6 +777,9 @@ void UpdateBullets(float deltaTime) {
                     highScore = score;
                     SaveHighScore();
                 }
+                
+                PlayScoreSound();
+                
                 scoreTimer = 3.0f;
                 int msgIndex = rand() % 3;
                 wcscpy(scoreMsg, praiseMsgs[msgIndex]);
@@ -763,6 +899,17 @@ void UpdatePlayer(float deltaTime) {
     
     if (keys[VK_SPACE] || keys[VK_LBUTTON]) ShootBullet();
     if (keys['R']) StartReload();
+    
+    static float stepTimer = 0;
+    if (isMoving) {
+        stepTimer -= deltaTime;
+        if (stepTimer <= 0) {
+            PlayStepSound();
+            stepTimer = 0.4f;
+        }
+    } else {
+        stepTimer = 0;
+    }
 }
 
 void RenderGun() {
@@ -942,6 +1089,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             keys[wParam & 0xFF] = false;
             return 0;
         case WM_DESTROY:
+            musicRunning = false;
+            CleanupAudio();
             KillTimer(hwnd, 1);
             delete[] backBufferPixels;
             delete[] zBuffer;
@@ -977,6 +1126,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpszClassName = L"LoneShooterClass";
     RegisterClassExW(&wc);
     
+    InitAudio();
+    
     RECT windowRect = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
     AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
     
@@ -988,6 +1139,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     ShowWindow(hMainWnd, nCmdShow);
     UpdateWindow(hMainWnd);
+    
+    _beginthread(BackgroundMusic, 0, NULL);
     
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
