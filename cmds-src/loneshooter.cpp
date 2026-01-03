@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <vector>
+#include <string>
 #include <algorithm>
 #include <process.h>
 #include <mmsystem.h>
@@ -355,7 +356,7 @@ bool preBossPhase = false;
 float preBossTimer = 0;
 float bossEventTimer = 0;
 float fireballSpawnTimer = 0;
-int bossHealth = 20;
+int bossHealth = 200;
 float bossHurtTimer = 0;
 float playerHurtTimer = 0;
 bool bossDead = false;
@@ -363,6 +364,9 @@ bool victoryScreen = false;
 float screenShakeTimer = 0;
 float screenShakeIntensity = 0;
 float shooterSpawnTimer = 3.0f;
+
+bool consoleActive = false;
+std::wstring consoleBuffer = L"";
 
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
@@ -704,23 +708,6 @@ void SpawnEnemies() {
         enemy.firingTimer = 0;
         enemies.push_back(enemy);
     }
-    
-    Enemy shooter;
-    do {
-        shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
-        shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
-    } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
-             sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
-    shooter.active = true;
-    shooter.speed = 1.2f;
-    shooter.distance = 0;
-    shooter.spriteIndex = 0;
-    shooter.health = 2;
-    shooter.hurtTimer = 0;
-    shooter.isShooter = true;
-    shooter.fireTimer = 2.0f;
-    shooter.firingTimer = 0;
-    enemies.push_back(shooter);
 }
 
 inline DWORD MakeColor(int r, int g, int b) {
@@ -1291,7 +1278,7 @@ void UpdateEnemies(float deltaTime) {
                     if (bossActive) {
                         bossActive = false;
                         preBossPhase = false;
-                        bossHealth = 20;
+                        bossHealth = 200;
                         enemies.clear();
                         fireballs.clear();
                         InitClaws();
@@ -1338,7 +1325,7 @@ void UpdateEnemies(float deltaTime) {
                 if (bossActive) {
                     bossActive = false;
                     preBossPhase = false;
-                    bossHealth = 20;
+                    bossHealth = 200;
                     enemies.clear();
                     fireballs.clear();
                     InitClaws();
@@ -1348,36 +1335,67 @@ void UpdateEnemies(float deltaTime) {
         }
     }
     
-    shooterSpawnTimer -= deltaTime;
-    if (shooterSpawnTimer <= 0) {
-        shooterSpawnTimer = 3.0f;
-        
-        int meleeCount = 0;
-        int shooterCount = 0;
-        for (auto& e : enemies) {
-            if (e.active) {
-                if (e.isShooter) shooterCount++;
-                else meleeCount++;
+    // Prevent spawning and clear enemies during pre-boss phase
+    if (preBossPhase) {
+        enemies.clear();
+    } else {
+        shooterSpawnTimer -= deltaTime;
+        if (shooterSpawnTimer <= 0) {
+            shooterSpawnTimer = 3.0f;
+            
+            int meleeCount = 0;
+            int shooterCount = 0;
+            for (auto& e : enemies) {
+                if (e.active) {
+                    if (e.isShooter) shooterCount++;
+                    else meleeCount++;
+                }
             }
-        }
-        
-        if (shooterCount == 0 && meleeCount >= 3) {
-            Enemy shooter;
-            do {
-                shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
-                shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
-            } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
-                     sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
-            shooter.active = true;
-            shooter.speed = 1.2f;
-            shooter.distance = 0;
-            shooter.spriteIndex = 0;
-            shooter.health = 2;
-            shooter.hurtTimer = 0;
-            shooter.isShooter = true;
-            shooter.fireTimer = 2.0f;
-            shooter.firingTimer = 0;
-            enemies.push_back(shooter);
+            
+            if (meleeCount < 3) {
+                int meleeToSpawn = 3 - meleeCount;
+                for (int i = 0; i < meleeToSpawn; i++) {
+                    Enemy enemy;
+                    do {
+                        enemy.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                        enemy.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+                    } while (worldMap[(int)enemy.x][(int)enemy.y] != 0 || 
+                             sqrtf((enemy.x - player.x)*(enemy.x - player.x) + (enemy.y - player.y)*(enemy.y - player.y)) < 15.0f);
+                    enemy.active = true;
+                    enemy.speed = 1.5f + (rand() % 100) / 100.0f;
+                    enemy.distance = 0;
+                    enemy.spriteIndex = rand() % 5;
+                    if (enemy.spriteIndex == 4) { enemy.health = 4; } else { enemy.health = 1; }
+                    enemy.hurtTimer = 0;
+                    enemy.isShooter = false;
+                    enemy.fireTimer = 0;
+                    enemy.firingTimer = 0;
+                    enemies.push_back(enemy);
+                    meleeCount++;
+                }
+            }
+            
+            int neededShooters = meleeCount / 3;
+            int shootersToSpawn = neededShooters - shooterCount;
+            
+            for (int i = 0; i < shootersToSpawn; i++) {
+                Enemy shooter;
+                do {
+                    shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                    shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+                } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
+                         sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
+                shooter.active = true;
+                shooter.speed = 1.2f;
+                shooter.distance = 0;
+                shooter.spriteIndex = 0;
+                shooter.health = 2;
+                shooter.hurtTimer = 0;
+                shooter.isShooter = true;
+                shooter.fireTimer = 2.0f;
+                shooter.firingTimer = 0;
+                enemies.push_back(shooter);
+            }
         }
     }
     
@@ -1409,6 +1427,9 @@ void UpdateEnemies(float deltaTime) {
                 enemy.spriteIndex = rand() % 5;
                 if (enemy.spriteIndex == 4) { enemy.health = 4; } else { enemy.health = 1; }
                 enemy.hurtTimer = 0;
+                enemy.isShooter = false;
+                enemy.fireTimer = 0;
+                enemy.firingTimer = 0;
                 enemies.push_back(enemy);
             }
         }
@@ -1476,7 +1497,7 @@ void UpdateEnemies(float deltaTime) {
                             
                             bossActive = false;
                             preBossPhase = false;
-                            bossHealth = 20;
+                            bossHealth = 200;
                             enemies.clear();
                             fireballs.clear();
                             InitClaws();
@@ -1540,7 +1561,7 @@ void UpdateEnemies(float deltaTime) {
                 if (bossActive) {
                     bossActive = false;
                     preBossPhase = false;
-                    bossHealth = 20;
+                    bossHealth = 200;
                     enemies.clear();
                     fireballs.clear();
                     InitClaws();
@@ -1671,9 +1692,9 @@ void UpdateBullets(float deltaTime) {
                     }
 
                     // Check Score for Boss Trigger
-                    if (score >= 20 && !bossActive && !preBossPhase) {
+                    if (score >= 100 && !bossActive && !preBossPhase) {
                         preBossPhase = true;
-                        preBossTimer = 10.0f; // 10 seconds of silence
+                        preBossTimer = 30.0f; // 30 seconds of silence
                         
                         // Despawn all enemies
                         for (auto& e : enemies) e.active = false;
@@ -2074,6 +2095,53 @@ void RenderGame(HDC hdc) {
         DeleteObject(hFont);
     }
     
+    // Boss Health Bar
+    if (bossActive && bossHealth > 0) {
+        int barW = 400;
+        int barH = 20;
+        int barX = (SCREEN_WIDTH - barW) / 2;
+        int barY = 40;
+        
+        // Background (Black)
+        RECT bgRect = {barX - 2, barY - 2, barX + barW + 2, barY + barH + 2};
+        HBRUSH bgBrush = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(hdc, &bgRect, bgBrush);
+        DeleteObject(bgBrush);
+        
+        // Health (Red)
+        float healthPct = (float)bossHealth / 200.0f;
+        if (healthPct < 0) healthPct = 0;
+        int hpW = (int)(barW * healthPct);
+        RECT hpRect = {barX, barY, barX + hpW, barY + barH};
+        HBRUSH hpBrush = CreateSolidBrush(RGB(200, 0, 0));
+        FillRect(hdc, &hpRect, hpBrush);
+        DeleteObject(hpBrush);
+        
+        // Text
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        TextOutW(hdc, barX, barY - 20, L"THE SPIRE", 9);
+    }
+    
+    // Countdown Timer during Pre-Boss Phase
+    if (preBossPhase) {
+        wchar_t bossTimerMsg[64];
+        swprintf(bossTimerMsg, 64, L"BOSS IN: %.0f", preBossTimer);
+        
+        HFONT hFont = CreateFontW(50, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        
+        SetTextColor(hdc, RGB(255, 0, 0)); // Red countdown
+        SetBkMode(hdc, TRANSPARENT);
+        
+        SIZE size;
+        GetTextExtentPoint32W(hdc, bossTimerMsg, (int)wcslen(bossTimerMsg), &size);
+        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, SCREEN_HEIGHT / 2 - 50, bossTimerMsg, (int)wcslen(bossTimerMsg));
+        
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFont);
+    }
+
     // Pre-Boss Phase: Shaking "God has awoken" text
     if (bossActive && bossEventTimer > 0) {
         HFONT hFont = CreateFontW(60, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
@@ -2168,6 +2236,33 @@ void RenderGame(HDC hdc) {
         DeleteObject(hMedFont);
         DeleteObject(hBtnFont);
     }
+    
+    // Debug Console
+    if (consoleActive) {
+        RECT consoleRect = {0, 0, SCREEN_WIDTH, 200};
+        HBRUSH consoleBrush = CreateSolidBrush(RGB(50, 50, 50)); // Dark Gray
+        FillRect(hdc, &consoleRect, consoleBrush);
+        DeleteObject(consoleBrush);
+        
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        HFONT hConsFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+        HFONT hOldConsFont = (HFONT)SelectObject(hdc, hConsFont);
+        
+        TextOutW(hdc, 10, 10, L"DEBUG CONSOLE (type 'exit' to close)", 36);
+        TextOutW(hdc, 10, 35, L">", 1);
+        TextOutW(hdc, 25, 35, consoleBuffer.c_str(), (int)consoleBuffer.length());
+        
+        // Cursor
+        if ((int)(GetTickCount() / 500) % 2 == 0) {
+            SIZE size;
+            GetTextExtentPoint32W(hdc, consoleBuffer.c_str(), (int)consoleBuffer.length(), &size);
+            TextOutW(hdc, 25 + size.cx, 35, L"_", 1);
+        }
+        
+        SelectObject(hdc, hOldConsFont);
+        DeleteObject(hConsFont);
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2203,7 +2298,45 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_CHAR: {
+            if (consoleActive) {
+                if (wParam == VK_BACK) {
+                    if (consoleBuffer.length() > 0) consoleBuffer.pop_back();
+                } else if (wParam == VK_RETURN) {
+                    if (consoleBuffer == L"exit") {
+                        consoleActive = false;
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer.find(L"score") == 0) {
+                        // Parse "score = 100" or "score 100"
+                        size_t eqPos = consoleBuffer.find(L'=');
+                        if (eqPos != std::wstring::npos) {
+                            std::wstring numStr = consoleBuffer.substr(eqPos + 1);
+                            score = _wtoi(numStr.c_str());
+                        } else {
+                            // Try "score 100" format
+                            size_t spacePos = consoleBuffer.find(L' ');
+                            if (spacePos != std::wstring::npos) {
+                                std::wstring numStr = consoleBuffer.substr(spacePos + 1);
+                                score = _wtoi(numStr.c_str());
+                            }
+                        }
+                        consoleBuffer = L"";
+                    } else {
+                        consoleBuffer = L""; // Clear unknown command
+                    }
+                } else {
+                    consoleBuffer += (wchar_t)wParam;
+                }
+            }
+            return 0;
+        }
         case WM_KEYDOWN:
+            if (wParam == VK_OEM_3) { // Tilde key
+                consoleActive = !consoleActive;
+                return 0;
+            }
+            if (consoleActive) return 0; // Block game input
+            
             if (victoryScreen) return 0;
             keys[wParam & 0xFF] = true;
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
@@ -2224,7 +2357,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     bossDead = false;
                     bossActive = false;
                     preBossPhase = false;
-                    bossHealth = 20;
+                    bossHealth = 200;
                     score = 0;
                     player.health = 100;
                     player.x = 10.0f;
