@@ -81,7 +81,25 @@ void PlayStepSound() {
 }
 
 void PlayScoreSound() {
-    NoteOn(3, 84, 127); // High Ding
+    NoteOn(3, 84, 127);
+}
+
+void PlaySlamSound() {
+    static wchar_t slamPath[MAX_PATH] = {0};
+    if (slamPath[0] == 0) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(slamPath, MAX_PATH, L"\"%ls\\assets\\sound-effects\\claw-impact.mp3\"", exePath);
+    }
+    
+    wchar_t cmd[512];
+    mciSendStringW(L"close slamsfx", NULL, 0, NULL);
+    swprintf(cmd, 512, L"open %ls type mpegvideo alias slamsfx", slamPath);
+    mciSendStringW(cmd, NULL, 0, NULL);
+    mciSendStringW(L"setaudio slamsfx volume to 1000", NULL, 0, NULL);
+    mciSendStringW(L"play slamsfx from 0", NULL, 0, NULL);
 }
 
 void BackgroundMusic(void* arg) {
@@ -188,6 +206,19 @@ struct Enemy {
     float distance;
     bool active;
     float speed;
+    int spriteIndex;
+    int health;
+    float hurtTimer;
+    bool isShooter;
+    float fireTimer;
+    float firingTimer;
+};
+
+struct EnemyBullet {
+    float x, y;
+    float dirX, dirY;
+    float speed;
+    bool active;
 };
 
 struct TreeSprite {
@@ -206,6 +237,18 @@ struct Bullet {
     float dirX, dirY;
     float speed;
     bool active;
+};
+
+enum ClawState { CLAW_DORMANT, CLAW_IDLE, CLAW_CHASING, CLAW_SLAMMING, CLAW_RISING, CLAW_RETURNING };
+
+struct Claw {
+    float x, y;
+    float homeX, homeY;
+    float groundY;
+    ClawState state;
+    float timer;
+    int index;
+    bool dealtDamage;
 };
 
 // --- 3D Engine Structs (Ported from LoneMaker) ---
@@ -304,6 +347,7 @@ std::vector<TreeSprite> trees;
 std::vector<Cloud> clouds;
 std::vector<Bullet> bullets;
 std::vector<Fireball> fireballs;
+std::vector<EnemyBullet> enemyBullets;
 Medkit medkit = {0, 0, false, 0};
 
 bool bossActive = false;
@@ -316,6 +360,9 @@ float bossHurtTimer = 0;
 float playerHurtTimer = 0;
 bool bossDead = false;
 bool victoryScreen = false;
+float screenShakeTimer = 0;
+float screenShakeIntensity = 0;
+float shooterSpawnTimer = 3.0f;
 
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
@@ -388,7 +435,15 @@ DWORD* gunfirePixels = NULL;
 DWORD* bulletPixels = NULL;
 DWORD* healthbarPixels[11] = {NULL};
 int grassW = 0, grassH = 0;
-int npcW = 0, npcH = 0;
+DWORD* enemyPixels[5] = {NULL};
+int enemyW[5] = {0};
+int enemyH[5] = {0};
+DWORD* enemy5HurtPixels = NULL;
+int enemy5HurtW = 0, enemy5HurtH = 0;
+DWORD* gunnerPixels = NULL;
+int gunnerW = 0, gunnerH = 0;
+DWORD* gunnerFiringPixels = NULL;
+int gunnerFiringW = 0, gunnerFiringH = 0;
 int treeW = 0, treeH = 0;
 int cloudW = 0, cloudH = 0;
 int gunW = 0, gunH = 0;
@@ -407,6 +462,15 @@ DWORD* fireballPixels = NULL;
 int fireballW = 0, fireballH = 0;
 DWORD* medkitPixels = NULL;
 int medkitW = 0, medkitH = 0;
+
+DWORD* clawDormantPixels = NULL;
+int clawDormantW = 0, clawDormantH = 0;
+DWORD* clawActivePixels = NULL;
+int clawActiveW = 0, clawActiveH = 0;
+
+Claw claws[6];
+int activeClawIndex = 0;
+float clawReturnSpeed = 3.0f;
 
 bool keys[256] = {false};
 wchar_t loadStatus[256] = L"Loading...";
@@ -453,8 +517,19 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\grass.bmp", exePath);
     grassPixels = LoadBMPPixels(path, &grassW, &grassH);
     
-    swprintf(path, MAX_PATH, L"%ls\\assets\\sprite2.bmp", exePath);
-    npcPixels = LoadBMPPixels(path, &npcW, &npcH);
+    for(int i=0; i<5; i++) {
+        swprintf(path, MAX_PATH, L"%ls\\assets\\enemy%d.bmp", exePath, i+1);
+        enemyPixels[i] = LoadBMPPixels(path, &enemyW[i], &enemyH[i]);
+    }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\enemy5_hurt.bmp", exePath);
+    enemy5HurtPixels = LoadBMPPixels(path, &enemy5HurtW, &enemy5HurtH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gunner.bmp", exePath);
+    gunnerPixels = LoadBMPPixels(path, &gunnerW, &gunnerH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gunner_firing.bmp", exePath);
+    gunnerFiringPixels = LoadBMPPixels(path, &gunnerFiringW, &gunnerFiringH);
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\tree.bmp", exePath);
     treePixels = LoadBMPPixels(path, &treeW, &treeH);
@@ -495,8 +570,14 @@ void TryLoadAssets() {
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\items\\Medkit.bmp", exePath);
     medkitPixels = LoadBMPPixels(path, &medkitW, &medkitH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_dormant.bmp", exePath);
+    clawDormantPixels = LoadBMPPixels(path, &clawDormantW, &clawDormantH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_active.bmp", exePath);
+    clawActivePixels = LoadBMPPixels(path, &clawActiveW, &clawActiveH);
 
-    swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X");
+    swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
 }
 
 void GenerateWorld() {
@@ -581,8 +662,26 @@ void SpawnMedkit() {
     medkit.respawnTimer = 0;
 }
 
+void InitClaws() {
+    for(int i = 0; i < 6; i++) {
+        float angle = (i * 60.0f) * (PI / 180.0f);
+        claws[i].homeX = 32.0f + cosf(angle) * 16.0f;
+        claws[i].homeY = 32.0f + sinf(angle) * 16.0f;
+        claws[i].x = claws[i].homeX;
+        claws[i].y = claws[i].homeY;
+        claws[i].groundY = claws[i].homeY;
+        claws[i].state = CLAW_DORMANT;
+        claws[i].timer = 0;
+        claws[i].index = i;
+        claws[i].dealtDamage = false;
+    }
+    activeClawIndex = 0;
+}
+
 void SpawnEnemies() {
     enemies.clear();
+    enemyBullets.clear();
+    
     for (int i = 0; i < 3; i++) {
         Enemy enemy;
         do {
@@ -593,8 +692,35 @@ void SpawnEnemies() {
         enemy.active = true;
         enemy.speed = 1.5f + (rand() % 100) / 100.0f;
         enemy.distance = 0;
+        enemy.spriteIndex = rand() % 5;
+        if (enemy.spriteIndex == 4) {
+            enemy.health = 4;
+        } else {
+            enemy.health = 1;
+        }
+        enemy.hurtTimer = 0;
+        enemy.isShooter = false;
+        enemy.fireTimer = 0;
+        enemy.firingTimer = 0;
         enemies.push_back(enemy);
     }
+    
+    Enemy shooter;
+    do {
+        shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+        shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+    } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
+             sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
+    shooter.active = true;
+    shooter.speed = 1.2f;
+    shooter.distance = 0;
+    shooter.spriteIndex = 0;
+    shooter.health = 2;
+    shooter.hurtTimer = 0;
+    shooter.isShooter = true;
+    shooter.fireTimer = 2.0f;
+    shooter.firingTimer = 0;
+    enemies.push_back(shooter);
 }
 
 inline DWORD MakeColor(int r, int g, int b) {
@@ -847,7 +973,7 @@ void Render3DScene() {
     }
 }
 
-void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dist, float scale) {
+void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dist, float scale, float heightOffset = 0.0f) {
     if (dist < 0.5f || dist > 50.0f) return;
     
     float dx = sx - player.x;
@@ -859,12 +985,11 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
     
     float spriteScreenX = (0.5f + spriteAngle / FOV) * SCREEN_WIDTH;
     float spriteHeight = (SCREEN_HEIGHT / dist) * scale;
-    float spriteWidth = spriteHeight; // Assumption: square aspect ratio sprites
-    // If spire is tall, maybe aspectRatio adjustment needed? 
-    // For now assuming scale affects both dimensions uniformly.
+    float spriteWidth = spriteHeight;
     
     int floorLineAtDist = SCREEN_HEIGHT / 2 + (int)((SCREEN_HEIGHT / 2.0f) / dist) + (int)player.pitch;
-    int drawEndY = floorLineAtDist;
+    int verticalOffset = (int)((heightOffset * SCREEN_HEIGHT) / dist);
+    int drawEndY = floorLineAtDist - verticalOffset;
     int drawStartY = (int)(drawEndY - spriteHeight);
     int drawStartX = (int)(spriteScreenX - spriteWidth / 2);
     int drawEndX = (int)(spriteScreenX + spriteWidth / 2);
@@ -877,7 +1002,6 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
         for (int y = drawStartY; y < drawEndY; y++) {
             if (y < 0 || y >= SCREEN_HEIGHT) continue;
             
-            // 2D Z-Check
             if (dist > zBuffer[y * SCREEN_WIDTH + x]) continue;
             
             float texY = (float)(y - drawStartY) / spriteHeight;
@@ -903,10 +1027,9 @@ void RenderSprite(DWORD* pixels, int pxW, int pxH, float sx, float sy, float dis
 }
 
 void RenderSprites() {
-    struct SpriteRender { float x, y, dist; int type; float scale; };
+    struct SpriteRender { float x, y, dist; int type; float scale; int variant; bool isHurt; float height; bool isFiring; };
     std::vector<SpriteRender> allSprites;
     
-    // Spire
     DWORD* sPix;
     int sW, sH;
     if (bossDead) {
@@ -930,22 +1053,21 @@ void RenderSprites() {
     float dx = 32.0f - player.x;
     float dy = 32.0f - player.y;
     float dist = sqrtf(dx*dx + dy*dy);
-    allSprites.push_back({32.0f, 32.0f, dist, 2, 8.0f});
+    allSprites.push_back({32.0f, 32.0f, dist, 2, 8.0f, 0, false, 0.0f, false});
 
-    // Fireballs
     for(auto& fb : fireballs) {
         if(!fb.active) continue;
         float fdx = fb.x - player.x;
         float fdy = fb.y - player.y;
         float fdist = sqrtf(fdx*fdx + fdy*fdy);
-        allSprites.push_back({fb.x, fb.y, fdist, 3, 2.0f});
+        allSprites.push_back({fb.x, fb.y, fdist, 3, 2.0f, 0, false, 0.0f, false});
     }
     
     if (medkit.active) {
         float mdx = medkit.x - player.x;
         float mdy = medkit.y - player.y;
         float mdist = sqrtf(mdx*mdx + mdy*mdy);
-        allSprites.push_back({medkit.x, medkit.y, mdist, 4, 0.8f});
+        allSprites.push_back({medkit.x, medkit.y, mdist, 4, 0.8f, 0, false, 0.0f, false});
     }
 
     for (auto& tree : trees) {
@@ -953,7 +1075,7 @@ void RenderSprites() {
         float dy = tree.y - player.y;
         float dist = sqrtf(dx*dx + dy*dy);
         if (dist < 50.0f) {
-            allSprites.push_back({tree.x, tree.y, dist, 0, 1.0f});
+            allSprites.push_back({tree.x, tree.y, dist, 0, 1.0f, 0, false, 0.0f, false});
         }
     }
     
@@ -962,8 +1084,45 @@ void RenderSprites() {
             float dx = enemy.x - player.x;
             float dy = enemy.y - player.y;
             float dist = sqrtf(dx*dx + dy*dy);
-            allSprites.push_back({enemy.x, enemy.y, dist, 1, 1.0f});
+            if (enemy.isShooter) {
+                allSprites.push_back({enemy.x, enemy.y, dist, 6, 1.0f, 0, false, 0.0f, enemy.firingTimer > 0});
+            } else {
+                allSprites.push_back({enemy.x, enemy.y, dist, 1, 1.0f, enemy.spriteIndex, (enemy.spriteIndex == 4 && enemy.hurtTimer > 0), 0.0f, false});
+            }
         }
+    }
+    
+    for (auto& eb : enemyBullets) {
+        if (eb.active) {
+            float dx = eb.x - player.x;
+            float dy = eb.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            allSprites.push_back({eb.x, eb.y, dist, 7, 0.5f, 0, false, 0.0f, false});
+        }
+    }
+    
+    for(int i = 0; i < 6; i++) {
+        float cdx = claws[i].x - player.x;
+        float cdy = claws[i].y - player.y;
+        float cdist = sqrtf(cdx*cdx + cdy*cdy);
+        int clawVariant = (claws[i].state == CLAW_DORMANT || bossDead) ? 0 : 1;
+        
+        float clawHeight = 3.0f;
+        if (claws[i].state == CLAW_SLAMMING) {
+            float progress = 1.0f - (claws[i].timer / 0.5f);
+            if (progress < 0) progress = 0;
+            if (progress > 1) progress = 1;
+            clawHeight = 3.0f * (1.0f - progress);
+        } else if (claws[i].state == CLAW_RISING) {
+            float progress = 1.0f - (claws[i].timer / 1.0f);
+            if (progress < 0) progress = 0;
+            if (progress > 1) progress = 1;
+            clawHeight = 3.0f * progress;
+        } else if (claws[i].state == CLAW_RETURNING) {
+            clawHeight = 3.0f;
+        }
+        
+        allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 4.0f, clawVariant, false, clawHeight, false});
     }
     
     std::sort(allSprites.begin(), allSprites.end(), [](const SpriteRender& a, const SpriteRender& b) {
@@ -972,15 +1131,35 @@ void RenderSprites() {
     
     for (auto& sp : allSprites) {
         if (sp.type == 0) {
-            RenderSprite(treePixels, treeW, treeH, sp.x, sp.y, sp.dist, sp.scale);
+            RenderSprite(treePixels, treeW, treeH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 1) {
-            RenderSprite(npcPixels, npcW, npcH, sp.x, sp.y, sp.dist, sp.scale);
+            if (sp.isHurt) {
+                RenderSprite(enemy5HurtPixels, enemy5HurtW, enemy5HurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else {
+                int idx = sp.variant;
+                if (idx < 0) idx = 0; if (idx > 4) idx = 4;
+                RenderSprite(enemyPixels[idx], enemyW[idx], enemyH[idx], sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
         } else if (sp.type == 2) {
-            RenderSprite(sPix, sW, sH, sp.x, sp.y, sp.dist, sp.scale);
+            RenderSprite(sPix, sW, sH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 3) {
-            RenderSprite(fireballPixels, fireballW, fireballH, sp.x, sp.y, sp.dist, sp.scale);
+            RenderSprite(fireballPixels, fireballW, fireballH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 4) {
-            RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale);
+            RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+        } else if (sp.type == 5) {
+            if (sp.variant == 0) {
+                RenderSprite(clawDormantPixels, clawDormantW, clawDormantH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else {
+                RenderSprite(clawActivePixels, clawActiveW, clawActiveH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 6) {
+            if (sp.isFiring) {
+                RenderSprite(gunnerFiringPixels, gunnerFiringW, gunnerFiringH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else {
+                RenderSprite(gunnerPixels, gunnerW, gunnerH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 7) {
+            RenderSprite(bulletPixels, bulletW, bulletH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         }
     }
 }
@@ -1059,45 +1238,165 @@ void UpdateEnemies(float deltaTime) {
         float dy = player.y - enemy.y;
         float dist = sqrtf(dx*dx + dy*dy);
         
-        if (dist > 0.5f) {
-            float moveX = (dx / dist) * enemy.speed * deltaTime;
-            float moveY = (dy / dist) * enemy.speed * deltaTime;
+        if (enemy.isShooter) {
+            if (enemy.firingTimer > 0) enemy.firingTimer -= deltaTime;
             
-            float newX = enemy.x + moveX;
-            float newY = enemy.y + moveY;
+            if (dist <= 16.0f && dist > 1.0f) {
+                enemy.fireTimer -= deltaTime;
+                if (enemy.fireTimer <= 0) {
+                    EnemyBullet eb;
+                    eb.x = enemy.x;
+                    eb.y = enemy.y;
+                    float edx = player.x - enemy.x;
+                    float edy = player.y - enemy.y;
+                    float edist = sqrtf(edx*edx + edy*edy);
+                    eb.dirX = edx / edist;
+                    eb.dirY = edy / edist;
+                    eb.speed = 8.0f;
+                    eb.active = true;
+                    enemyBullets.push_back(eb);
+                    
+                    enemy.fireTimer = 2.0f;
+                    enemy.firingTimer = 0.5f;
+                }
+            } else if (dist > 16.0f) {
+                float moveX = (dx / dist) * enemy.speed * deltaTime;
+                float moveY = (dy / dist) * enemy.speed * deltaTime;
+                float newX = enemy.x + moveX;
+                float newY = enemy.y + moveY;
+                if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
+                if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+            }
+        } else {
+            if (dist > 0.5f) {
+                float moveX = (dx / dist) * enemy.speed * deltaTime;
+                float moveY = (dy / dist) * enemy.speed * deltaTime;
+                float newX = enemy.x + moveX;
+                float newY = enemy.y + moveY;
+                if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
+                if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+            }
             
-            if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
-            if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+            if (dist < 1.0f) {
+                if (enemy.spriteIndex == 4) player.health -= 3;
+                else player.health -= 1;
+                
+                playerHurtTimer = 0.3f;
+                if (player.health <= 0) {
+                    score = 0;
+                    player.health = 100;
+                    player.x = 10.0f;
+                    player.y = 32.0f;
+                    
+                    if (bossActive) {
+                        bossActive = false;
+                        preBossPhase = false;
+                        bossHealth = 20;
+                        enemies.clear();
+                        fireballs.clear();
+                        InitClaws();
+                    }
+                    SpawnEnemies();
+                }
+            }
         }
         
-        if (dist < 1.0f) {
-            player.health -= 1;
+        if (enemy.hurtTimer > 0) enemy.hurtTimer -= deltaTime;
+        
+        enemy.distance = dist;
+    }
+    
+    for (auto& eb : enemyBullets) {
+        if (!eb.active) continue;
+        
+        eb.x += eb.dirX * eb.speed * deltaTime;
+        eb.y += eb.dirY * eb.speed * deltaTime;
+        
+        if (eb.x < 0 || eb.x > MAP_WIDTH || eb.y < 0 || eb.y > MAP_HEIGHT) {
+            eb.active = false;
+            continue;
+        }
+        
+        if (worldMap[(int)eb.x][(int)eb.y] != 0) {
+            eb.active = false;
+            continue;
+        }
+        
+        float pdx = player.x - eb.x;
+        float pdy = player.y - eb.y;
+        if (sqrtf(pdx*pdx + pdy*pdy) < 0.5f) {
+            player.health -= 5;
             playerHurtTimer = 0.3f;
+            eb.active = false;
+            
             if (player.health <= 0) {
-                if (bossActive) {
-                    // Exit game on boss death
-                    PostQuitMessage(0);
-                    return;
-                }
                 score = 0;
                 player.health = 100;
                 player.x = 10.0f;
                 player.y = 32.0f;
+                
+                if (bossActive) {
+                    bossActive = false;
+                    preBossPhase = false;
+                    bossHealth = 20;
+                    enemies.clear();
+                    fireballs.clear();
+                    InitClaws();
+                }
                 SpawnEnemies();
             }
         }
-        
-        enemy.distance = dist;
     }
-        // Duplicate lines removed
     
-    // Pre-Boss Phase (10s silence before awakening)
+    shooterSpawnTimer -= deltaTime;
+    if (shooterSpawnTimer <= 0) {
+        shooterSpawnTimer = 3.0f;
+        
+        int meleeCount = 0;
+        int shooterCount = 0;
+        for (auto& e : enemies) {
+            if (e.active) {
+                if (e.isShooter) shooterCount++;
+                else meleeCount++;
+            }
+        }
+        
+        int neededShooters = meleeCount / 3;
+        int shootersToSpawn = neededShooters - shooterCount;
+        
+        for (int i = 0; i < shootersToSpawn; i++) {
+            Enemy shooter;
+            do {
+                shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+            } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
+                     sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
+            shooter.active = true;
+            shooter.speed = 1.2f;
+            shooter.distance = 0;
+            shooter.spriteIndex = 0;
+            shooter.health = 2;
+            shooter.hurtTimer = 0;
+            shooter.isShooter = true;
+            shooter.fireTimer = 2.0f;
+            shooter.firingTimer = 0;
+            enemies.push_back(shooter);
+        }
+    }
+    
     if (preBossPhase && !bossActive) {
         preBossTimer -= deltaTime;
         if (preBossTimer <= 0) {
             preBossPhase = false;
             bossActive = true;
             bossEventTimer = 3.0f;
+            
+            for(int i=0; i<6; i++) {
+                claws[i].state = CLAW_IDLE;
+            }
+            activeClawIndex = 0;
+            claws[0].state = CLAW_CHASING;
+            claws[0].timer = 4.0f;
             
             // Spawn 15 enemies for boss fight
             for(int i=0; i<15; i++) {
@@ -1110,6 +1409,9 @@ void UpdateEnemies(float deltaTime) {
                 enemy.active = true;
                 enemy.speed = 1.5f + (rand() % 100) / 100.0f;
                 enemy.distance = 0;
+                enemy.spriteIndex = rand() % 5;
+                if (enemy.spriteIndex == 4) { enemy.health = 4; } else { enemy.health = 1; }
+                enemy.hurtTimer = 0;
                 enemies.push_back(enemy);
             }
         }
@@ -1139,6 +1441,83 @@ void UpdateEnemies(float deltaTime) {
             
             fireballSpawnTimer = 2.0f; // Every 2 seconds
         }
+        
+        for(int i = 0; i < 6; i++) {
+            Claw& claw = claws[i];
+            
+            if(claw.state == CLAW_CHASING) {
+                float dx = player.x - claw.x;
+                float dy = player.y - claw.y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if(dist > 0.5f) {
+                    claw.x += (dx/dist) * 8.0f * deltaTime;
+                    claw.y += (dy/dist) * 8.0f * deltaTime;
+                }
+                claw.timer -= deltaTime;
+                if(claw.timer <= 0) {
+                    claw.state = CLAW_SLAMMING;
+                    claw.timer = 0.5f;
+                    claw.groundY = claw.y;
+                    claw.dealtDamage = false;
+                }
+            }
+            else if(claw.state == CLAW_SLAMMING) {
+                claw.timer -= deltaTime;
+                if(claw.timer <= 0 && !claw.dealtDamage) {
+                    float dx = player.x - claw.x;
+                    float dy = player.y - claw.y;
+                    float dist = sqrtf(dx*dx + dy*dy);
+                    float aoeRadius = 4.0f + (rand() % 5);
+                    if(dist < aoeRadius) {
+                        player.health -= 10;
+                        playerHurtTimer = 0.3f;
+                        if(player.health <= 0) {
+                            score = 0;
+                            player.health = 100;
+                            player.x = 10.0f;
+                            player.y = 32.0f;
+                            
+                            bossActive = false;
+                            preBossPhase = false;
+                            bossHealth = 20;
+                            enemies.clear();
+                            fireballs.clear();
+                            InitClaws();
+                            SpawnEnemies();
+                        }
+                    }
+                    claw.dealtDamage = true;
+                    claw.state = CLAW_RISING;
+                    claw.timer = 1.0f;
+                    PlaySlamSound();
+                    screenShakeTimer = 1.0f;
+                    screenShakeIntensity = 50.0f;
+                }
+            }
+            else if(claw.state == CLAW_RISING) {
+                claw.timer -= deltaTime;
+                if(claw.timer <= 0) {
+                    claw.state = CLAW_RETURNING;
+                }
+            }
+            else if(claw.state == CLAW_RETURNING) {
+                float dx = claw.homeX - claw.x;
+                float dy = claw.homeY - claw.y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if(dist > 0.5f) {
+                    claw.x += (dx/dist) * clawReturnSpeed * deltaTime;
+                    claw.y += (dy/dist) * clawReturnSpeed * deltaTime;
+                } else {
+                    claw.x = claw.homeX;
+                    claw.y = claw.homeY;
+                    claw.state = CLAW_IDLE;
+                    
+                    activeClawIndex = (activeClawIndex + 1) % 6;
+                    claws[activeClawIndex].state = CLAW_CHASING;
+                    claws[activeClawIndex].timer = 4.0f;
+                }
+            }
+        }
     }
     
     // Update Fireballs
@@ -1154,6 +1533,23 @@ void UpdateEnemies(float deltaTime) {
             player.health -= 10;
             playerHurtTimer = 0.3f;
             fb.active = false;
+            
+            if (player.health <= 0) {
+                score = 0;
+                player.health = 100;
+                player.x = 10.0f;
+                player.y = 32.0f;
+                
+                if (bossActive) {
+                    bossActive = false;
+                    preBossPhase = false;
+                    bossHealth = 20;
+                    enemies.clear();
+                    fireballs.clear();
+                    InitClaws();
+                }
+                SpawnEnemies();
+            }
         }
         
         if(fb.x < 0 || fb.x > MAP_WIDTH || fb.y < 0 || fb.y > MAP_HEIGHT) fb.active = false;
@@ -1259,47 +1655,55 @@ void UpdateBullets(float deltaTime) {
         
         for (auto& enemy : enemies) {
             if (!enemy.active) continue;
-            float dx = b.x - enemy.x;
-            float dy = b.y - enemy.y;
-            if (sqrtf(dx*dx + dy*dy) < 0.8f) {
-                enemy.active = false;
+            float edx = b.x - enemy.x;
+            float edy = b.y - enemy.y;
+            if (sqrtf(edx*edx + edy*edy) < 1.0f) {
                 b.active = false;
                 
-                score++;
-                if (score > highScore) {
-                    highScore = score;
-                    SaveHighScore();
-                }
+                enemy.health--;
+                if (enemy.spriteIndex == 4) enemy.hurtTimer = 0.3f;
                 
-                PlayScoreSound();
-                
-                // Check Score for Boss Trigger
-                if (score >= 20 && !bossActive && !preBossPhase) {
-                    preBossPhase = true;
-                    preBossTimer = 10.0f; // 10 seconds of silence
+                if (enemy.health <= 0) {
+                    enemy.active = false;
+                    score++;
+                    PlayScoreSound();
                     
-                    // Despawn all enemies
-                    for (auto& e : enemies) e.active = false;
-                    enemies.clear();
+                    if (score > highScore) {
+                        highScore = score;
+                        SaveHighScore();
+                    }
+
+                    // Check Score for Boss Trigger
+                    if (score >= 20 && !bossActive && !preBossPhase) {
+                        preBossPhase = true;
+                        preBossTimer = 10.0f; // 10 seconds of silence
+                        
+                        // Despawn all enemies
+                        for (auto& e : enemies) e.active = false;
+                        enemies.clear();
+                        
+                        scoreTimer = 0; // Clear score text
+                    }
                     
-                    scoreTimer = 0; // Clear score text
-                }
-                
-                scoreTimer = 3.0f;
-                int msgIndex = rand() % 3;
-                wcscpy(scoreMsg, praiseMsgs[msgIndex]);
-                
-                // Only spawn replacement enemy if not in pre-boss phase
-                if (!preBossPhase) {
-                    Enemy newEnemy;
-                    do {
-                        newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
-                        newEnemy.y = 5.0f + (rand() % 540) / 10.0f;
-                    } while (sqrtf((newEnemy.x - player.x)*(newEnemy.x - player.x) + (newEnemy.y - player.y)*(newEnemy.y - player.y)) < 15.0f);
-                    newEnemy.active = true;
-                    newEnemy.speed = 1.5f + (rand() % 100) / 100.0f;
-                    newEnemy.distance = 0;
-                    enemies.push_back(newEnemy);
+                    scoreTimer = 3.0f;
+                    int msgIndex = rand() % 3;
+                    wcscpy(scoreMsg, praiseMsgs[msgIndex]);
+                    
+                    // Only spawn replacement enemy if not in pre-boss phase
+                    if (!preBossPhase) {
+                        Enemy newEnemy;
+                        do {
+                            newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
+                            newEnemy.y = 5.0f + (rand() % 540) / 10.0f;
+                        } while (sqrtf((newEnemy.x - player.x)*(newEnemy.x - player.x) + (newEnemy.y - player.y)*(newEnemy.y - player.y)) < 15.0f);
+                        newEnemy.active = true;
+                        newEnemy.speed = 1.5f + (rand() % 100) / 100.0f;
+                        newEnemy.distance = 0;
+                        newEnemy.spriteIndex = rand() % 5;
+                        if (newEnemy.spriteIndex == 4) { newEnemy.health = 4; } else { newEnemy.health = 1; }
+                        newEnemy.hurtTimer = 0;
+                        enemies.push_back(newEnemy);
+                    }
                 }
                 break;
             }
@@ -1328,6 +1732,12 @@ void UpdateBullets(float deltaTime) {
                     for (auto& e : enemies) e.active = false;
                     enemies.clear();
                     fireballs.clear();
+                    
+                    for(int i = 0; i < 6; i++) {
+                        claws[i].state = CLAW_DORMANT;
+                        claws[i].x = claws[i].homeX;
+                        claws[i].y = claws[i].homeY;
+                    }
                 }
             }
         }
@@ -1606,7 +2016,15 @@ void RenderGame(HDC hdc) {
     bi.bmiHeader.biHeight = -SCREEN_HEIGHT;
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
-    SetDIBitsToDevice(hdc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
+    
+    int shakeX = 0, shakeY = 0;
+    if (screenShakeTimer > 0) {
+        float shakeFactor = screenShakeTimer / 1.0f;
+        shakeX = (int)((rand() % (int)(screenShakeIntensity * 2 + 1) - screenShakeIntensity) * shakeFactor);
+        shakeY = (int)((rand() % (int)(screenShakeIntensity * 2 + 1) - screenShakeIntensity) * shakeFactor);
+    }
+    
+    SetDIBitsToDevice(hdc, shakeX, shakeY, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
         backBufferPixels, &bi, DIB_RGB_COLORS);
     
     DrawMinimap(hdc);
@@ -1760,6 +2178,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (deltaTime > 0.1f) deltaTime = 0.1f;
             
             if (scoreTimer > 0) scoreTimer -= deltaTime;
+            if (screenShakeTimer > 0) screenShakeTimer -= deltaTime;
             
             UpdatePlayer(deltaTime);
             UpdateEnemies(deltaTime);
@@ -1809,6 +2228,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     bullets.clear();
                     SpawnEnemies();
                     SpawnMedkit();
+                    InitClaws();
                     musicRunning = true;
                     _beginthread(BackgroundMusic, 0, NULL);
                 }
@@ -1826,13 +2246,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             delete[] backBufferPixels;
             delete[] zBuffer;
             if (grassPixels) delete[] grassPixels;
-            if (npcPixels) delete[] npcPixels;
+            for(int i=0; i<5; i++) if (enemyPixels[i]) delete[] enemyPixels[i];
+            if (enemy5HurtPixels) delete[] enemy5HurtPixels;
             if (treePixels) delete[] treePixels;
             if (cloudPixels) delete[] cloudPixels;
             if (gunPixels) delete[] gunPixels;
             if (gunfirePixels) delete[] gunfirePixels;
             if (bulletPixels) delete[] bulletPixels;
             if (medkitPixels) delete[] medkitPixels;
+            if (clawDormantPixels) delete[] clawDormantPixels;
+            if (clawActivePixels) delete[] clawActivePixels;
+            if (gunnerPixels) delete[] gunnerPixels;
+            if (gunnerFiringPixels) delete[] gunnerFiringPixels;
             for (int i = 0; i < 11; i++) if (healthbarPixels[i]) delete[] healthbarPixels[i];
             PostQuitMessage(0);
             return 0;
@@ -1848,6 +2273,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     GenerateWorld();
     SpawnEnemies();
     SpawnMedkit();
+    InitClaws();
     
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
