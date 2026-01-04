@@ -365,8 +365,18 @@ float screenShakeTimer = 0;
 float screenShakeIntensity = 0;
 float shooterSpawnTimer = 3.0f;
 
+int maxMeleeSpawn = 3;
+int maxShooterSpawn = 1;
+float spawnCapTimer = 20.0f;
+const int MELEE_CAP = 15;
+const int SHOOTER_CAP = 5;
+
 bool consoleActive = false;
 std::wstring consoleBuffer = L"";
+bool showStats = false;
+int fpsCounter = 0;
+int currentFPS = 0;
+DWORD fpsLastTime = 0;
 
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
@@ -1338,7 +1348,17 @@ void UpdateEnemies(float deltaTime) {
     // Prevent spawning and clear enemies during pre-boss phase
     if (preBossPhase) {
         enemies.clear();
-    } else {
+    } else if (!bossActive) {
+        // Progressive spawn cap increase (pre-boss only)
+        spawnCapTimer -= deltaTime;
+        if (spawnCapTimer <= 0) {
+            spawnCapTimer = 20.0f;
+            if (maxMeleeSpawn < MELEE_CAP) maxMeleeSpawn += 3;
+            if (maxMeleeSpawn > MELEE_CAP) maxMeleeSpawn = MELEE_CAP;
+            if (maxShooterSpawn < SHOOTER_CAP) maxShooterSpawn += 1;
+            if (maxShooterSpawn > SHOOTER_CAP) maxShooterSpawn = SHOOTER_CAP;
+        }
+        
         shooterSpawnTimer -= deltaTime;
         if (shooterSpawnTimer <= 0) {
             shooterSpawnTimer = 3.0f;
@@ -1352,8 +1372,9 @@ void UpdateEnemies(float deltaTime) {
                 }
             }
             
-            if (meleeCount < 3) {
-                int meleeToSpawn = 3 - meleeCount;
+            // Spawn melee up to current max
+            if (meleeCount < maxMeleeSpawn) {
+                int meleeToSpawn = maxMeleeSpawn - meleeCount;
                 for (int i = 0; i < meleeToSpawn; i++) {
                     Enemy enemy;
                     do {
@@ -1371,30 +1392,30 @@ void UpdateEnemies(float deltaTime) {
                     enemy.fireTimer = 0;
                     enemy.firingTimer = 0;
                     enemies.push_back(enemy);
-                    meleeCount++;
                 }
             }
             
-            int neededShooters = meleeCount / 3;
-            int shootersToSpawn = neededShooters - shooterCount;
-            
-            for (int i = 0; i < shootersToSpawn; i++) {
-                Enemy shooter;
-                do {
-                    shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
-                    shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
-                } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
-                         sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
-                shooter.active = true;
-                shooter.speed = 1.2f;
-                shooter.distance = 0;
-                shooter.spriteIndex = 0;
-                shooter.health = 2;
-                shooter.hurtTimer = 0;
-                shooter.isShooter = true;
-                shooter.fireTimer = 2.0f;
-                shooter.firingTimer = 0;
-                enemies.push_back(shooter);
+            // Spawn shooters up to current max
+            if (shooterCount < maxShooterSpawn) {
+                int shootersToSpawn = maxShooterSpawn - shooterCount;
+                for (int i = 0; i < shootersToSpawn; i++) {
+                    Enemy shooter;
+                    do {
+                        shooter.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                        shooter.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+                    } while (worldMap[(int)shooter.x][(int)shooter.y] != 0 || 
+                             sqrtf((shooter.x - player.x)*(shooter.x - player.x) + (shooter.y - player.y)*(shooter.y - player.y)) < 15.0f);
+                    shooter.active = true;
+                    shooter.speed = 1.2f;
+                    shooter.distance = 0;
+                    shooter.spriteIndex = 0;
+                    shooter.health = 2;
+                    shooter.hurtTimer = 0;
+                    shooter.isShooter = true;
+                    shooter.fireTimer = 2.0f;
+                    shooter.firingTimer = 0;
+                    enemies.push_back(shooter);
+                }
             }
         }
     }
@@ -1706,22 +1727,6 @@ void UpdateBullets(float deltaTime) {
                     scoreTimer = 3.0f;
                     int msgIndex = rand() % 3;
                     wcscpy(scoreMsg, praiseMsgs[msgIndex]);
-                    
-                    // Only spawn replacement enemy if not in pre-boss phase
-                    if (!preBossPhase) {
-                        Enemy newEnemy;
-                        do {
-                            newEnemy.x = 5.0f + (rand() % 540) / 10.0f;
-                            newEnemy.y = 5.0f + (rand() % 540) / 10.0f;
-                        } while (sqrtf((newEnemy.x - player.x)*(newEnemy.x - player.x) + (newEnemy.y - player.y)*(newEnemy.y - player.y)) < 15.0f);
-                        newEnemy.active = true;
-                        newEnemy.speed = 1.5f + (rand() % 100) / 100.0f;
-                        newEnemy.distance = 0;
-                        newEnemy.spriteIndex = rand() % 5;
-                        if (newEnemy.spriteIndex == 4) { newEnemy.health = 4; } else { newEnemy.health = 1; }
-                        newEnemy.hurtTimer = 0;
-                        enemies.push_back(newEnemy);
-                    }
                 }
                 break;
             }
@@ -2263,6 +2268,25 @@ void RenderGame(HDC hdc) {
         SelectObject(hdc, hOldConsFont);
         DeleteObject(hConsFont);
     }
+    
+    // Stats Display
+    if (showStats) {
+        int meleeCount = 0, shooterCount = 0;
+        for (auto& e : enemies) {
+            if (e.active) {
+                if (e.isShooter) shooterCount++;
+                else meleeCount++;
+            }
+        }
+        int totalEnemies = meleeCount + shooterCount;
+        
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(0, 0, 0));
+        wchar_t statText[512];
+        swprintf(statText, 512, L"FPS: %d  |  Enemies: %d (Melee: %d/%d, Shooters: %d/%d)  |  Pos: (%.1f, %.1f)  |  Cap Timer: %.1f", 
+                 currentFPS, totalEnemies, meleeCount, maxMeleeSpawn, shooterCount, maxShooterSpawn, player.x, player.y, spawnCapTimer);
+        TextOutW(hdc, 10, SCREEN_HEIGHT - 50, statText, (int)wcslen(statText));
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2270,25 +2294,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE: {
             backBufferPixels = new DWORD[SCREEN_WIDTH * SCREEN_HEIGHT];
             zBuffer = new float[SCREEN_WIDTH * SCREEN_HEIGHT];
-            SetTimer(hwnd, 1, 16, NULL);
-            return 0;
-        }
-        case WM_TIMER: {
-            static DWORD lastTime = GetTickCount();
-            DWORD currentTime = GetTickCount();
-            float deltaTime = (currentTime - lastTime) / 1000.0f;
-            lastTime = currentTime;
-            if (deltaTime > 0.1f) deltaTime = 0.1f;
-            
-            if (scoreTimer > 0) scoreTimer -= deltaTime;
-            if (screenShakeTimer > 0) screenShakeTimer -= deltaTime;
-            
-            UpdatePlayer(deltaTime);
-            UpdateEnemies(deltaTime);
-            UpdateClouds(deltaTime);
-            UpdateGun(deltaTime);
-            UpdateBullets(deltaTime);
-            InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
         case WM_PAINT: {
@@ -2320,6 +2325,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                 score = _wtoi(numStr.c_str());
                             }
                         }
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer == L"stat on") {
+                        showStats = true;
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer == L"stat off") {
+                        showStats = false;
                         consoleBuffer = L"";
                     } else {
                         consoleBuffer = L""; // Clear unknown command
@@ -2443,9 +2454,42 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     _beginthread(BackgroundMusic, 0, NULL);
     
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    DWORD lastTime = GetTickCount();
+    
+    while (true) {
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                return (int)msg.wParam;
+            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        
+        DWORD currentTime = GetTickCount();
+        float deltaTime = (currentTime - lastTime) / 1000.0f;
+        lastTime = currentTime;
+        if (deltaTime > 0.1f) deltaTime = 0.1f;
+        if (deltaTime < 0.001f) deltaTime = 0.001f;
+        
+        if (scoreTimer > 0) scoreTimer -= deltaTime;
+        if (screenShakeTimer > 0) screenShakeTimer -= deltaTime;
+        
+        fpsCounter++;
+        if (currentTime - fpsLastTime >= 1000) {
+            currentFPS = fpsCounter;
+            fpsCounter = 0;
+            fpsLastTime = currentTime;
+        }
+        
+        UpdatePlayer(deltaTime);
+        UpdateEnemies(deltaTime);
+        UpdateClouds(deltaTime);
+        UpdateGun(deltaTime);
+        UpdateBullets(deltaTime);
+        
+        HDC hdc = GetDC(hMainWnd);
+        RenderGame(hdc);
+        ReleaseDC(hMainWnd, hdc);
     }
-    return (int)msg.wParam;
+    return 0;
 }
