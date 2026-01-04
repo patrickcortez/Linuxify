@@ -103,6 +103,24 @@ void PlaySlamSound() {
     mciSendStringW(L"play slamsfx from 0", NULL, 0, NULL);
 }
 
+void PlayMarshallAttackSound() {
+    static wchar_t mashPath[MAX_PATH] = {0};
+    if (mashPath[0] == 0) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(mashPath, MAX_PATH, L"\"%ls\\assets\\sound-effects\\hammer-effect.mp3\"", exePath);
+    }
+    
+    wchar_t cmd[512];
+    mciSendStringW(L"close mashsfx", NULL, 0, NULL);
+    swprintf(cmd, 512, L"open %ls type mpegvideo alias mashsfx", mashPath);
+    mciSendStringW(cmd, NULL, 0, NULL);
+    mciSendStringW(L"setaudio mashsfx volume to 1000", NULL, 0, NULL);
+    mciSendStringW(L"play mashsfx from 0", NULL, 0, NULL);
+}
+
 void BackgroundMusic(void* arg) {
     const int E2 = 40;
     const int E3 = 52; 
@@ -239,6 +257,11 @@ struct Enemy {
     bool isShooter;
     float fireTimer;
     float firingTimer;
+    bool isMarshall;
+    int state; // 0=Seek, 1=Chase, 2=Retreat
+    float healTimer;
+    float summonTimer;
+    float attackTimer;
 };
 
 struct EnemyBullet {
@@ -246,6 +269,7 @@ struct EnemyBullet {
     float dirX, dirY;
     float speed;
     bool active;
+    bool isLaser; // true = claw laser (10 dmg), false = enemy bullet (5 dmg)
 };
 
 struct TreeSprite {
@@ -266,7 +290,8 @@ struct Bullet {
     bool active;
 };
 
-enum ClawState { CLAW_DORMANT, CLAW_IDLE, CLAW_CHASING, CLAW_SLAMMING, CLAW_RISING, CLAW_RETURNING };
+enum ClawState { CLAW_DORMANT, CLAW_IDLE, CLAW_CHASING, CLAW_SLAMMING, CLAW_RISING, CLAW_RETURNING, 
+                 CLAW_PH2_AWAKEN, CLAW_PH2_DROPPING, CLAW_PH2_ANCHORED, CLAW_PH2_DEAD, CLAW_PH2_RISING };
 
 struct Claw {
     float x, y;
@@ -276,6 +301,12 @@ struct Claw {
     float timer;
     int index;
     bool dealtDamage;
+    // Phase 2
+    int health;
+    int animFrame;
+    float animTimer;
+    bool hurt;
+    float hurtTimer;
 };
 
 // --- 3D Engine Structs (Ported from LoneMaker) ---
@@ -398,6 +429,38 @@ float spawnCapTimer = 20.0f;
 const int MELEE_CAP = 15;
 const int SHOOTER_CAP = 5;
 
+bool phase2Active = false;
+bool forceFieldActive = false;
+bool enragedMode = false;
+int phase2BossFrame = 0;
+float phase2BossAnimTimer = 0;
+DWORD* spirePhase2Pixels[3];
+int spirePhase2W[3], spirePhase2H[3];
+
+DWORD* clawPhase2Pixels[4];
+int clawPhase2W[4], clawPhase2H[4];
+DWORD* clawHurtPixels = nullptr;
+int clawHurtW = 0, clawHurtH = 0;
+
+int activeLaserClaw = -1;
+int lastActiveClaw = 5; // For sequential ordering
+float laserTimer = 0;
+
+DWORD* laserPixels = nullptr;
+int laserW = 0, laserH = 0;
+
+int playerDamage = 1;
+bool godMode = false;
+bool marshallSpawned = false;
+DWORD* marshallPixels = nullptr;
+int marshallW = 0, marshallH = 0;
+DWORD* marshallHurtPixels = nullptr;
+int marshallHurtW = 0, marshallHurtH = 0;
+// Marshall UI
+bool marshallHealthBarActive = false;
+int marshallHP = 0;
+int marshallMaxHP = 35;
+
 bool consoleActive = false;
 std::wstring consoleBuffer = L"";
 bool showStats = false;
@@ -517,6 +580,10 @@ DWORD* clawDormantPixels = NULL;
 int clawDormantW = 0, clawDormantH = 0;
 DWORD* clawActivePixels = NULL;
 int clawActiveW = 0, clawActiveH = 0;
+DWORD* clawActivatingPixels = NULL;
+int clawActivatingW = 0, clawActivatingH = 0;
+float preBossPulseTimer = 0;
+bool preBossPulseFrame = false;
 
 Claw claws[6];
 int activeClawIndex = 0;
@@ -618,6 +685,43 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\fireball.bmp", exePath);
     fireballPixels = LoadBMPPixels(path, &fireballW, &fireballH);
     
+    // Load Boss Phase 2 Assets
+    for(int i=0; i<3; i++) {
+        swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_phase2\\spire_frame%d.bmp", exePath, i+1);
+        spirePhase2Pixels[i] = LoadBMPPixels(path, &spirePhase2W[i], &spirePhase2H[i]);
+        if(!spirePhase2Pixels[i]) {
+            ShowError(L"Missing Ph2 Spire Asset!");
+            spirePhase2Pixels[i] = spirePixels; 
+            spirePhase2W[i] = spireW;
+            spirePhase2H[i] = spireH;
+        }
+    }
+    
+    // Load Claw Phase 2 Assets
+    for(int i=0; i<4; i++) {
+        swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_awaken\\claw_frame%d.bmp", exePath, i+1);
+        clawPhase2Pixels[i] = LoadBMPPixels(path, &clawPhase2W[i], &clawPhase2H[i]);
+        if(!clawPhase2Pixels[i]) {
+             ShowError(L"Missing Ph2 Claw Asset!");
+             clawPhase2Pixels[i] = clawDormantPixels; // Fallback
+             clawPhase2W[i] = clawDormantW;
+             clawPhase2H[i] = clawDormantH;
+        }
+    }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_awaken\\claw_hurt.bmp", exePath);
+    clawHurtPixels = LoadBMPPixels(path, &clawHurtW, &clawHurtH);
+    if(!clawHurtPixels) {
+         ShowError(L"Missing Claw Hurt Asset!");
+         clawHurtPixels = clawDormantPixels; // Fallback
+         clawHurtW = clawDormantW;
+         clawHurtH = clawDormantH;
+    }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_attack\\laser.bmp", exePath);
+    laserPixels = LoadBMPPixels(path, &laserW, &laserH);
+    if(!laserPixels) ShowError(L"Missing Laser Asset!");
+    
     swprintf(path, MAX_PATH, L"%ls\\assets\\items\\Medkit.bmp", exePath);
     medkitPixels = LoadBMPPixels(path, &medkitW, &medkitH);
     
@@ -626,6 +730,15 @@ void TryLoadAssets() {
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_active.bmp", exePath);
     clawActivePixels = LoadBMPPixels(path, &clawActiveW, &clawActiveH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_activating.bmp", exePath);
+    clawActivatingPixels = LoadBMPPixels(path, &clawActivatingW, &clawActivatingH);
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\Marshall\\marshall.bmp", exePath);
+    marshallPixels = LoadBMPPixels(path, &marshallW, &marshallH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\Marshall\\marshall_hurt.bmp", exePath);
+    marshallHurtPixels = LoadBMPPixels(path, &marshallHurtW, &marshallHurtH);
 
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
 }
@@ -752,6 +865,7 @@ void SpawnEnemies() {
         enemy.isShooter = false;
         enemy.fireTimer = 0;
         enemy.firingTimer = 0;
+        enemy.isMarshall = false; // Fix uninitialized
         enemies.push_back(enemy);
     }
 }
@@ -1096,7 +1210,7 @@ void RenderSprites() {
     struct SpriteRender { float x, y, dist; int type; float scale; int variant; bool isHurt; float height; bool isFiring; };
     std::vector<SpriteRender> allSprites;
     
-    DWORD* sPix;
+    DWORD* sPix = NULL;
     int sW, sH;
     if (bossDead) {
         sPix = spireDeathPixels;
@@ -1106,14 +1220,21 @@ void RenderSprites() {
         sPix = spireHurtPixels;
         sW = spireHurtW;
         sH = spireHurtH;
-    } else if (bossActive) {
-        sPix = spireAwakePixels;
-        sW = spireAwakeW;
-        sH = spireAwakeH;
-    } else {
-        sPix = spirePixels;
-        sW = spireW;
-        sH = spireH;
+    }
+    if (sPix == NULL) {
+        if (phase2Active && !enragedMode) {
+            sPix = spirePhase2Pixels[phase2BossFrame];
+            sW = spirePhase2W[phase2BossFrame];
+            sH = spirePhase2H[phase2BossFrame];
+        } else if (bossActive && !bossDead) {
+            sPix = spireAwakePixels;
+            sW = spireAwakeW;
+            sH = spireAwakeH;
+        } else {
+            sPix = spirePixels;
+            sW = spireW;
+            sH = spireH;
+        }
     }
     
     float dx = 32.0f - player.x;
@@ -1150,7 +1271,9 @@ void RenderSprites() {
             float dx = enemy.x - player.x;
             float dy = enemy.y - player.y;
             float dist = sqrtf(dx*dx + dy*dy);
-            if (enemy.isShooter) {
+            if (enemy.isMarshall) {
+                allSprites.push_back({enemy.x, enemy.y, dist, 9, 2.5f, (enemy.hurtTimer > 0 ? 1 : 0), false, 0.0f, false});
+            } else if (enemy.isShooter) {
                 allSprites.push_back({enemy.x, enemy.y, dist, 6, 1.0f, 0, false, 0.0f, enemy.firingTimer > 0});
             } else {
                 allSprites.push_back({enemy.x, enemy.y, dist, 1, 1.0f, enemy.spriteIndex, (enemy.spriteIndex == 4 && enemy.hurtTimer > 0), 0.0f, false});
@@ -1163,7 +1286,8 @@ void RenderSprites() {
             float dx = eb.x - player.x;
             float dy = eb.y - player.y;
             float dist = sqrtf(dx*dx + dy*dy);
-            allSprites.push_back({eb.x, eb.y, dist, 7, 0.5f, 0, false, 0.0f, false});
+            int bulletType = eb.isLaser ? 8 : 7; // 8 = laser, 7 = enemy bullet
+            allSprites.push_back({eb.x, eb.y, dist, bulletType, 0.5f, 0, false, 0.0f, false});
         }
     }
     
@@ -1171,10 +1295,39 @@ void RenderSprites() {
         float cdx = claws[i].x - player.x;
         float cdy = claws[i].y - player.y;
         float cdist = sqrtf(cdx*cdx + cdy*cdy);
-        int clawVariant = (claws[i].state == CLAW_DORMANT || bossDead) ? 0 : 1;
+        int clawVariant = 0;
+        bool isClawHurt = false;
+        
+        if (phase2Active && !enragedMode) {
+            if (claws[i].state == CLAW_PH2_DEAD) {
+                clawVariant = -1;
+            } else {
+                clawVariant = claws[i].animFrame;
+                isClawHurt = (claws[i].hurtTimer > 0);
+            }
+        } else if (preBossPhase) {
+            clawVariant = 3;
+        } else if (!bossActive && !bossDead) {
+            int activatedClaws = score / 50;
+            if (activatedClaws > 6) activatedClaws = 6;
+            if (i < activatedClaws) {
+                clawVariant = 2;
+            } else {
+                clawVariant = 0;
+            }
+        } else {
+            clawVariant = (claws[i].state == CLAW_DORMANT || bossDead) ? 0 : 1;
+        }
         
         float clawHeight = 6.0f;
-        if (claws[i].state == CLAW_SLAMMING) {
+        if (claws[i].state == CLAW_PH2_ANCHORED) {
+            clawHeight = 0.5f; // Ground level
+        } else if (claws[i].state == CLAW_PH2_DROPPING) {
+            float progress = 1.0f - (claws[i].timer / 2.0f); // 0 to 1
+            if (progress < 0) progress = 0; if (progress > 1) progress = 1;
+            // Lerp from 6.0 to 0.5
+            clawHeight = 6.0f * (1.0f - progress) + 0.5f * progress;
+        } else if (claws[i].state == CLAW_SLAMMING) {
             float progress = 1.0f - (claws[i].timer / 0.5f);
             if (progress < 0) progress = 0;
             if (progress > 1) progress = 1;
@@ -1186,9 +1339,15 @@ void RenderSprites() {
             clawHeight = 6.0f * progress;
         } else if (claws[i].state == CLAW_RETURNING) {
             clawHeight = 6.0f;
+        } else if (claws[i].state == CLAW_PH2_RISING) {
+            float progress = 1.0f - (claws[i].timer / 2.0f); // 0 to 1 over 2s
+            if (progress < 0) progress = 0; if (progress > 1) progress = 1;
+            clawHeight = 0.5f * (1.0f - progress) + 6.0f * progress; // 0.5 to 6.0
+        } else if (claws[i].state == CLAW_PH2_DEAD) {
+            clawHeight = 6.0f;
         }
         
-        allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 8.0f, clawVariant, false, clawHeight, false});
+        allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 8.0f, clawVariant, isClawHurt, clawHeight, false});
     }
     
     std::sort(allSprites.begin(), allSprites.end(), [](const SpriteRender& a, const SpriteRender& b) {
@@ -1213,10 +1372,32 @@ void RenderSprites() {
         } else if (sp.type == 4) {
             RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 5) {
-            if (sp.variant == 0) {
-                RenderSprite(clawDormantPixels, clawDormantW, clawDormantH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            if (phase2Active && sp.variant >= 0 && !enragedMode) {
+                if (sp.isHurt) {
+                    RenderSprite(clawHurtPixels, clawHurtW, clawHurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                } else {
+                    int idx = sp.variant;
+                    if (idx < 0) idx = 0; if (idx > 3) idx = 3;
+                    RenderSprite(clawPhase2Pixels[idx], clawPhase2W[idx], clawPhase2H[idx], sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                }
             } else {
-                RenderSprite(clawActivePixels, clawActiveW, clawActiveH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                if (sp.variant == 0 || sp.variant == -1) {
+                    RenderSprite(clawDormantPixels, clawDormantW, clawDormantH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                } else if (sp.variant == 2) {
+                    if (clawActivatingPixels) {
+                        RenderSprite(clawActivatingPixels, clawActivatingW, clawActivatingH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                    } else {
+                        RenderSprite(clawActivePixels, clawActiveW, clawActiveH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                    }
+                } else if (sp.variant == 3) {
+                    if (preBossPulseFrame && clawActivatingPixels) {
+                        RenderSprite(clawActivatingPixels, clawActivatingW, clawActivatingH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                    } else {
+                        RenderSprite(clawActivePixels, clawActiveW, clawActiveH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                    }
+                } else {
+                    RenderSprite(clawActivePixels, clawActiveW, clawActiveH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+                }
             }
         } else if (sp.type == 6) {
             if (sp.isFiring) {
@@ -1224,8 +1405,20 @@ void RenderSprites() {
             } else {
                 RenderSprite(gunnerPixels, gunnerW, gunnerH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             }
+        } else if (sp.type == 9) { // Marshall
+            if (sp.variant == 1) {
+                RenderSprite(marshallHurtPixels, marshallHurtW, marshallHurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else {
+                RenderSprite(marshallPixels, marshallW, marshallH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
         } else if (sp.type == 7) {
             RenderSprite(bulletPixels, bulletW, bulletH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+        } else if (sp.type == 8) {
+            if (laserPixels) {
+                RenderSprite(laserPixels, laserW, laserH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else {
+                RenderSprite(bulletPixels, bulletW, bulletH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
         }
     }
 }
@@ -1297,9 +1490,145 @@ void RenderClouds() {
 }
 
 void UpdateEnemies(float deltaTime) {
+    marshallHealthBarActive = false; // Reset frame flag
     for (auto& enemy : enemies) {
         if (!enemy.active) continue;
         
+        // Marshall UI Sync
+        if (enemy.isMarshall) {
+             marshallHealthBarActive = true;
+             marshallHP = enemy.health;
+        }
+        
+        // Marshall AI
+        if (enemy.isMarshall) {
+             // Heal Logic: Retreat if HP < 5, Return to Chase if HP >= 35
+             if (enemy.health < 5 && enemy.state != 2) {
+                 enemy.state = 2; // Retreat
+             }
+             if (enemy.health >= 35 && enemy.state == 2) {
+                 enemy.state = 1; // Return to Chase
+             }
+             
+             if (enemy.state == 2) { // Retreat & Heal
+                 // Move AWAY from player
+                 float dx = enemy.x - player.x; 
+                 float dy = enemy.y - player.y;
+                 float dist = sqrtf(dx*dx + dy*dy);
+                 if (dist > 0) {
+                     float retreatSpeed = 7.5f; // Player Sprint (6.5) + 1
+                     float mx = (dx/dist) * retreatSpeed * deltaTime;
+                     float my = (dy/dist) * retreatSpeed * deltaTime;
+                     
+                     bool moved = false;
+                     // Try standard retreat (sliding allowed) with Boundary Check (4 unit padding)
+                     float nextX = enemy.x + mx;
+                     float nextY = enemy.y + my;
+                     
+                     if (nextX >= 4.0f && nextX <= MAP_WIDTH - 4.0f && worldMap[(int)nextX][(int)enemy.y] == 0) {
+                          enemy.x = nextX; moved = true; 
+                     }
+                     if (nextY >= 4.0f && nextY <= MAP_HEIGHT - 4.0f && worldMap[(int)enemy.x][(int)nextY] == 0) { 
+                          enemy.y = nextY; moved = true; 
+                     }
+                     
+                     // Corner Escape: If stuck, try moving perpendicular
+                     if (!moved) {
+                         // Try Left Perpendicular (-y, x)
+                         float px = -my;
+                         float py = mx;
+                         if (worldMap[(int)(enemy.x + px)][(int)(enemy.y + py)] == 0) {
+                             enemy.x += px; enemy.y += py;
+                         } else {
+                             // Try Right Perpendicular (y, -x)
+                             px = my; py = -mx;
+                             if (worldMap[(int)(enemy.x + px)][(int)(enemy.y + py)] == 0) {
+                                 enemy.x += px; enemy.y += py;
+                             }
+                         }
+                     }
+                 }
+                 
+                 enemy.healTimer += deltaTime;
+                 if (enemy.healTimer >= 2.0f) {
+                     enemy.health++;
+                     enemy.healTimer = 0;
+                 }
+                 continue; // Skip standard logic
+             } else if (enemy.state == 0) { // Seek Horde
+                 // Find average position of nearby enemies
+                 float avgX = 0, avgY = 0;
+                 int count = 0;
+                 for(auto& other : enemies) {
+                     if (!other.active || other.isMarshall) continue;
+                     float d = sqrtf((other.x - enemy.x)*(other.x - enemy.x) + (other.y - enemy.y)*(other.y - enemy.y));
+                     if (d < 10.0f) {
+                         avgX += other.x;
+                         avgY += other.y;
+                         count++;
+                     }
+                 }
+                 
+                 if (count > 2) {
+                     avgX /= count;
+                     avgY /= count;
+                     float dx = avgX - enemy.x;
+                     float dy = avgY - enemy.y;
+                     float dist = sqrtf(dx*dx + dy*dy);
+                     
+                     if (dist > 1.0f) {
+                         // Move to horde
+                         float mx = (dx/dist) * enemy.speed * deltaTime;
+                         float my = (dy/dist) * enemy.speed * deltaTime;
+                         if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0) enemy.x += mx;
+                         if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0) enemy.y += my;
+                     } else {
+                         enemy.state = 1; // Blended in, now chase
+                     }
+                 } else {
+                     enemy.state = 1; // No horde found, chase
+                 }
+                 continue; // Skip standard logic
+             } else { // Chase (State 1) - Falls through to standard move, but handle Attacks
+                 float dx = player.x - enemy.x;
+                 float dy = player.y - enemy.y;
+                 float dist = sqrtf(dx*dx + dy*dy);
+                 
+                 if (dist < 3.0f && enemy.attackTimer <= 0) {
+                     // AOE Attack
+                     if (!godMode) player.health -= 20;
+                     PlayMarshallAttackSound();
+                     screenShakeTimer = 1.0f; // Violent shake
+                     playerHurtTimer = 0.5f;
+                     
+                     // Knockback
+                     float kx = (player.x - enemy.x) / dist;
+                     float ky = (player.y - enemy.y) / dist;
+                     player.x += kx * 2.0f;
+                     player.y += ky * 2.0f;
+                     
+                     enemy.attackTimer = 2.0f; // Cooldown
+                 }
+                 if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
+                 
+                 // Summoning
+                 enemy.summonTimer -= deltaTime;
+                 if (enemy.summonTimer <= 0) {
+                     enemy.summonTimer = 10.0f;
+                     for (int k=0; k<5; k++) {
+                         Enemy s;
+                         s.x = enemy.x + (rand()%200 - 100)/50.0f;
+                         s.y = enemy.y + (rand()%200 - 100)/50.0f;
+                         if (worldMap[(int)s.x][(int)s.y] == 0) {
+                             s.active = true; s.health = 1; s.speed = 3.0f; s.spriteIndex = rand()%4; // Melee
+                             s.isShooter = false; s.isMarshall = false;
+                             enemies.push_back(s);
+                         }
+                     }
+                 }
+             }
+        }
+
         float dx = player.x - enemy.x;
         float dy = player.y - enemy.y;
         float dist = sqrtf(dx*dx + dy*dy);
@@ -1320,6 +1649,7 @@ void UpdateEnemies(float deltaTime) {
                     eb.dirY = edy / edist;
                     eb.speed = 8.0f;
                     eb.active = true;
+                    eb.isLaser = false;
                     enemyBullets.push_back(eb);
                     
                     enemy.fireTimer = 2.0f;
@@ -1344,8 +1674,10 @@ void UpdateEnemies(float deltaTime) {
             }
             
             if (dist < 1.0f) {
-                if (enemy.spriteIndex == 4) player.health -= 3;
-                else player.health -= 1;
+                if (!godMode) {
+                    if (enemy.spriteIndex == 4) player.health -= 3;
+                    else player.health -= 1;
+                }
                 
                 playerHurtTimer = 0.3f;
                 if (player.health <= 0) {
@@ -1358,6 +1690,8 @@ void UpdateEnemies(float deltaTime) {
                         bossActive = false;
                         preBossPhase = false;
                         bossHealth = 200;
+                        phase2Active = false;
+                        enragedMode = false;
                         enemies.clear();
                         fireballs.clear();
                         InitClaws();
@@ -1391,7 +1725,8 @@ void UpdateEnemies(float deltaTime) {
         float pdx = player.x - eb.x;
         float pdy = player.y - eb.y;
         if (sqrtf(pdx*pdx + pdy*pdy) < 0.5f) {
-            player.health -= 5;
+            int dmg = eb.isLaser ? 10 : 5;
+            if (!godMode) player.health -= dmg;
             playerHurtTimer = 0.3f;
             eb.active = false;
             
@@ -1401,14 +1736,20 @@ void UpdateEnemies(float deltaTime) {
                 player.x = 10.0f;
                 player.y = 32.0f;
                 
-                if (bossActive) {
-                    bossActive = false;
-                    preBossPhase = false;
-                    bossHealth = 200;
-                    enemies.clear();
-                    fireballs.clear();
-                    InitClaws();
-                }
+                // Reset Boss & Game State
+                bossActive = false;
+                preBossPhase = false;
+                preBossTimer = 0;
+                preBossPulseTimer = 0;
+                bossHealth = 200;
+                phase2Active = false;
+                enragedMode = false;
+                enemies.clear();
+                fireballs.clear();
+                enemies.clear();
+                fireballs.clear();
+                InitClaws();
+                marshallSpawned = false; // Reset Marshall
                 SpawnEnemies();
             }
         }
@@ -1460,6 +1801,7 @@ void UpdateEnemies(float deltaTime) {
                     enemy.isShooter = false;
                     enemy.fireTimer = 0;
                     enemy.firingTimer = 0;
+                    enemy.isMarshall = false; // Fix uninitialized
                     enemies.push_back(enemy);
                 }
             }
@@ -1483,6 +1825,7 @@ void UpdateEnemies(float deltaTime) {
                     shooter.isShooter = true;
                     shooter.fireTimer = 2.0f;
                     shooter.firingTimer = 0;
+                    shooter.isMarshall = false; // Fix uninitialized
                     enemies.push_back(shooter);
                 }
             }
@@ -1491,6 +1834,13 @@ void UpdateEnemies(float deltaTime) {
     
     if (preBossPhase && !bossActive) {
         preBossTimer -= deltaTime;
+        
+        preBossPulseTimer += deltaTime;
+        if (preBossPulseTimer >= 1.0f) {
+            preBossPulseTimer = 0;
+            preBossPulseFrame = !preBossPulseFrame;
+        }
+        
         if (preBossTimer <= 0) {
             preBossPhase = false;
             bossActive = true;
@@ -1527,102 +1877,340 @@ void UpdateEnemies(float deltaTime) {
     
     // Boss Logic
     if (bossActive) { 
-        if (bossEventTimer > 0) bossEventTimer -= deltaTime;
-        
-        fireballSpawnTimer -= deltaTime;
-        if (fireballSpawnTimer <= 0) {
-            Fireball fb;
-            fb.x = 32.0f;
-            fb.y = 32.0f;
-            float dx = player.x - 32.0f;
-            float dy = player.y - 32.0f;
-            float dist = sqrtf(dx*dx + dy*dy);
-            if(dist > 0) {
-                fb.dirX = dx/dist;
-                fb.dirY = dy/dist;
-            } else {
-                fb.dirX = 1; fb.dirY = 0;
-            }
-            fb.speed = 5.0f; // Slow, dodgeable
-            fb.active = true;
-            fireballs.push_back(fb);
+        // Trigger Phase 2
+        if (!phase2Active && bossHealth <= 100) {
+            phase2Active = true;
+            forceFieldActive = true;
+            enemies.clear(); // Kill all minions
+            fireballs.clear();
             
-            fireballSpawnTimer = 2.0f; // Every 2 seconds
+            // Setup Claws for Phase 2
+            for(int i=0; i<6; i++) {
+                claws[i].state = CLAW_PH2_AWAKEN;
+                claws[i].animFrame = 0;
+                claws[i].animTimer = 0;
+                claws[i].health = 50;
+                claws[i].x = claws[i].homeX;
+                claws[i].y = claws[i].homeY;
+                claws[i].hurt = false;
+                claws[i].hurtTimer = 0;
+            }
+            activeClawIndex = -1; // Reset active claw
+            lastActiveClaw = 5;
         }
-        
-        for(int i = 0; i < 6; i++) {
-            Claw& claw = claws[i];
+
+        if (phase2Active) {
+            // Phase 2 Logic
+            phase2BossAnimTimer += deltaTime;
+            if (phase2BossAnimTimer >= 0.5f) {
+                phase2BossFrame = (phase2BossFrame + 1) % 3;
+                phase2BossAnimTimer = 0;
+            }
             
-            if(claw.state == CLAW_CHASING) {
-                float dx = player.x - claw.x;
-                float dy = player.y - claw.y;
-                float dist = sqrtf(dx*dx + dy*dy);
-                if(dist > 0.5f) {
-                    claw.x += (dx/dist) * 8.0f * deltaTime;
-                    claw.y += (dy/dist) * 8.0f * deltaTime;
-                }
-                claw.timer -= deltaTime;
-                if(claw.timer <= 0) {
-                    claw.state = CLAW_SLAMMING;
-                    claw.timer = 0.5f;
-                    claw.groundY = claw.y;
-                    claw.dealtDamage = false;
+            int livingClaws = 0;
+            for(int i=0; i<6; i++) {
+                Claw& c = claws[i];
+                if (c.state != CLAW_PH2_DEAD) livingClaws++;
+                
+                if (c.hurtTimer > 0) c.hurtTimer -= deltaTime;
+                
+                if (c.state == CLAW_PH2_AWAKEN) {
+                    c.animTimer += deltaTime;
+                    if (c.animTimer >= 0.5f) {
+                        c.animFrame++;
+                        c.animTimer = 0;
+                        if (c.animFrame >= 4) {
+                            c.animFrame = 3; // Stay on last frame
+                            c.state = CLAW_IDLE; // Wait for selection
+                        }
+                    }
+                } else if (c.state == CLAW_PH2_DROPPING) {
+                    c.timer -= deltaTime;
+                    if (c.timer <= 0) {
+                        c.state = CLAW_PH2_ANCHORED;
+                        c.timer = 10.0f; // Anchor time
+                    }
+                } else if (c.state == CLAW_PH2_ANCHORED) {
+                    c.timer -= deltaTime;
+                    laserTimer += deltaTime;
+                    if (laserTimer >= 0.5f) { // Rapid burst every 0.5s
+                        // Fire laser projectile at player
+                        float dx = player.x - c.x;
+                        float dy = player.y - c.y;
+                        float dist = sqrtf(dx*dx + dy*dy);
+                        if (dist > 0.1f) {
+                            EnemyBullet laser;
+                            laser.x = c.x;
+                            laser.y = c.y;
+                            laser.dirX = dx / dist;
+                            laser.dirY = dy / dist;
+                            laser.speed = 15.0f; // Fast laser
+                            laser.active = true;
+                            laser.isLaser = true;
+                            enemyBullets.push_back(laser);
+                        }
+                        laserTimer = 0;
+                    }
+                    if (c.timer <= 0) {
+                        c.state = CLAW_PH2_RISING; // Rising animation
+                        c.timer = 2.0f; // 2s rise
+                        c.x = c.homeX;
+                        c.y = c.homeY;
+                        activeLaserClaw = -1;
+                    }
+                } else if (c.state == CLAW_PH2_RISING) {
+                    c.timer -= deltaTime;
+                    if (c.timer <= 0) {
+                        c.state = CLAW_IDLE; // Ready for next selection
+                    }
                 }
             }
-            else if(claw.state == CLAW_SLAMMING) {
-                claw.timer -= deltaTime;
-                if(claw.timer <= 0 && !claw.dealtDamage) {
+            
+            if (livingClaws == 0 && !enragedMode) {
+                enragedMode = true;
+                forceFieldActive = false;
+                
+                for(int i = 0; i < 6; i++) {
+                    claws[i].state = CLAW_IDLE;
+                    claws[i].health = 999;
+                    claws[i].x = claws[i].homeX;
+                    claws[i].y = claws[i].homeY;
+                }
+            }
+            
+            if (enragedMode) {
+                forceFieldActive = false;
+                
+                fireballSpawnTimer -= deltaTime;
+                if (fireballSpawnTimer <= 0) {
+                    Fireball fb;
+                    fb.x = 32.0f;
+                    fb.y = 32.0f;
+                    float dx = player.x - 32.0f;
+                    float dy = player.y - 32.0f;
+                    float dist = sqrtf(dx*dx + dy*dy);
+                    if(dist > 0) {
+                        fb.dirX = dx/dist;
+                        fb.dirY = dy/dist;
+                    } else {
+                        fb.dirX = 1; fb.dirY = 0;
+                    }
+                    fb.speed = 8.0f;
+                    fb.active = true;
+                    fireballs.push_back(fb);
+                    
+                    fireballSpawnTimer = 0.8f;
+                }
+                
+                for(int i = 0; i < 6; i++) {
+                    Claw& claw = claws[i];
+                    
+                    if(claw.state == CLAW_IDLE) {
+                        claw.state = CLAW_CHASING;
+                        claw.timer = 2.0f;
+                    }
+                    else if(claw.state == CLAW_CHASING) {
+                        float dx = player.x - claw.x;
+                        float dy = player.y - claw.y;
+                        float dist = sqrtf(dx*dx + dy*dy);
+                        if(dist > 0.5f) {
+                            claw.x += (dx/dist) * 12.0f * deltaTime;
+                            claw.y += (dy/dist) * 12.0f * deltaTime;
+                        }
+                        claw.timer -= deltaTime;
+                        if(claw.timer <= 0) {
+                            claw.state = CLAW_SLAMMING;
+                            claw.timer = 0.3f;
+                            claw.groundY = claw.y;
+                            claw.dealtDamage = false;
+                        }
+                    }
+                    else if(claw.state == CLAW_SLAMMING) {
+                        claw.timer -= deltaTime;
+                        if(claw.timer <= 0 && !claw.dealtDamage) {
+                            float dx = player.x - claw.x;
+                            float dy = player.y - claw.y;
+                            float dist = sqrtf(dx*dx + dy*dy);
+                            float aoeRadius = 5.0f + (rand() % 5);
+                            if(dist < aoeRadius) {
+                                if (!godMode) player.health -= 15;
+                                playerHurtTimer = 0.3f;
+                                if(player.health <= 0) {
+                                    score = 0;
+                                    player.health = 100;
+                                    player.x = 10.0f;
+                                    player.y = 32.0f;
+                                    bossActive = false;
+                                    preBossPhase = false;
+                                    bossHealth = 200;
+                                    enemies.clear();
+                                    fireballs.clear();
+                                    InitClaws();
+                                    SpawnEnemies();
+                                    phase2Active = false;
+                                    forceFieldActive = false;
+                                    enragedMode = false;
+                                }
+                            }
+                            claw.dealtDamage = true;
+                            claw.state = CLAW_RISING;
+                            claw.timer = 0.5f;
+                            PlaySlamSound();
+                            screenShakeTimer = 1.0f;
+                            screenShakeIntensity = 60.0f;
+                        }
+                    }
+                    else if(claw.state == CLAW_RISING) {
+                        claw.timer -= deltaTime;
+                        if(claw.timer <= 0) {
+                            claw.state = CLAW_RETURNING;
+                        }
+                    }
+                    else if(claw.state == CLAW_RETURNING) {
+                        float dx = claw.homeX - claw.x;
+                        float dy = claw.homeY - claw.y;
+                        float dist = sqrtf(dx*dx + dy*dy);
+                        if(dist > 0.5f) {
+                            claw.x += (dx/dist) * 15.0f * deltaTime;
+                            claw.y += (dy/dist) * 15.0f * deltaTime;
+                        } else {
+                            claw.state = CLAW_IDLE;
+                        }
+                    }
+                }
+            } else if (livingClaws > 0) {
+                forceFieldActive = true;
+            }
+            
+            // Pick new claw to anchor sequentially (only if force field still active)
+            if (activeLaserClaw == -1 && livingClaws > 0 && forceFieldActive) {
+                int attempts = 0;
+                int idx = (lastActiveClaw + 1) % 6;
+                bool found = false;
+                
+                // Find next living claw that is ready (CLAW_IDLE)
+                for(int i=0; i<6; i++) {
+                    if (claws[idx].state == CLAW_PH2_DEAD) {
+                        idx = (idx + 1) % 6;
+                        continue; // Skip dead claws
+                    }
+                    if (claws[idx].state == CLAW_IDLE) {
+                        found = true;
+                        break;
+                    }
+                    idx = (idx + 1) % 6;
+                }
+                
+                if (found) {
+                    activeLaserClaw = idx;
+                    lastActiveClaw = idx;
+                    claws[idx].state = CLAW_PH2_DROPPING;
+                    claws[idx].timer = 2.0f; // Drop time
+                }
+            }
+
+            
+        } else {
+            // Phase 1 Logic
+            if (bossEventTimer > 0) bossEventTimer -= deltaTime;
+            
+            fireballSpawnTimer -= deltaTime;
+            if (fireballSpawnTimer <= 0) {
+                Fireball fb;
+                fb.x = 32.0f;
+                fb.y = 32.0f;
+                float dx = player.x - 32.0f;
+                float dy = player.y - 32.0f;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if(dist > 0) {
+                    fb.dirX = dx/dist;
+                    fb.dirY = dy/dist;
+                } else {
+                    fb.dirX = 1; fb.dirY = 0;
+                }
+                fb.speed = 5.0f; 
+                fb.active = true;
+                fireballs.push_back(fb);
+                
+                fireballSpawnTimer = 2.0f; 
+            }
+            
+            for(int i = 0; i < 6; i++) {
+                Claw& claw = claws[i];
+                
+                if(claw.state == CLAW_CHASING) {
                     float dx = player.x - claw.x;
                     float dy = player.y - claw.y;
                     float dist = sqrtf(dx*dx + dy*dy);
-                    float aoeRadius = 4.0f + (rand() % 5);
-                    if(dist < aoeRadius) {
-                        player.health -= 10;
-                        playerHurtTimer = 0.3f;
-                        if(player.health <= 0) {
-                            score = 0;
-                            player.health = 100;
-                            player.x = 10.0f;
-                            player.y = 32.0f;
-                            
-                            bossActive = false;
-                            preBossPhase = false;
-                            bossHealth = 200;
-                            enemies.clear();
-                            fireballs.clear();
-                            InitClaws();
-                            SpawnEnemies();
-                        }
+                    if(dist > 0.5f) {
+                        claw.x += (dx/dist) * 8.0f * deltaTime;
+                        claw.y += (dy/dist) * 8.0f * deltaTime;
                     }
-                    claw.dealtDamage = true;
-                    claw.state = CLAW_RISING;
-                    claw.timer = 1.0f;
-                    PlaySlamSound();
-                    screenShakeTimer = 1.0f;
-                    screenShakeIntensity = 50.0f;
+                    claw.timer -= deltaTime;
+                    if(claw.timer <= 0) {
+                        claw.state = CLAW_SLAMMING;
+                        claw.timer = 0.5f;
+                        claw.groundY = claw.y;
+                        claw.dealtDamage = false;
+                    }
                 }
-            }
-            else if(claw.state == CLAW_RISING) {
-                claw.timer -= deltaTime;
-                if(claw.timer <= 0) {
-                    claw.state = CLAW_RETURNING;
+                else if(claw.state == CLAW_SLAMMING) {
+                    claw.timer -= deltaTime;
+                    if(claw.timer <= 0 && !claw.dealtDamage) {
+                        float dx = player.x - claw.x;
+                        float dy = player.y - claw.y;
+                        float dist = sqrtf(dx*dx + dy*dy);
+                        float aoeRadius = 4.0f + (rand() % 5);
+                        if(dist < aoeRadius) {
+                            if (!godMode) player.health -= 10;
+                            playerHurtTimer = 0.3f;
+                            if(player.health <= 0) {
+                                score = 0;
+                                player.health = 100;
+                                player.x = 10.0f;
+                                player.y = 32.0f;
+                                
+                                bossActive = false;
+                                preBossPhase = false;
+                                bossHealth = 200;
+                                enemies.clear();
+                                fireballs.clear();
+                                InitClaws();
+                                SpawnEnemies();
+                                phase2Active = false;
+                                enragedMode = false;
+                            }
+                        }
+                        claw.dealtDamage = true;
+                        claw.state = CLAW_RISING;
+                        claw.timer = 1.0f;
+                        PlaySlamSound();
+                        screenShakeTimer = 1.0f;
+                        screenShakeIntensity = 50.0f;
+                    }
                 }
-            }
-            else if(claw.state == CLAW_RETURNING) {
-                float dx = claw.homeX - claw.x;
-                float dy = claw.homeY - claw.y;
-                float dist = sqrtf(dx*dx + dy*dy);
-                if(dist > 0.5f) {
-                    claw.x += (dx/dist) * clawReturnSpeed * deltaTime;
-                    claw.y += (dy/dist) * clawReturnSpeed * deltaTime;
-                } else {
-                    claw.x = claw.homeX;
-                    claw.y = claw.homeY;
-                    claw.state = CLAW_IDLE;
-                    
-                    activeClawIndex = (activeClawIndex + 1) % 6;
-                    claws[activeClawIndex].state = CLAW_CHASING;
-                    claws[activeClawIndex].timer = 4.0f;
+                else if(claw.state == CLAW_RISING) {
+                    claw.timer -= deltaTime;
+                    if(claw.timer <= 0) {
+                        claw.state = CLAW_RETURNING;
+                    }
+                }
+                else if(claw.state == CLAW_RETURNING) {
+                    float dx = claw.homeX - claw.x;
+                    float dy = claw.homeY - claw.y;
+                    float dist = sqrtf(dx*dx + dy*dy);
+                    if(dist > 0.5f) {
+                        claw.x += (dx/dist) * clawReturnSpeed * deltaTime;
+                        claw.y += (dy/dist) * clawReturnSpeed * deltaTime;
+                    } else {
+                        claw.x = claw.homeX;
+                        claw.y = claw.homeY;
+                        claw.state = CLAW_IDLE;
+                        
+                        activeClawIndex = (activeClawIndex + 1) % 6;
+                        claws[activeClawIndex].state = CLAW_CHASING;
+                        claws[activeClawIndex].timer = 4.0f;
+                    }
                 }
             }
         }
@@ -1638,7 +2226,7 @@ void UpdateEnemies(float deltaTime) {
         float dx = player.x - fb.x;
         float dy = player.y - fb.y;
         if (sqrtf(dx*dx + dy*dy) < 0.5f) {
-            player.health -= 10;
+            if (!godMode) player.health -= 10;
             playerHurtTimer = 0.3f;
             fb.active = false;
             
@@ -1652,6 +2240,8 @@ void UpdateEnemies(float deltaTime) {
                     bossActive = false;
                     preBossPhase = false;
                     bossHealth = 200;
+                    phase2Active = false;
+                    enragedMode = false;
                     enemies.clear();
                     fireballs.clear();
                     InitClaws();
@@ -1683,7 +2273,7 @@ void UpdateEnemies(float deltaTime) {
     if (bossHurtTimer > 0) bossHurtTimer -= deltaTime;
     if (playerHurtTimer > 0) playerHurtTimer -= deltaTime;
     
-    if (bossActive && !bossDead) {
+    if (bossActive && !bossDead && !phase2Active) {
         bossSpawnTimer -= deltaTime;
         if (bossSpawnTimer <= 0) {
             bossSpawnTimer = 2.0f;
@@ -1714,12 +2304,14 @@ void UpdateEnemies(float deltaTime) {
                 
                 if (worldMap[(int)e.x][(int)e.y] == 0) {
                     e.active = true;
-                    e.health = 100;
+                    e.health = 1; // standard
+                    e.speed = 3.0f; // Slower than player (4.0)
                     e.spriteIndex = rand() % 5;
                     e.hurtTimer = 0;
                     e.isShooter = false;
                     e.fireTimer = 0;
                     e.firingTimer = 0;
+                    e.isMarshall = false; // Fix uninitialized
                     enemies.push_back(e);
                 }
             }
@@ -1739,12 +2331,14 @@ void UpdateEnemies(float deltaTime) {
                 
                 if (worldMap[(int)e.x][(int)e.y] == 0) {
                     e.active = true;
-                    e.health = 50;
+                    e.health = 1; // standard
+                    e.speed = 2.0f; 
                     e.spriteIndex = 0;
                     e.hurtTimer = 0;
                     e.isShooter = true;
                     e.fireTimer = 2.0f + (float)(rand() % 20) / 10.0f;
                     e.firingTimer = 0;
+                    e.isMarshall = false; // Fix uninitialized
                     enemies.push_back(e);
                 }
             }
@@ -1814,6 +2408,7 @@ void ShootBullet() {
 }
 
 void UpdateBullets(float deltaTime) {
+    bool shouldClearEnemies = false;
     if (isFiring && fireTimer < 0.1f) isFiring = false;
     
     for (auto& b : bullets) {
@@ -1836,7 +2431,7 @@ void UpdateBullets(float deltaTime) {
             if (sqrtf(edx*edx + edy*edy) < 1.0f) {
                 b.active = false;
                 
-                enemy.health--;
+                enemy.health -= playerDamage;
                 if (enemy.spriteIndex == 4) enemy.hurtTimer = 0.3f;
                 
                 if (enemy.health <= 0) {
@@ -1850,15 +2445,66 @@ void UpdateBullets(float deltaTime) {
                     }
 
                     // Check Score for Boss Trigger
-                    if (score >= 100 && !bossActive && !preBossPhase) {
+                    if (score >= 300 && !bossActive && !preBossPhase) {
                         preBossPhase = true;
-                        preBossTimer = 30.0f; // 30 seconds of silence
+                        preBossTimer = 30.0f;
                         
                         // Despawn all enemies
-                        for (auto& e : enemies) e.active = false;
-                        enemies.clear();
+                        // for (auto& e : enemies) e.active = false;
+                        // enemies.clear(); // Unsafe in loop
+                        shouldClearEnemies = true;
                         
                         scoreTimer = 0; // Clear score text
+                    }
+                    
+                    // Marshall Spawn Trigger
+                    if (score >= 50 && !marshallSpawned) {
+                        Enemy marshall;
+                        int attempts = 0;
+                        do {
+                            float angle = (float)(rand() % 360) * 3.14159f / 180.0f;
+                            float dist = 10.0f + (float)(rand() % 15);
+                            marshall.x = player.x + cosf(angle) * dist;
+                            marshall.y = player.y + sinf(angle) * dist;
+                            if (marshall.x < 1.5f) marshall.x = 1.5f; if (marshall.x >= MAP_WIDTH - 1.5f) marshall.x = (float)(MAP_WIDTH - 2);
+                            if (marshall.y < 1.5f) marshall.y = 1.5f; if (marshall.y >= MAP_HEIGHT - 1.5f) marshall.y = (float)(MAP_HEIGHT - 2);
+                            attempts++;
+                        } while (worldMap[(int)marshall.x][(int)marshall.y] != 0 && attempts < 10);
+                        
+                        if (worldMap[(int)marshall.x][(int)marshall.y] == 0) {
+                            marshall.active = true;
+                            marshall.health = 35; 
+                            marshall.speed = 2.5f;
+                            marshall.spriteIndex = 4; // Use elite/red imp base but override render
+                            marshall.hurtTimer = 0;
+                            marshall.isShooter = false;
+                            marshall.fireTimer = 0;
+                            marshall.firingTimer = 0;
+                            // Marshall Specifics
+                            marshall.isMarshall = true;
+                            marshall.state = 0; // Seek Horde
+                            marshall.healTimer = 0;
+                            marshall.summonTimer = 10.0f; // Initial delay
+                            marshall.attackTimer = 0;
+                            
+                            enemies.push_back(marshall);
+                            marshallSpawned = true;
+                            
+                            // Spawn 10 minions to follow him
+                            for (int k=0; k<10; k++) {
+                                Enemy s;
+                                s.x = marshall.x + (rand()%200 - 100)/50.0f; 
+                                s.y = marshall.y + (rand()%200 - 100)/50.0f;
+                                if (s.x < 1.5f) s.x = 1.5f; if (s.x >= MAP_WIDTH - 1.5f) s.x = (float)(MAP_WIDTH - 2);
+                                if (s.y < 1.5f) s.y = 1.5f; if (s.y >= MAP_HEIGHT - 1.5f) s.y = (float)(MAP_HEIGHT - 2);
+                                
+                                if (worldMap[(int)s.x][(int)s.y] == 0) {
+                                    s.active = true; s.health = 1; s.speed = 3.0f; s.spriteIndex = rand()%4; 
+                                    s.isShooter = false; s.isMarshall = false; 
+                                    enemies.push_back(s);
+                                }
+                            }
+                        }
                     }
                     
                     scoreTimer = 3.0f;
@@ -1870,37 +2516,84 @@ void UpdateBullets(float deltaTime) {
         }
         
         if (bossActive && bossHealth > 0) {
-            float bdx = b.x - 32.0f;
-            float bdy = b.y - 32.0f;
-            if (sqrtf(bdx*bdx + bdy*bdy) < 2.5f) {
-                bossHealth--;
-                bossHurtTimer = 2.0f;
-                b.active = false;
-                PlayScoreSound();
-                
-                if (bossHealth <= 0) {
-                    bossActive = false;
-                    bossDead = true;
-                    victoryScreen = true;
-                    musicRunning = false;
-                    score += 50;
-                    if (score > highScore) {
-                        highScore = score;
-                        SaveHighScore();
+            bool hitHit = false;
+            
+            // Check Boss Hit (if no Force Field)
+            if (phase2Active && forceFieldActive) {
+                float bdx = b.x - 32.0f;
+                float bdy = b.y - 32.0f;
+                if (sqrtf(bdx*bdx + bdy*bdy) < 3.5f) {
+                     b.active = false; // Deflected
+                     hitHit = true; 
+                }
+            } else {
+                float bdx = b.x - 32.0f;
+                float bdy = b.y - 32.0f;
+                if (sqrtf(bdx*bdx + bdy*bdy) < 2.5f) {
+                    bossHealth -= playerDamage;
+                    bossHurtTimer = 2.0f;
+                    b.active = false;
+                    PlayScoreSound();
+                    hitHit = true;
+                    
+                    if (bossHealth <= 0) {
+                        bossActive = false;
+                        bossDead = true;
+                        victoryScreen = true;
+                        musicRunning = false;
+                        score += 50;
+                        if (score > highScore) {
+                            highScore = score;
+                            SaveHighScore();
+                        }
+                        
+                        for (auto& e : enemies) e.active = false;
+                        enemies.clear();
+                        fireballs.clear();
+                        
+                        for(int i = 0; i < 6; i++) {
+                            claws[i].state = CLAW_DORMANT;
+                            claws[i].x = claws[i].homeX;
+                            claws[i].y = claws[i].homeY;
+                        }
+                        
+                        phase2Active = false;
+                        forceFieldActive = false;
+                        activeLaserClaw = -1;
                     }
+                }
+            }
+            
+            // Check Claws Hit (Phase 2)
+            if (!hitHit && phase2Active) {
+                for(int i=0; i<6; i++) {
+                    if (claws[i].state == CLAW_PH2_DEAD) continue;
                     
-                    for (auto& e : enemies) e.active = false;
-                    enemies.clear();
-                    fireballs.clear();
-                    
-                    for(int i = 0; i < 6; i++) {
-                        claws[i].state = CLAW_DORMANT;
-                        claws[i].x = claws[i].homeX;
-                        claws[i].y = claws[i].homeY;
+                    float cdx = b.x - claws[i].x;
+                    float cdy = b.y - claws[i].y;
+                    if (sqrtf(cdx*cdx + cdy*cdy) < 2.0f) {
+                        b.active = false;
+                        claws[i].health -= playerDamage; 
+                        claws[i].hurtTimer = 0.2f;
+                        if (claws[i].health <= 0) {
+                            claws[i].state = CLAW_PH2_DEAD;
+                            claws[i].x = claws[i].homeX;
+                            claws[i].y = claws[i].homeY;
+                            PlayScoreSound();
+                            if (activeLaserClaw == i) activeLaserClaw = -1; // Immediate next turn
+                        }
+                        break;
                     }
                 }
             }
         }
+    }
+    
+    if (shouldClearEnemies) {
+        enemies.clear();
+        // fireballs.clear(); // Maybe? Pre-boss clears everything.
+        // Logic in UpdateEnemies says: enemies.clear().
+        // Here we just clear enemies.
     }
     
     bullets.erase(std::remove_if(bullets.begin(), bullets.end(), [](const Bullet& b) { return !b.active; }), bullets.end());
@@ -2013,10 +2706,38 @@ void DrawMinimap(HDC hdc) {
         SelectObject(hdc, oldBrush);
         DeleteObject(clawBrush);
     }
+    
+    // Marshall Health Bar
+    if (marshallHealthBarActive) {
+        int barW = 300;
+        int barH = 15;
+        int barX = (SCREEN_WIDTH - barW) / 2;
+        int barY = 40; 
+        
+        HBRUSH blackBrush = CreateSolidBrush(RGB(0, 0, 0));
+        RECT border = {barX - 2, barY - 2, barX + barW + 2, barY + barH + 2};
+        FillRect(hdc, &border, blackBrush); 
+        DeleteObject(blackBrush);
+        
+        if (marshallHP > 0) {
+            int fillW = (int)((float)marshallHP / marshallMaxHP * barW);
+            HBRUSH redBrush = CreateSolidBrush(RGB(200, 0, 0));
+            RECT fill = {barX, barY, barX + fillW, barY + barH};
+            FillRect(hdc, &fill, redBrush); 
+            DeleteObject(redBrush);
+        }
+        
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        TextOutA(hdc, barX, barY - 15, "MARSHALL", 8);
+    }
 }
 
 void UpdatePlayer(float deltaTime) {
-    float moveSpeed = 4.0f * deltaTime;
+    bool isSprinting = keys[VK_LSHIFT] || keys[VK_SHIFT];
+    float sprintSpeed = enragedMode ? 13.0f : 6.5f;
+    float baseSpeed = isSprinting ? sprintSpeed : 4.0f;
+    float moveSpeed = baseSpeed * deltaTime;
     float rotSpeed = 2.5f * deltaTime;
     
     isMoving = false;
@@ -2198,6 +2919,62 @@ void RenderGame(HDC hdc) {
     
     SetDIBitsToDevice(memDC, shakeX, shakeY, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
         backBufferPixels, &bi, DIB_RGB_COLORS);
+    
+    // Phase 2 Visuals (Force Field + Lasers)
+    if (phase2Active) {
+        // Force Field
+        if (forceFieldActive) {
+             float dx = 32.0f - player.x; // Boss X
+             float dy = 32.0f - player.y; // Boss Y
+             float dist = sqrtf(dx*dx + dy*dy);
+             
+             float spriteAngle = atan2f(dy, dx) - player.angle;
+             while (spriteAngle > PI) spriteAngle -= 2 * PI;
+             while (spriteAngle < -PI) spriteAngle += 2 * PI;
+             
+             if (fabsf(spriteAngle) < FOV && dist > 0.5f) {
+                 float screenX = (0.5f + spriteAngle / FOV) * SCREEN_WIDTH;
+                 float spriteHeight = (SCREEN_HEIGHT / dist) * 8.0f; // Boss Scale 8.0
+                 int radius = (int)(spriteHeight / 2.0f * 0.8f); // Slightly smaller than full sprite width
+                 
+                 // Center Y calculation matching RenderSprite
+                 int centerY = (SCREEN_HEIGHT / 2 + (int)((SCREEN_HEIGHT / 2.0f) / dist) + (int)player.pitch) - (int)(spriteHeight / 2.0f);
+
+                 HPEN hPen = CreatePen(PS_SOLID, 3, RGB(255, 0, 0));
+                 HPEN oldPen = (HPEN)SelectObject(memDC, hPen);
+                 HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                 Ellipse(memDC, (int)(screenX - radius), centerY - radius, (int)(screenX + radius), centerY + radius);
+                 SelectObject(memDC, oldPen);
+                 SelectObject(memDC, oldBrush);
+                 DeleteObject(hPen);
+             }
+        }
+        
+        // Laser
+        if (activeLaserClaw != -1 && claws[activeLaserClaw].state == CLAW_PH2_ANCHORED) {
+             float dx = claws[activeLaserClaw].x - player.x;
+             float dy = claws[activeLaserClaw].y - player.y;
+             float dist = sqrtf(dx*dx + dy*dy);
+             
+             float spriteAngle = atan2f(dy, dx) - player.angle;
+             while (spriteAngle > PI) spriteAngle -= 2 * PI;
+             while (spriteAngle < -PI) spriteAngle += 2 * PI;
+             
+             if (fabsf(spriteAngle) < FOV && dist > 0.5f) {
+                 float screenX = (0.5f + spriteAngle / FOV) * SCREEN_WIDTH;
+                 float spriteHeight = (SCREEN_HEIGHT / dist) * 8.0f; // Claw Scale 8.0
+                 
+                 int centerY = (SCREEN_HEIGHT / 2 + (int)((SCREEN_HEIGHT / 2.0f) / dist) + (int)player.pitch) - (int)(spriteHeight / 2.0f);
+                 
+                 HPEN laserPen = CreatePen(PS_SOLID, 5, RGB(255, 0, 0));
+                 HPEN oldPen = (HPEN)SelectObject(memDC, laserPen);
+                 MoveToEx(memDC, (int)screenX, centerY, NULL);
+                 LineTo(memDC, SCREEN_WIDTH / 2, SCREEN_HEIGHT); // To weapon
+                 SelectObject(memDC, oldPen);
+                 DeleteObject(laserPen);
+             }
+        }
+    }
     
     int cx = SCREEN_WIDTH / 2;
     int cy = SCREEN_HEIGHT / 2;
@@ -2510,6 +3287,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     } else if (consoleBuffer == L"reset cam") {
                         player.pitch = 0.0f;
                         consoleBuffer = L"";
+                    } else if (consoleBuffer.find(L"player.dmg") == 0) {
+                        size_t eqPos = consoleBuffer.find(L'=');
+                        if (eqPos != std::wstring::npos) {
+                            std::wstring numStr = consoleBuffer.substr(eqPos + 1);
+                            playerDamage = _wtoi(numStr.c_str());
+                        } else {
+                            size_t spacePos = consoleBuffer.find(L' ');
+                             if (spacePos != std::wstring::npos) {
+                                std::wstring numStr = consoleBuffer.substr(spacePos + 1);
+                                playerDamage = _wtoi(numStr.c_str());
+                            }
+                        }
+                        if (playerDamage < 1) playerDamage = 1;
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer.find(L"player.gmode") == 0) {
+                        if (consoleBuffer.find(L"true") != std::wstring::npos) godMode = true;
+                        else if (consoleBuffer.find(L"false") != std::wstring::npos) godMode = false;
+                        consoleBuffer = L"";
                     } else if (consoleBuffer == L"help") {
                         wcscpy(consoleError, L"Commands: score=N, stat on/off, reset cam, help, exit");
                         consoleBuffer = L"";
@@ -2553,6 +3348,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     bossActive = false;
                     preBossPhase = false;
                     bossHealth = 200;
+                    phase2Active = false;
+                    enragedMode = false;
                     score = 0;
                     player.health = 100;
                     player.x = 10.0f;
@@ -2603,6 +3400,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (grassPixels) delete[] grassPixels;
             for(int i=0; i<5; i++) if (enemyPixels[i]) delete[] enemyPixels[i];
             if (enemy5HurtPixels) delete[] enemy5HurtPixels;
+            
+            for(int i=0; i<3; i++) if(spirePhase2Pixels[i] && spirePhase2Pixels[i] != spirePixels) delete[] spirePhase2Pixels[i];
+            for(int i=0; i<4; i++) if(clawPhase2Pixels[i] && clawPhase2Pixels[i] != clawDormantPixels) delete[] clawPhase2Pixels[i];
+            if(clawHurtPixels) delete[] clawHurtPixels;
             if (treePixels) delete[] treePixels;
             if (cloudPixels) delete[] cloudPixels;
             if (gunPixels) delete[] gunPixels;
