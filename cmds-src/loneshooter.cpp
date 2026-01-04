@@ -461,6 +461,27 @@ bool marshallHealthBarActive = false;
 int marshallHP = 0;
 int marshallMaxHP = 35;
 
+struct Paragon {
+    float x, y;
+    float speed;
+    int health;
+    bool active;
+    float hurtTimer;
+    float targetX, targetY;
+    bool hunting;
+    int targetEnemyIndex;
+    int targetClawIndex;
+};
+
+std::vector<Paragon> paragons;
+bool marshallKilled = false;
+bool paragonsUnlocked = false;
+float paragonMessageTimer = 0;
+DWORD* paragonPixels = nullptr;
+int paragonW = 0, paragonH = 0;
+DWORD* paragonHurtPixels = nullptr;
+int paragonHurtW = 0, paragonHurtH = 0;
+
 bool consoleActive = false;
 std::wstring consoleBuffer = L"";
 bool showStats = false;
@@ -739,6 +760,12 @@ void TryLoadAssets() {
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\Marshall\\marshall_hurt.bmp", exePath);
     marshallHurtPixels = LoadBMPPixels(path, &marshallHurtW, &marshallHurtH);
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\Viper\\Viper.bmp", exePath);
+    paragonPixels = LoadBMPPixels(path, &paragonW, &paragonH);
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\Viper\\Viper_hurt.bmp", exePath);
+    paragonHurtPixels = LoadBMPPixels(path, &paragonHurtW, &paragonHurtH);
 
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
 }
@@ -1291,6 +1318,15 @@ void RenderSprites() {
         }
     }
     
+    for (auto& p : paragons) {
+        if (p.active) {
+            float dx = p.x - player.x;
+            float dy = p.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            allSprites.push_back({p.x, p.y, dist, 10, 1.0f, 0, (p.hurtTimer > 0), 0.0f, false});
+        }
+    }
+    
     for(int i = 0; i < 6; i++) {
         float cdx = claws[i].x - player.x;
         float cdy = claws[i].y - player.y;
@@ -1418,6 +1454,12 @@ void RenderSprites() {
                 RenderSprite(laserPixels, laserW, laserH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             } else {
                 RenderSprite(bulletPixels, bulletW, bulletH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 10) {
+            if (sp.isHurt && paragonHurtPixels) {
+                RenderSprite(paragonHurtPixels, paragonHurtW, paragonHurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else if (paragonPixels) {
+                RenderSprite(paragonPixels, paragonW, paragonH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             }
         }
     }
@@ -2436,6 +2478,7 @@ void UpdateBullets(float deltaTime) {
                 
                 if (enemy.health <= 0) {
                     enemy.active = false;
+                    if (enemy.isMarshall) marshallKilled = true;
                     score++;
                     PlayScoreSound();
                     
@@ -2597,6 +2640,205 @@ void UpdateBullets(float deltaTime) {
     }
     
     bullets.erase(std::remove_if(bullets.begin(), bullets.end(), [](const Bullet& b) { return !b.active; }), bullets.end());
+}
+
+int GetAliveParagonCount() {
+    int count = 0;
+    for (auto& p : paragons) { if (p.active) count++; }
+    return count;
+}
+
+void UpdateParagons(float deltaTime) {
+    if (!paragonsUnlocked && score >= 200 && marshallKilled) {
+        paragonsUnlocked = true;
+        paragonMessageTimer = 3.0f;
+        for (int i = 0; i < 2; i++) {
+            Paragon p;
+            float angle = (float)(rand() % 360) * 3.14159f / 180.0f;
+            p.x = player.x + cosf(angle) * 1.5f;
+            p.y = player.y + sinf(angle) * 1.5f;
+            p.speed = 4.5f;
+            p.health = 10;
+            p.active = true;
+            p.hurtTimer = 0;
+            p.targetX = 0; p.targetY = 0;
+            p.hunting = false;
+            p.targetEnemyIndex = -1;
+            p.targetClawIndex = -1;
+            paragons.push_back(p);
+        }
+    }
+    
+    if (paragonMessageTimer > 0) paragonMessageTimer -= deltaTime;
+    
+    for (auto& p : paragons) {
+        if (!p.active) continue;
+        
+        if (p.hurtTimer > 0) p.hurtTimer -= deltaTime;
+        
+        float distToPlayer = sqrtf((p.x - player.x)*(p.x - player.x) + (p.y - player.y)*(p.y - player.y));
+        
+        int nearestEnemyIdx = -1;
+        float nearestEnemyDist = 6.0f;
+        for (size_t i = 0; i < enemies.size(); i++) {
+            if (!enemies[i].active) continue;
+            float dx = enemies[i].x - p.x;
+            float dy = enemies[i].y - p.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < nearestEnemyDist) {
+                nearestEnemyDist = dist;
+                nearestEnemyIdx = (int)i;
+            }
+        }
+        
+        int nearestClawIdx = -1;
+        float nearestClawDist = 6.0f;
+        if (phase2Active) {
+            for (int i = 0; i < 6; i++) {
+                if (claws[i].state == CLAW_PH2_DEAD) continue;
+                float dx = claws[i].x - p.x;
+                float dy = claws[i].y - p.y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if (dist < nearestClawDist) {
+                    nearestClawDist = dist;
+                    nearestClawIdx = i;
+                }
+            }
+        }
+        
+        if (distToPlayer > 16.0f) {
+            float dx = player.x - p.x;
+            float dy = player.y - p.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist > 0.1f) {
+                p.x += (dx / dist) * p.speed * deltaTime;
+                p.y += (dy / dist) * p.speed * deltaTime;
+            }
+            p.hunting = false;
+        } else if (nearestEnemyIdx != -1) {
+            p.hunting = true;
+            p.targetEnemyIndex = nearestEnemyIdx;
+            float dx = enemies[nearestEnemyIdx].x - p.x;
+            float dy = enemies[nearestEnemyIdx].y - p.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist > 0.5f) {
+                p.x += (dx / dist) * p.speed * deltaTime;
+                p.y += (dy / dist) * p.speed * deltaTime;
+            }
+            if (dist < 1.0f) {
+                enemies[nearestEnemyIdx].health -= 2;
+                if (enemies[nearestEnemyIdx].health <= 0) {
+                    enemies[nearestEnemyIdx].active = false;
+                    if (enemies[nearestEnemyIdx].isMarshall) marshallKilled = true;
+                    score++;
+                    PlayScoreSound();
+                    if (score > highScore) { highScore = score; SaveHighScore(); }
+                }
+            }
+        } else if (nearestClawIdx != -1) {
+            p.hunting = true;
+            p.targetClawIndex = nearestClawIdx;
+            float dx = claws[nearestClawIdx].x - p.x;
+            float dy = claws[nearestClawIdx].y - p.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist > 0.5f) {
+                p.x += (dx / dist) * p.speed * deltaTime;
+                p.y += (dy / dist) * p.speed * deltaTime;
+            }
+            if (dist < 1.5f) {
+                claws[nearestClawIdx].health -= 2;
+                claws[nearestClawIdx].hurtTimer = 0.2f;
+                if (claws[nearestClawIdx].health <= 0) {
+                    claws[nearestClawIdx].state = CLAW_PH2_DEAD;
+                    claws[nearestClawIdx].x = claws[nearestClawIdx].homeX;
+                    claws[nearestClawIdx].y = claws[nearestClawIdx].homeY;
+                    PlayScoreSound();
+                    if (activeLaserClaw == nearestClawIdx) activeLaserClaw = -1;
+                }
+            }
+        } else {
+            p.hunting = false;
+            if (distToPlayer > 2.0f) {
+                float dx = player.x - p.x;
+                float dy = player.y - p.y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if (dist > 0.1f) {
+                    p.x += (dx / dist) * p.speed * deltaTime;
+                    p.y += (dy / dist) * p.speed * deltaTime;
+                }
+            } else {
+                float repelX = 0, repelY = 0;
+                for (auto& other : paragons) {
+                    if (&other == &p || !other.active) continue;
+                    float ox = p.x - other.x;
+                    float oy = p.y - other.y;
+                    float odist = sqrtf(ox*ox + oy*oy);
+                    if (odist < 1.5f && odist > 0.01f) {
+                        repelX += (ox / odist) * (1.5f - odist);
+                        repelY += (oy / odist) * (1.5f - odist);
+                    }
+                }
+                if (repelX != 0 || repelY != 0) {
+                    float repelDist = sqrtf(repelX*repelX + repelY*repelY);
+                    if (repelDist > 0.01f) {
+                        p.x += (repelX / repelDist) * p.speed * 0.5f * deltaTime;
+                        p.y += (repelY / repelDist) * p.speed * 0.5f * deltaTime;
+                    }
+                }
+            }
+        }
+        
+        if (p.x < 1.5f) p.x = 1.5f; if (p.x >= MAP_WIDTH - 1.5f) p.x = (float)(MAP_WIDTH - 2);
+        if (p.y < 1.5f) p.y = 1.5f; if (p.y >= MAP_HEIGHT - 1.5f) p.y = (float)(MAP_HEIGHT - 2);
+    }
+    
+    for (auto& eb : enemyBullets) {
+        if (!eb.active) continue;
+        for (auto& p : paragons) {
+            if (!p.active) continue;
+            float dx = eb.x - p.x;
+            float dy = eb.y - p.y;
+            if (sqrtf(dx*dx + dy*dy) < 1.0f) {
+                eb.active = false;
+                p.health -= (eb.isLaser ? 10 : 5);
+                p.hurtTimer = 1.0f;
+                if (p.health <= 0) p.active = false;
+                break;
+            }
+        }
+    }
+    
+    for (auto& fb : fireballs) {
+        if (!fb.active) continue;
+        for (auto& p : paragons) {
+            if (!p.active) continue;
+            float dx = fb.x - p.x;
+            float dy = fb.y - p.y;
+            if (sqrtf(dx*dx + dy*dy) < 0.5f) {
+                fb.active = false;
+                p.health -= 10;
+                p.hurtTimer = 1.0f;
+                if (p.health <= 0) p.active = false;
+                break;
+            }
+        }
+    }
+    
+    for (auto& e : enemies) {
+        if (!e.active || e.isShooter || e.isMarshall) continue;
+        for (auto& p : paragons) {
+            if (!p.active) continue;
+            float dx = p.x - e.x;
+            float dy = p.y - e.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < 1.0f) {
+                p.health -= 1;
+                p.hurtTimer = 1.0f;
+                if (p.health <= 0) p.active = false;
+                break;
+            }
+        }
+    }
 }
 
 void DrawMinimap(HDC hdc) {
@@ -3032,6 +3274,25 @@ void RenderGame(HDC hdc) {
         DeleteObject(hFont);
     }
     
+    if (paragonMessageTimer > 0) {
+        HFONT hPFont = CreateFontW(40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldPFont = (HFONT)SelectObject(memDC, hPFont);
+        
+        int alpha = (int)((paragonMessageTimer / 3.0f) * 255.0f);
+        if (alpha > 255) alpha = 255;
+        if (alpha < 0) alpha = 0;
+        SetTextColor(memDC, RGB(147, 112, 219));
+        SetBkMode(memDC, TRANSPARENT);
+        
+        const wchar_t* msg = L"The Brotherhood has deemed you worthy";
+        SIZE sz;
+        GetTextExtentPoint32W(memDC, msg, (int)wcslen(msg), &sz);
+        TextOutW(memDC, (SCREEN_WIDTH - sz.cx) / 2, SCREEN_HEIGHT / 3, msg, (int)wcslen(msg));
+        
+        SelectObject(memDC, hOldPFont);
+        DeleteObject(hPFont);
+    }
+    
     // Boss Health Bar
     if (bossActive && bossHealth > 0) {
         int barW = 400;
@@ -3214,12 +3475,13 @@ void RenderGame(HDC hdc) {
             }
         }
         int totalEnemies = meleeCount + shooterCount;
+        int paragonCount = GetAliveParagonCount();
         
         SetBkMode(memDC, TRANSPARENT);
         SetTextColor(memDC, RGB(0, 0, 0));
         wchar_t statText[512];
-        swprintf(statText, 512, L"FPS: %d  |  Enemies: %d (Melee: %d/%d, Shooters: %d/%d)  |  Pos: (%.1f, %.1f)  |  Cap Timer: %.1f", 
-                 currentFPS, totalEnemies, meleeCount, maxMeleeSpawn, shooterCount, maxShooterSpawn, player.x, player.y, spawnCapTimer);
+        swprintf(statText, 512, L"FPS: %d  |  Enemies: %d (Melee: %d/%d, Shooters: %d/%d)  |  Paragons: %d/8  |  Pos: (%.1f, %.1f)  |  Cap Timer: %.1f", 
+                 currentFPS, totalEnemies, meleeCount, maxMeleeSpawn, shooterCount, maxShooterSpawn, paragonCount, player.x, player.y, spawnCapTimer);
         TextOutW(memDC, 10, SCREEN_HEIGHT - 50, statText, (int)wcslen(statText));
     }
     
@@ -3374,6 +3636,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         }
+        case WM_RBUTTONDOWN: {
+            if (consoleActive || victoryScreen) return 0;
+            if (paragonsUnlocked && GetAliveParagonCount() < 8) {
+                Paragon p;
+                p.x = player.x;
+                p.y = player.y;
+                p.speed = 4.5f;
+                p.health = 10;
+                p.active = true;
+                p.hurtTimer = 0;
+                p.targetX = 0; p.targetY = 0;
+                p.hunting = false;
+                p.targetEnemyIndex = -1;
+                p.targetClawIndex = -1;
+                paragons.push_back(p);
+            }
+            return 0;
+        }
         case WM_MOUSEMOVE: {
             if (consoleActive || victoryScreen) return 0;
             
@@ -3493,6 +3773,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         UpdateClouds(deltaTime);
         UpdateGun(deltaTime);
         UpdateBullets(deltaTime);
+        UpdateParagons(deltaTime);
         
         HDC hdc = GetDC(hMainWnd);
         RenderGame(hdc);
