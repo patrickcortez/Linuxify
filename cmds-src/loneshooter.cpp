@@ -390,6 +390,7 @@ bool victoryScreen = false;
 float screenShakeTimer = 0;
 float screenShakeIntensity = 0;
 float shooterSpawnTimer = 3.0f;
+float bossSpawnTimer = 0;
 
 int maxMeleeSpawn = 3;
 int maxShooterSpawn = 1;
@@ -1681,6 +1682,74 @@ void UpdateEnemies(float deltaTime) {
     
     if (bossHurtTimer > 0) bossHurtTimer -= deltaTime;
     if (playerHurtTimer > 0) playerHurtTimer -= deltaTime;
+    
+    if (bossActive && !bossDead) {
+        bossSpawnTimer -= deltaTime;
+        if (bossSpawnTimer <= 0) {
+            bossSpawnTimer = 2.0f;
+            
+            int meleeCount = 0, shooterCount = 0;
+            for (auto& e : enemies) {
+                if (e.active) {
+                    if (e.isShooter) shooterCount++;
+                    else meleeCount++;
+                }
+            }
+            
+            const int BOSS_MELEE_CAP = 30;
+            const int BOSS_SHOOTER_CAP = 10;
+            
+            if (meleeCount < BOSS_MELEE_CAP) {
+                Enemy e;
+                int attempts = 0;
+                do {
+                    float angle = (float)(rand() % 360) * 3.14159f / 180.0f;
+                    float dist = 8.0f + (float)(rand() % 20);
+                    e.x = player.x + cosf(angle) * dist;
+                    e.y = player.y + sinf(angle) * dist;
+                    if (e.x < 1.5f) e.x = 1.5f; if (e.x >= MAP_WIDTH - 1.5f) e.x = (float)(MAP_WIDTH - 2);
+                    if (e.y < 1.5f) e.y = 1.5f; if (e.y >= MAP_HEIGHT - 1.5f) e.y = (float)(MAP_HEIGHT - 2);
+                    attempts++;
+                } while (worldMap[(int)e.x][(int)e.y] != 0 && attempts < 10);
+                
+                if (worldMap[(int)e.x][(int)e.y] == 0) {
+                    e.active = true;
+                    e.health = 100;
+                    e.spriteIndex = rand() % 5;
+                    e.hurtTimer = 0;
+                    e.isShooter = false;
+                    e.fireTimer = 0;
+                    e.firingTimer = 0;
+                    enemies.push_back(e);
+                }
+            }
+            
+            if (shooterCount < BOSS_SHOOTER_CAP) {
+                Enemy e;
+                int attempts = 0;
+                do {
+                    float angle = (float)(rand() % 360) * 3.14159f / 180.0f;
+                    float dist = 10.0f + (float)(rand() % 15);
+                    e.x = player.x + cosf(angle) * dist;
+                    e.y = player.y + sinf(angle) * dist;
+                    if (e.x < 1.5f) e.x = 1.5f; if (e.x >= MAP_WIDTH - 1.5f) e.x = (float)(MAP_WIDTH - 2);
+                    if (e.y < 1.5f) e.y = 1.5f; if (e.y >= MAP_HEIGHT - 1.5f) e.y = (float)(MAP_HEIGHT - 2);
+                    attempts++;
+                } while (worldMap[(int)e.x][(int)e.y] != 0 && attempts < 10);
+                
+                if (worldMap[(int)e.x][(int)e.y] == 0) {
+                    e.active = true;
+                    e.health = 50;
+                    e.spriteIndex = 0;
+                    e.hurtTimer = 0;
+                    e.isShooter = true;
+                    e.fireTimer = 2.0f + (float)(rand() % 20) / 10.0f;
+                    e.firingTimer = 0;
+                    enemies.push_back(e);
+                }
+            }
+        }
+    }
 }
 
 void UpdateGun(float deltaTime) {
@@ -2129,6 +2198,23 @@ void RenderGame(HDC hdc) {
     
     SetDIBitsToDevice(memDC, shakeX, shakeY, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
         backBufferPixels, &bi, DIB_RGB_COLORS);
+    
+    int cx = SCREEN_WIDTH / 2;
+    int cy = SCREEN_HEIGHT / 2;
+    int reticleSize = 12;
+    int reticleGap = 4;
+    HPEN reticlePen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+    HPEN oldPen = (HPEN)SelectObject(memDC, reticlePen);
+    MoveToEx(memDC, cx - reticleSize, cy, NULL);
+    LineTo(memDC, cx - reticleGap, cy);
+    MoveToEx(memDC, cx + reticleGap, cy, NULL);
+    LineTo(memDC, cx + reticleSize, cy);
+    MoveToEx(memDC, cx, cy - reticleSize, NULL);
+    LineTo(memDC, cx, cy - reticleGap);
+    MoveToEx(memDC, cx, cy + reticleGap, NULL);
+    LineTo(memDC, cx, cy + reticleSize);
+    SelectObject(memDC, oldPen);
+    DeleteObject(reticlePen);
     
     DrawMinimap(memDC);
     SetBkMode(memDC, TRANSPARENT);
