@@ -193,6 +193,32 @@ const int MAP_HEIGHT = 64;
 const float PI = 3.14159265f;
 const float FOV = PI / 3.0f;
 
+const int TRIG_TABLE_SIZE = 4096;
+float sinTable[TRIG_TABLE_SIZE];
+float cosTable[TRIG_TABLE_SIZE];
+
+void InitTrigTables() {
+    for (int i = 0; i < TRIG_TABLE_SIZE; i++) {
+        float angle = (float)i / TRIG_TABLE_SIZE * 2.0f * PI;
+        sinTable[i] = sinf(angle);
+        cosTable[i] = cosf(angle);
+    }
+}
+
+inline float FastSin(float angle) {
+    while (angle < 0) angle += 2.0f * PI;
+    while (angle >= 2.0f * PI) angle -= 2.0f * PI;
+    int index = (int)(angle / (2.0f * PI) * TRIG_TABLE_SIZE) % TRIG_TABLE_SIZE;
+    return sinTable[index];
+}
+
+inline float FastCos(float angle) {
+    while (angle < 0) angle += 2.0f * PI;
+    while (angle >= 2.0f * PI) angle -= 2.0f * PI;
+    int index = (int)(angle / (2.0f * PI) * TRIG_TABLE_SIZE) % TRIG_TABLE_SIZE;
+    return cosTable[index];
+}
+
 int worldMap[MAP_WIDTH][MAP_HEIGHT];
 
 struct Player {
@@ -378,12 +404,21 @@ int fpsCounter = 0;
 int currentFPS = 0;
 DWORD fpsLastTime = 0;
 
+wchar_t errorMessage[256] = L"";
+float errorTimer = 0;
+wchar_t consoleError[128] = L"";
+
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
 
 // Prototypes
 void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
 void Render3DScene();
+
+void ShowError(const wchar_t* msg) {
+    wcscpy(errorMessage, msg);
+    errorTimer = 3.0f;
+}
 
 float gunSwayX = 0, gunSwayY = 0;
 float gunSwayPhase = 0;
@@ -741,11 +776,18 @@ inline DWORD BlendWithFog(int r, int g, int b, float dist, float fogStart, float
     return MakeColor(r, g, b);
 }
 
-void CastRays() {
-    for (int x = 0; x < SCREEN_WIDTH; x++) {
+struct RaycastParams {
+    int startX;
+    int endX;
+};
+
+unsigned __stdcall RaycastWorker(void* param) {
+    RaycastParams* rp = (RaycastParams*)param;
+    
+    for (int x = rp->startX; x < rp->endX; x++) {
         float rayAngle = (player.angle - FOV / 2.0f) + ((float)x / SCREEN_WIDTH) * FOV;
-        float rayDirX = cosf(rayAngle);
-        float rayDirY = sinf(rayAngle);
+        float rayDirX = FastCos(rayAngle);
+        float rayDirY = FastSin(rayAngle);
         
         float distanceToWall = 0;
         bool hitWall = false;
@@ -780,12 +822,10 @@ void CastRays() {
         
         for (int y = 0; y < SCREEN_HEIGHT; y++) {
             if (y <= SCREEN_HEIGHT / 2 + (int)player.pitch) {
-                // Sky
                 float skyGradient = (float)y / (SCREEN_HEIGHT / 2);
                 int r, g, b;
                 
                 if (bossActive) {
-                    // Red Sky
                     r = (int)(150 + 100 * (1 - skyGradient));
                     g = (int)(20 * (1 - skyGradient));
                     b = (int)(20 * (1 - skyGradient));
@@ -796,14 +836,13 @@ void CastRays() {
                 }
                 
                 backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
-                zBuffer[y * SCREEN_WIDTH + x] = 1000.0f; // Infinite depth
+                zBuffer[y * SCREEN_WIDTH + x] = 1000.0f;
             }
             
             if (y > SCREEN_HEIGHT / 2 + (int)player.pitch) {
-                // Floor
                 float rowDist = (SCREEN_HEIGHT / 2.0f) / (y - SCREEN_HEIGHT / 2.0f);
-                float floorX = player.x + cosf(rayAngle) * rowDist;
-                float floorY = player.y + sinf(rayAngle) * rowDist;
+                float floorX = player.x + FastCos(rayAngle) * rowDist;
+                float floorY = player.y + FastSin(rayAngle) * rowDist;
                 
                 if (grassPixels && grassW > 0) {
                     int texX = (int)(fmodf(floorX, 1.0f) * grassW);
@@ -830,7 +869,6 @@ void CastRays() {
             }
             
             if (wallType != 3 && y >= ceiling && y <= floorLine) {
-                // Wall
                 float shade = 1.0f - (correctedDist / 50.0f);
                 if (shade < 0.1f) shade = 0.1f;
                 int r, g, b;
@@ -845,6 +883,36 @@ void CastRays() {
             }
         }
     }
+    
+    return 0;
+}
+
+void CastRays() {
+    SYSTEM_INFO sysInfo;
+    GetSystemInfo(&sysInfo);
+    int numThreads = sysInfo.dwNumberOfProcessors;
+    if (numThreads < 1) numThreads = 1;
+    if (numThreads > 32) numThreads = 32;
+    
+    HANDLE* threads = new HANDLE[numThreads];
+    RaycastParams* params = new RaycastParams[numThreads];
+    
+    int columnsPerThread = SCREEN_WIDTH / numThreads;
+    
+    for (int i = 0; i < numThreads; i++) {
+        params[i].startX = i * columnsPerThread;
+        params[i].endX = (i == numThreads - 1) ? SCREEN_WIDTH : (i + 1) * columnsPerThread;
+        threads[i] = (HANDLE)_beginthreadex(NULL, 0, RaycastWorker, &params[i], 0, NULL);
+    }
+    
+    WaitForMultipleObjects(numThreads, threads, TRUE, INFINITE);
+    
+    for (int i = 0; i < numThreads; i++) {
+        CloseHandle(threads[i]);
+    }
+    
+    delete[] threads;
+    delete[] params;
 }
 
 // --- 3D Rasterizer ---
@@ -1104,22 +1172,22 @@ void RenderSprites() {
         float cdist = sqrtf(cdx*cdx + cdy*cdy);
         int clawVariant = (claws[i].state == CLAW_DORMANT || bossDead) ? 0 : 1;
         
-        float clawHeight = 3.0f;
+        float clawHeight = 6.0f;
         if (claws[i].state == CLAW_SLAMMING) {
             float progress = 1.0f - (claws[i].timer / 0.5f);
             if (progress < 0) progress = 0;
             if (progress > 1) progress = 1;
-            clawHeight = 3.0f * (1.0f - progress);
+            clawHeight = 6.0f * (1.0f - progress);
         } else if (claws[i].state == CLAW_RISING) {
             float progress = 1.0f - (claws[i].timer / 1.0f);
             if (progress < 0) progress = 0;
             if (progress > 1) progress = 1;
-            clawHeight = 3.0f * progress;
+            clawHeight = 6.0f * progress;
         } else if (claws[i].state == CLAW_RETURNING) {
-            clawHeight = 3.0f;
+            clawHeight = 6.0f;
         }
         
-        allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 4.0f, clawVariant, false, clawHeight, false});
+        allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 8.0f, clawVariant, false, clawHeight, false});
     }
     
     std::sort(allSprites.begin(), allSprites.end(), [](const SpriteRender& a, const SpriteRender& b) {
@@ -1926,10 +1994,7 @@ void UpdatePlayer(float deltaTime) {
         if (worldMap[(int)player.x][(int)newY] == 0) player.y = newY;
         isMoving = true;
     }
-    if (keys[VK_LEFT]) player.angle -= rotSpeed;
-    if (keys[VK_RIGHT]) player.angle += rotSpeed;
     
-    if (keys[VK_SPACE] || keys[VK_LBUTTON]) ShootBullet();
     if (keys['R']) StartReload();
     
     static float stepTimer = 0;
@@ -2058,45 +2123,49 @@ void RenderGame(HDC hdc) {
         shakeY = (int)((rand() % (int)(screenShakeIntensity * 2 + 1) - screenShakeIntensity) * shakeFactor);
     }
     
-    SetDIBitsToDevice(hdc, shakeX, shakeY, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, SCREEN_WIDTH, SCREEN_HEIGHT);
+    HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+    
+    SetDIBitsToDevice(memDC, shakeX, shakeY, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
         backBufferPixels, &bi, DIB_RGB_COLORS);
     
-    DrawMinimap(hdc);
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(255, 255, 0));
-    TextOutW(hdc, 10, 10, loadStatus, (int)wcslen(loadStatus));
+    DrawMinimap(memDC);
+    SetBkMode(memDC, TRANSPARENT);
+    SetTextColor(memDC, RGB(255, 255, 0));
+    TextOutW(memDC, 10, 10, loadStatus, (int)wcslen(loadStatus));
     
     wchar_t ammoText[64];
     if (isReloading) {
         swprintf(ammoText, 64, L"RELOADING...");
-        SetTextColor(hdc, RGB(255, 255, 0));
+        SetTextColor(memDC, RGB(255, 255, 0));
     } else {
         swprintf(ammoText, 64, L"Ammo: %d/%d", ammo, maxAmmo);
-        SetTextColor(hdc, ammo == 0 ? RGB(255, 0, 0) : RGB(255, 255, 255));
+        SetTextColor(memDC, ammo == 0 ? RGB(255, 0, 0) : RGB(255, 255, 255));
     }
-    TextOutW(hdc, 10, 50, ammoText, (int)wcslen(ammoText));
+    TextOutW(memDC, 10, 50, ammoText, (int)wcslen(ammoText));
     
     wchar_t scoreText[128];
     swprintf(scoreText, 128, L"Score: %d  High Score: %d", score, highScore);
-    SetTextColor(hdc, RGB(255, 255, 255));
-    TextOutW(hdc, 10, 90, scoreText, (int)wcslen(scoreText));
+    SetTextColor(memDC, RGB(255, 255, 255));
+    TextOutW(memDC, 10, 90, scoreText, (int)wcslen(scoreText));
     
     if (scoreTimer > 0) {
         HFONT hFont = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
-        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        HFONT hOldFont = (HFONT)SelectObject(memDC, hFont);
         
-        SetTextColor(hdc, RGB(255, 215, 0)); // Gold color
-        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 215, 0));
+        SetBkMode(memDC, TRANSPARENT);
         
         wchar_t pointText[] = L"+1";
         SIZE size;
-        GetTextExtentPoint32W(hdc, pointText, 2, &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 - 40, pointText, 2);
+        GetTextExtentPoint32W(memDC, pointText, 2, &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 - 40, pointText, 2);
         
-        GetTextExtentPoint32W(hdc, scoreMsg, (int)wcslen(scoreMsg), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 + 10, scoreMsg, (int)wcslen(scoreMsg));
+        GetTextExtentPoint32W(memDC, scoreMsg, (int)wcslen(scoreMsg), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, (SCREEN_HEIGHT - size.cy) / 2 + 10, scoreMsg, (int)wcslen(scoreMsg));
         
-        SelectObject(hdc, hOldFont);
+        SelectObject(memDC, hOldFont);
         DeleteObject(hFont);
     }
     
@@ -2107,25 +2176,22 @@ void RenderGame(HDC hdc) {
         int barX = (SCREEN_WIDTH - barW) / 2;
         int barY = 40;
         
-        // Background (Black)
         RECT bgRect = {barX - 2, barY - 2, barX + barW + 2, barY + barH + 2};
         HBRUSH bgBrush = CreateSolidBrush(RGB(0, 0, 0));
-        FillRect(hdc, &bgRect, bgBrush);
+        FillRect(memDC, &bgRect, bgBrush);
         DeleteObject(bgBrush);
         
-        // Health (Red)
         float healthPct = (float)bossHealth / 200.0f;
         if (healthPct < 0) healthPct = 0;
         int hpW = (int)(barW * healthPct);
         RECT hpRect = {barX, barY, barX + hpW, barY + barH};
         HBRUSH hpBrush = CreateSolidBrush(RGB(200, 0, 0));
-        FillRect(hdc, &hpRect, hpBrush);
+        FillRect(memDC, &hpRect, hpBrush);
         DeleteObject(hpBrush);
         
-        // Text
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(255, 255, 255));
-        TextOutW(hdc, barX, barY - 20, L"THE SPIRE", 9);
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 255, 255));
+        TextOutW(memDC, barX, barY - 20, L"THE SPIRE", 9);
     }
     
     // Countdown Timer during Pre-Boss Phase
@@ -2134,41 +2200,41 @@ void RenderGame(HDC hdc) {
         swprintf(bossTimerMsg, 64, L"BOSS IN: %.0f", preBossTimer);
         
         HFONT hFont = CreateFontW(50, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
-        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        HFONT hOldFont = (HFONT)SelectObject(memDC, hFont);
         
-        SetTextColor(hdc, RGB(255, 0, 0)); // Red countdown
-        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 0, 0));
+        SetBkMode(memDC, TRANSPARENT);
         
         SIZE size;
-        GetTextExtentPoint32W(hdc, bossTimerMsg, (int)wcslen(bossTimerMsg), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, SCREEN_HEIGHT / 2 - 50, bossTimerMsg, (int)wcslen(bossTimerMsg));
+        GetTextExtentPoint32W(memDC, bossTimerMsg, (int)wcslen(bossTimerMsg), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, SCREEN_HEIGHT / 2 - 50, bossTimerMsg, (int)wcslen(bossTimerMsg));
         
-        SelectObject(hdc, hOldFont);
+        SelectObject(memDC, hOldFont);
         DeleteObject(hFont);
     }
 
     // Pre-Boss Phase: Shaking "God has awoken" text
     if (bossActive && bossEventTimer > 0) {
         HFONT hFont = CreateFontW(60, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
-        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
-        SetTextColor(hdc, RGB(255, 0, 0));
-        SetBkMode(hdc, TRANSPARENT);
+        HFONT hOldFont = (HFONT)SelectObject(memDC, hFont);
+        SetTextColor(memDC, RGB(255, 0, 0));
+        SetBkMode(memDC, TRANSPARENT);
         
         int shakeX = (rand() % 10) - 5;
         int shakeY = (rand() % 10) - 5;
         
-        TextOutW(hdc, SCREEN_WIDTH/2 - 200 + shakeX, SCREEN_HEIGHT/2 - 100 + shakeY, L"God has awoken", 14);
-        SelectObject(hdc, hOldFont);
+        TextOutW(memDC, SCREEN_WIDTH/2 - 200 + shakeX, SCREEN_HEIGHT/2 - 100 + shakeY, L"God has awoken", 14);
+        SelectObject(memDC, hOldFont);
         DeleteObject(hFont);
         
-        SetTextColor(hdc, RGB(255, 255, 255));
+        SetTextColor(memDC, RGB(255, 255, 255));
     }
 
     
-    SetTextColor(hdc, RGB(255, 255, 255));
+    SetTextColor(memDC, RGB(255, 255, 255));
     wchar_t info[128];
-    swprintf(info, 128, L"WASD=Move | Arrows=Look | SPACE=Shoot | R=Reload | ESC=Quit");
-    TextOutW(hdc, 10, SCREEN_HEIGHT - 25, info, (int)wcslen(info));
+    swprintf(info, 128, L"WASD=Move | Mouse=Look | LClick=Shoot | R=Reload | ESC=Quit");
+    TextOutW(memDC, 10, SCREEN_HEIGHT - 25, info, (int)wcslen(info));
     
     if (victoryScreen) {
         for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
@@ -2188,55 +2254,55 @@ void RenderGame(HDC hdc) {
         bi2.bmiHeader.biHeight = -SCREEN_HEIGHT;
         bi2.bmiHeader.biPlanes = 1;
         bi2.bmiHeader.biBitCount = 32;
-        SetDIBitsToDevice(hdc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
+        SetDIBitsToDevice(memDC, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
             backBufferPixels, &bi2, DIB_RGB_COLORS);
         
         HFONT hBigFont = CreateFontW(72, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         HFONT hMedFont = CreateFontW(36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         HFONT hBtnFont = CreateFontW(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         
-        SetBkMode(hdc, TRANSPARENT);
+        SetBkMode(memDC, TRANSPARENT);
         
-        HFONT hOldFont = (HFONT)SelectObject(hdc, hBigFont);
-        SetTextColor(hdc, RGB(0, 150, 0));
+        HFONT hOldFont = (HFONT)SelectObject(memDC, hBigFont);
+        SetTextColor(memDC, RGB(0, 150, 0));
         const wchar_t* wonText = L"You Won!";
         SIZE size;
-        GetTextExtentPoint32W(hdc, wonText, (int)wcslen(wonText), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 150, wonText, (int)wcslen(wonText));
+        GetTextExtentPoint32W(memDC, wonText, (int)wcslen(wonText), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, 150, wonText, (int)wcslen(wonText));
         
-        SelectObject(hdc, hMedFont);
-        SetTextColor(hdc, RGB(50, 50, 50));
+        SelectObject(memDC, hMedFont);
+        SetTextColor(memDC, RGB(50, 50, 50));
         wchar_t hsText[128];
         swprintf(hsText, 128, L"Final Score: %d", score);
-        GetTextExtentPoint32W(hdc, hsText, (int)wcslen(hsText), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 240, hsText, (int)wcslen(hsText));
+        GetTextExtentPoint32W(memDC, hsText, (int)wcslen(hsText), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, 240, hsText, (int)wcslen(hsText));
         
         swprintf(hsText, 128, L"High Score: %d", highScore);
-        GetTextExtentPoint32W(hdc, hsText, (int)wcslen(hsText), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 290, hsText, (int)wcslen(hsText));
+        GetTextExtentPoint32W(memDC, hsText, (int)wcslen(hsText), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, 290, hsText, (int)wcslen(hsText));
         
-        SelectObject(hdc, hBtnFont);
+        SelectObject(memDC, hBtnFont);
         
         RECT playAgainBtn = {SCREEN_WIDTH/2 - 120, 380, SCREEN_WIDTH/2 + 120, 430};
         RECT exitBtn = {SCREEN_WIDTH/2 - 120, 450, SCREEN_WIDTH/2 + 120, 500};
         
         HBRUSH greenBrush = CreateSolidBrush(RGB(0, 180, 0));
         HBRUSH redBrush = CreateSolidBrush(RGB(180, 0, 0));
-        FillRect(hdc, &playAgainBtn, greenBrush);
-        FillRect(hdc, &exitBtn, redBrush);
+        FillRect(memDC, &playAgainBtn, greenBrush);
+        FillRect(memDC, &exitBtn, redBrush);
         DeleteObject(greenBrush);
         DeleteObject(redBrush);
         
-        SetTextColor(hdc, RGB(255, 255, 255));
+        SetTextColor(memDC, RGB(255, 255, 255));
         const wchar_t* playText = L"Play Again";
-        GetTextExtentPoint32W(hdc, playText, (int)wcslen(playText), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 392, playText, (int)wcslen(playText));
+        GetTextExtentPoint32W(memDC, playText, (int)wcslen(playText), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, 392, playText, (int)wcslen(playText));
         
         const wchar_t* exitText = L"Exit";
-        GetTextExtentPoint32W(hdc, exitText, (int)wcslen(exitText), &size);
-        TextOutW(hdc, (SCREEN_WIDTH - size.cx) / 2, 462, exitText, (int)wcslen(exitText));
+        GetTextExtentPoint32W(memDC, exitText, (int)wcslen(exitText), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, 462, exitText, (int)wcslen(exitText));
         
-        SelectObject(hdc, hOldFont);
+        SelectObject(memDC, hOldFont);
         DeleteObject(hBigFont);
         DeleteObject(hMedFont);
         DeleteObject(hBtnFont);
@@ -2246,26 +2312,32 @@ void RenderGame(HDC hdc) {
     if (consoleActive) {
         RECT consoleRect = {0, 0, SCREEN_WIDTH, 200};
         HBRUSH consoleBrush = CreateSolidBrush(RGB(50, 50, 50)); // Dark Gray
-        FillRect(hdc, &consoleRect, consoleBrush);
+        FillRect(memDC, &consoleRect, consoleBrush);
         DeleteObject(consoleBrush);
         
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 255, 255));
         HFONT hConsFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
-        HFONT hOldConsFont = (HFONT)SelectObject(hdc, hConsFont);
+        HFONT hOldConsFont = (HFONT)SelectObject(memDC, hConsFont);
         
-        TextOutW(hdc, 10, 10, L"DEBUG CONSOLE (type 'exit' to close)", 36);
-        TextOutW(hdc, 10, 35, L">", 1);
-        TextOutW(hdc, 25, 35, consoleBuffer.c_str(), (int)consoleBuffer.length());
+        TextOutW(memDC, 10, 10, L"DEBUG CONSOLE (type 'exit' to close)", 36);
+        TextOutW(memDC, 10, 35, L">", 1);
+        TextOutW(memDC, 25, 35, consoleBuffer.c_str(), (int)consoleBuffer.length());
         
         // Cursor
         if ((int)(GetTickCount() / 500) % 2 == 0) {
             SIZE size;
-            GetTextExtentPoint32W(hdc, consoleBuffer.c_str(), (int)consoleBuffer.length(), &size);
-            TextOutW(hdc, 25 + size.cx, 35, L"_", 1);
+            GetTextExtentPoint32W(memDC, consoleBuffer.c_str(), (int)consoleBuffer.length(), &size);
+            TextOutW(memDC, 25 + size.cx, 35, L"_", 1);
         }
         
-        SelectObject(hdc, hOldConsFont);
+        if (wcslen(consoleError) > 0) {
+            SetTextColor(memDC, RGB(255, 80, 80));
+            TextOutW(memDC, 10, 60, consoleError, (int)wcslen(consoleError));
+            SetTextColor(memDC, RGB(255, 255, 255));
+        }
+        
+        SelectObject(memDC, hOldConsFont);
         DeleteObject(hConsFont);
     }
     
@@ -2280,13 +2352,30 @@ void RenderGame(HDC hdc) {
         }
         int totalEnemies = meleeCount + shooterCount;
         
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(0, 0, 0));
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(0, 0, 0));
         wchar_t statText[512];
         swprintf(statText, 512, L"FPS: %d  |  Enemies: %d (Melee: %d/%d, Shooters: %d/%d)  |  Pos: (%.1f, %.1f)  |  Cap Timer: %.1f", 
                  currentFPS, totalEnemies, meleeCount, maxMeleeSpawn, shooterCount, maxShooterSpawn, player.x, player.y, spawnCapTimer);
-        TextOutW(hdc, 10, SCREEN_HEIGHT - 50, statText, (int)wcslen(statText));
+        TextOutW(memDC, 10, SCREEN_HEIGHT - 50, statText, (int)wcslen(statText));
     }
+    
+    if (errorTimer > 0 && wcslen(errorMessage) > 0) {
+        HFONT hErrFont = CreateFontW(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldErrFont = (HFONT)SelectObject(memDC, hErrFont);
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(255, 50, 50));
+        SIZE size;
+        GetTextExtentPoint32W(memDC, errorMessage, (int)wcslen(errorMessage), &size);
+        TextOutW(memDC, (SCREEN_WIDTH - size.cx) / 2, SCREEN_HEIGHT - 100, errorMessage, (int)wcslen(errorMessage));
+        SelectObject(memDC, hOldErrFont);
+        DeleteObject(hErrFont);
+    }
+    
+    BitBlt(hdc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, memDC, 0, 0, SRCCOPY);
+    SelectObject(memDC, oldBitmap);
+    DeleteObject(memBitmap);
+    DeleteDC(memDC);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2332,10 +2421,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     } else if (consoleBuffer == L"stat off") {
                         showStats = false;
                         consoleBuffer = L"";
+                    } else if (consoleBuffer == L"reset cam") {
+                        player.pitch = 0.0f;
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer == L"help") {
+                        wcscpy(consoleError, L"Commands: score=N, stat on/off, reset cam, help, exit");
+                        consoleBuffer = L"";
                     } else {
-                        consoleBuffer = L""; // Clear unknown command
+                        wcscpy(consoleError, L"Unknown command");
+                        consoleBuffer = L"";
                     }
                 } else {
+                    consoleError[0] = L'\0';
                     consoleBuffer += (wchar_t)wParam;
                 }
             }
@@ -2357,6 +2454,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             keys[wParam & 0xFF] = false;
             return 0;
         case WM_LBUTTONDOWN: {
+            if (consoleActive) return 0;
             if (victoryScreen) {
                 int mx = LOWORD(lParam);
                 int my = HIWORD(lParam);
@@ -2388,7 +2486,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (mx >= exitBtn.left && mx <= exitBtn.right && my >= exitBtn.top && my <= exitBtn.bottom) {
                     PostQuitMessage(0);
                 }
+            } else {
+                ShootBullet();
             }
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (consoleActive || victoryScreen) return 0;
+            
+            static int lastMouseX = SCREEN_WIDTH / 2;
+            int mx = LOWORD(lParam);
+            int deltaX = mx - lastMouseX;
+            
+            float sensitivity = 0.003f;
+            player.angle += deltaX * sensitivity;
+            
+            POINT center = {SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2};
+            ClientToScreen(hwnd, &center);
+            SetCursorPos(center.x, center.y);
+            lastMouseX = SCREEN_WIDTH / 2;
+            
             return 0;
         }
         case WM_DESTROY:
@@ -2421,6 +2538,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     (void)hPrevInstance; (void)lpCmdLine;
     
     LoadHighScore();
+    InitTrigTables();
     TryLoadAssets();
     GenerateWorld();
     SpawnEnemies();
@@ -2450,6 +2568,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     ShowWindow(hMainWnd, nCmdShow);
     UpdateWindow(hMainWnd);
+    ShowCursor(FALSE);
     
     _beginthread(BackgroundMusic, 0, NULL);
     
@@ -2473,6 +2592,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         
         if (scoreTimer > 0) scoreTimer -= deltaTime;
         if (screenShakeTimer > 0) screenShakeTimer -= deltaTime;
+        if (errorTimer > 0) errorTimer -= deltaTime;
         
         fpsCounter++;
         if (currentTime - fpsLastTime >= 1000) {
