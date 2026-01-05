@@ -321,10 +321,13 @@ struct Enemy {
     float fireTimer;
     float firingTimer;
     bool isMarshall;
-    int state; // 0=Seek, 1=Chase, 2=Retreat
+    int state;
     float healTimer;
     float summonTimer;
     float attackTimer;
+    int tacticState;
+    int flankDir;
+    float tacticTimer;
 };
 
 struct EnemyBullet {
@@ -609,6 +612,13 @@ const wchar_t* praiseMsgs[] = {L"Nice Shot!", L"Damn Son", L"Daddy Chill"};
 
 int highScore = 0;
 
+bool hordeActive = false;
+float hordeMessageTimer = 0;
+
+int currentWeapon = 0;
+bool gunUpgraded = false;
+float upgradeMessageTimer = 0;
+
 void GetHighScorePath(wchar_t* path) {
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
@@ -673,6 +683,10 @@ int treeW = 0, treeH = 0;
 int cloudW = 0, cloudH = 0;
 int gunW = 0, gunH = 0;
 int gunfireW = 0, gunfireH = 0;
+DWORD* gunUpgrade1Pixels = NULL;
+DWORD* gunfire1Pixels = NULL;
+int gunUpgrade1W = 0, gunUpgrade1H = 0;
+int gunfire1W = 0, gunfire1H = 0;
 int bulletW = 0, bulletH = 0;
 int healthbarW = 0, healthbarH = 0;
 DWORD* spirePixels = NULL;
@@ -790,6 +804,14 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\gunfire.bmp", exePath);
     gunfirePixels = LoadBMPPixels(path, &gunfireW, &gunfireH);
     if (!gunfirePixels) { missingAssets.push_back(L"gunfire.bmp"); if (errorPixels) { gunfirePixels = errorPixels; gunfireW = errorW; gunfireH = errorH; } }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gun_upgrade1.bmp", exePath);
+    gunUpgrade1Pixels = LoadBMPPixels(path, &gunUpgrade1W, &gunUpgrade1H);
+    if (!gunUpgrade1Pixels) { gunUpgrade1Pixels = gunPixels; gunUpgrade1W = gunW; gunUpgrade1H = gunH; }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gunfire1.bmp", exePath);
+    gunfire1Pixels = LoadBMPPixels(path, &gunfire1W, &gunfire1H);
+    if (!gunfire1Pixels) { gunfire1Pixels = gunfirePixels; gunfire1W = gunfireW; gunfire1H = gunfireH; }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\bullet.bmp", exePath);
     bulletPixels = LoadBMPPixels(path, &bulletW, &bulletH);
@@ -1061,7 +1083,10 @@ void SpawnEnemies() {
         enemy.isShooter = false;
         enemy.fireTimer = 0;
         enemy.firingTimer = 0;
-        enemy.isMarshall = false; // Fix uninitialized
+        enemy.isMarshall = false;
+        enemy.tacticState = 0;
+        enemy.flankDir = 0;
+        enemy.tacticTimer = 0;
         enemies.push_back(enemy);
     }
 }
@@ -1090,140 +1115,211 @@ inline DWORD BlendWithFog(int r, int g, int b, float dist, float fogStart, float
 struct RaycastParams {
     int startX;
     int endX;
+    HANDLE startEvent;
+    HANDLE doneEvent;
+    volatile bool running;
 };
+
+RaycastParams* threadParams = nullptr;
+HANDLE* rayThreads = nullptr;
+int numRayThreads = 0;
+volatile bool raycastRunning = true;
 
 unsigned __stdcall RaycastWorker(void* param) {
     RaycastParams* rp = (RaycastParams*)param;
     
-    for (int x = rp->startX; x < rp->endX; x++) {
-        float rayAngle = (player.angle - FOV / 2.0f) + ((float)x / SCREEN_WIDTH) * FOV;
-        float rayDirX = FastCos(rayAngle);
-        float rayDirY = FastSin(rayAngle);
+    while (rp->running) {
+        WaitForSingleObject(rp->startEvent, INFINITE);
+        if (!rp->running) break;
         
-        float distanceToWall = 0;
-        bool hitWall = false;
-        int wallType = 0;
-        
-        float stepSize = 0.02f;
-        while (!hitWall && distanceToWall < 90.0f) {
-            distanceToWall += stepSize;
-            int testX = (int)(player.x + rayDirX * distanceToWall);
-            int testY = (int)(player.y + rayDirY * distanceToWall);
+        for (int x = rp->startX; x < rp->endX; x++) {
+            float rayAngle = (player.angle - FOV / 2.0f) + ((float)x / SCREEN_WIDTH) * FOV;
+            float rayDirX = FastCos(rayAngle);
+            float rayDirY = FastSin(rayAngle);
             
-            if (testX < 0 || testX >= MAP_WIDTH || testY < 0 || testY >= MAP_HEIGHT) {
-                hitWall = true;
-                distanceToWall = 90.0f;
-                wallType = 3;
-            } else if (worldMap[testX][testY] > 0) {
-                hitWall = true;
-                wallType = worldMap[testX][testY];
+            int mapX = (int)player.x;
+            int mapY = (int)player.y;
+            
+            float sideDistX, sideDistY;
+            float deltaDistX = (rayDirX == 0) ? 1e30f : fabsf(1.0f / rayDirX);
+            float deltaDistY = (rayDirY == 0) ? 1e30f : fabsf(1.0f / rayDirY);
+            
+            int stepX, stepY;
+            if (rayDirX < 0) {
+                stepX = -1;
+                sideDistX = (player.x - mapX) * deltaDistX;
+            } else {
+                stepX = 1;
+                sideDistX = (mapX + 1.0f - player.x) * deltaDistX;
             }
-        }
-        
-        float correctedDist = distanceToWall * cosf(rayAngle - player.angle);
-        
-        int ceiling, floorLine;
-        if (wallType == 3) {
-            ceiling = 0;
-            floorLine = SCREEN_HEIGHT / 2 + (int)player.pitch;
-        } else {
-            ceiling = (int)((SCREEN_HEIGHT / 2.0f) - (SCREEN_HEIGHT / correctedDist) + player.pitch);
-            floorLine = SCREEN_HEIGHT - ceiling;
-        }
-        
-        for (int y = 0; y < SCREEN_HEIGHT; y++) {
-            if (y <= SCREEN_HEIGHT / 2 + (int)player.pitch) {
-                float skyGradient = (float)y / (SCREEN_HEIGHT / 2);
-                int r, g, b;
-                
-                if (bossActive) {
-                    r = (int)(150 + 100 * (1 - skyGradient));
-                    g = (int)(20 * (1 - skyGradient));
-                    b = (int)(20 * (1 - skyGradient));
+            if (rayDirY < 0) {
+                stepY = -1;
+                sideDistY = (player.y - mapY) * deltaDistY;
+            } else {
+                stepY = 1;
+                sideDistY = (mapY + 1.0f - player.y) * deltaDistY;
+            }
+            
+            bool hitWall = false;
+            int side = 0;
+            int wallType = 0;
+            float distanceToWall = 0;
+            
+            while (!hitWall && distanceToWall < 90.0f) {
+                if (sideDistX < sideDistY) {
+                    sideDistX += deltaDistX;
+                    mapX += stepX;
+                    side = 0;
                 } else {
-                    r = (int)(30 + 80 * (1 - skyGradient));
-                    g = (int)(60 + 120 * (1 - skyGradient));
-                    b = (int)(100 + 155 * (1 - skyGradient));
+                    sideDistY += deltaDistY;
+                    mapY += stepY;
+                    side = 1;
                 }
                 
-                backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
-                zBuffer[y * SCREEN_WIDTH + x] = 1000.0f;
+                if (mapX < 0 || mapX >= MAP_WIDTH || mapY < 0 || mapY >= MAP_HEIGHT) {
+                    hitWall = true;
+                    wallType = 3;
+                    distanceToWall = 90.0f;
+                } else if (worldMap[mapX][mapY] > 0) {
+                    hitWall = true;
+                    wallType = worldMap[mapX][mapY];
+                    if (side == 0) {
+                        distanceToWall = (mapX - player.x + (1 - stepX) / 2.0f) / rayDirX;
+                    } else {
+                        distanceToWall = (mapY - player.y + (1 - stepY) / 2.0f) / rayDirY;
+                    }
+                }
             }
             
-            if (y > SCREEN_HEIGHT / 2 + (int)player.pitch) {
-                float rowDist = (SCREEN_HEIGHT / 2.0f) / (y - SCREEN_HEIGHT / 2.0f);
-                float floorX = player.x + FastCos(rayAngle) * rowDist;
-                float floorY = player.y + FastSin(rayAngle) * rowDist;
+            float correctedDist = distanceToWall * cosf(rayAngle - player.angle);
+            
+            int ceiling, floorLine;
+            if (wallType == 3) {
+                ceiling = 0;
+                floorLine = SCREEN_HEIGHT / 2 + (int)player.pitch;
+            } else {
+                ceiling = (int)((SCREEN_HEIGHT / 2.0f) - (SCREEN_HEIGHT / correctedDist) + player.pitch);
+                floorLine = SCREEN_HEIGHT - ceiling;
+            }
+            
+            for (int y = 0; y < SCREEN_HEIGHT; y++) {
+                if (y <= SCREEN_HEIGHT / 2 + (int)player.pitch) {
+                    float skyGradient = (float)y / (SCREEN_HEIGHT / 2);
+                    int r, g, b;
+                    
+                    if (bossActive) {
+                        r = (int)(150 + 100 * (1 - skyGradient));
+                        g = (int)(20 * (1 - skyGradient));
+                        b = (int)(20 * (1 - skyGradient));
+                    } else {
+                        r = (int)(30 + 80 * (1 - skyGradient));
+                        g = (int)(60 + 120 * (1 - skyGradient));
+                        b = (int)(100 + 155 * (1 - skyGradient));
+                    }
+                    
+                    backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
+                    zBuffer[y * SCREEN_WIDTH + x] = 1000.0f;
+                }
                 
-                if (grassPixels && grassW > 0) {
-                    int texX = (int)(fmodf(floorX, 1.0f) * grassW);
-                    int texY = (int)(fmodf(floorY, 1.0f) * grassH);
-                    if (texX < 0) texX += grassW;
-                    if (texY < 0) texY += grassH;
-                    texX %= grassW; texY %= grassH;
-                    DWORD col = grassPixels[texY * grassW + texX];
-                    int bb = (col >> 0) & 0xFF;
-                    int gg = (col >> 8) & 0xFF;
-                    int rr = (col >> 16) & 0xFF;
-                    float shade = 1.0f - (rowDist / 20.0f);
-                    if (shade < 0.15f) shade = 0.15f;
-                    backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(
-                        (int)(rr * shade), (int)(gg * shade), (int)(bb * shade));
-                } else {
-                    float shade = 1.0f - (rowDist / 40.0f);
+                if (y > SCREEN_HEIGHT / 2 + (int)player.pitch) {
+                    float rowDist = (SCREEN_HEIGHT / 2.0f) / (y - SCREEN_HEIGHT / 2.0f);
+                    float floorX = player.x + FastCos(rayAngle) * rowDist;
+                    float floorY = player.y + FastSin(rayAngle) * rowDist;
+                    
+                    if (grassPixels && grassW > 0) {
+                        int texX = (int)(fmodf(floorX, 1.0f) * grassW);
+                        int texY = (int)(fmodf(floorY, 1.0f) * grassH);
+                        if (texX < 0) texX += grassW;
+                        if (texY < 0) texY += grassH;
+                        texX %= grassW; texY %= grassH;
+                        DWORD col = grassPixels[texY * grassW + texX];
+                        int bb = (col >> 0) & 0xFF;
+                        int gg = (col >> 8) & 0xFF;
+                        int rr = (col >> 16) & 0xFF;
+                        float shade = 1.0f - (rowDist / 20.0f);
+                        if (shade < 0.15f) shade = 0.15f;
+                        backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(
+                            (int)(rr * shade), (int)(gg * shade), (int)(bb * shade));
+                    } else {
+                        float shade = 1.0f - (rowDist / 40.0f);
+                        if (shade < 0.1f) shade = 0.1f;
+                        int c = (int)(80 * shade);
+                        backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(c/2, c, c/2);
+                    }
+                    
+                    zBuffer[y * SCREEN_WIDTH + x] = rowDist;
+                }
+                
+                if (wallType != 3 && y >= ceiling && y <= floorLine) {
+                    float shade = 1.0f - (correctedDist / 50.0f);
                     if (shade < 0.1f) shade = 0.1f;
-                    int c = (int)(80 * shade);
-                    backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(c/2, c, c/2);
+                    if (side == 1) shade *= 0.8f;
+                    int r, g, b;
+                    if (wallType == 2) {
+                        r = (int)(60 * shade); g = (int)(100 * shade); b = (int)(40 * shade);
+                    } else {
+                        r = (int)(140 * shade); g = (int)(100 * shade); b = (int)(60 * shade);
+                    }
+                    backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
+                    
+                    zBuffer[y * SCREEN_WIDTH + x] = correctedDist;
                 }
-                
-                zBuffer[y * SCREEN_WIDTH + x] = rowDist;
-            }
-            
-            if (wallType != 3 && y >= ceiling && y <= floorLine) {
-                float shade = 1.0f - (correctedDist / 50.0f);
-                if (shade < 0.1f) shade = 0.1f;
-                int r, g, b;
-                if (wallType == 2) {
-                    r = (int)(60 * shade); g = (int)(100 * shade); b = (int)(40 * shade);
-                } else {
-                    r = (int)(140 * shade); g = (int)(100 * shade); b = (int)(60 * shade);
-                }
-                backBufferPixels[y * SCREEN_WIDTH + x] = MakeColor(r, g, b);
-                
-                zBuffer[y * SCREEN_WIDTH + x] = correctedDist;
             }
         }
+        
+        SetEvent(rp->doneEvent);
     }
     
     return 0;
 }
 
-void CastRays() {
+void InitThreadPool() {
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
-    int numThreads = sysInfo.dwNumberOfProcessors;
-    if (numThreads < 1) numThreads = 1;
-    if (numThreads > 32) numThreads = 32;
+    numRayThreads = sysInfo.dwNumberOfProcessors;
+    if (numRayThreads < 1) numRayThreads = 1;
+    if (numRayThreads > 16) numRayThreads = 16;
     
-    HANDLE* threads = new HANDLE[numThreads];
-    RaycastParams* params = new RaycastParams[numThreads];
+    rayThreads = new HANDLE[numRayThreads];
+    threadParams = new RaycastParams[numRayThreads];
     
-    int columnsPerThread = SCREEN_WIDTH / numThreads;
+    int columnsPerThread = SCREEN_WIDTH / numRayThreads;
     
-    for (int i = 0; i < numThreads; i++) {
-        params[i].startX = i * columnsPerThread;
-        params[i].endX = (i == numThreads - 1) ? SCREEN_WIDTH : (i + 1) * columnsPerThread;
-        threads[i] = (HANDLE)_beginthreadex(NULL, 0, RaycastWorker, &params[i], 0, NULL);
+    for (int i = 0; i < numRayThreads; i++) {
+        threadParams[i].startX = i * columnsPerThread;
+        threadParams[i].endX = (i == numRayThreads - 1) ? SCREEN_WIDTH : (i + 1) * columnsPerThread;
+        threadParams[i].startEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+        threadParams[i].doneEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+        threadParams[i].running = true;
+        rayThreads[i] = (HANDLE)_beginthreadex(NULL, 0, RaycastWorker, &threadParams[i], 0, NULL);
+    }
+}
+
+void CleanupThreadPool() {
+    for (int i = 0; i < numRayThreads; i++) {
+        threadParams[i].running = false;
+        SetEvent(threadParams[i].startEvent);
+    }
+    WaitForMultipleObjects(numRayThreads, rayThreads, TRUE, 1000);
+    for (int i = 0; i < numRayThreads; i++) {
+        CloseHandle(rayThreads[i]);
+        CloseHandle(threadParams[i].startEvent);
+        CloseHandle(threadParams[i].doneEvent);
+    }
+    delete[] rayThreads;
+    delete[] threadParams;
+}
+
+void CastRays() {
+    HANDLE* doneEvents = new HANDLE[numRayThreads];
+    
+    for (int i = 0; i < numRayThreads; i++) {
+        doneEvents[i] = threadParams[i].doneEvent;
+        SetEvent(threadParams[i].startEvent);
     }
     
-    WaitForMultipleObjects(numThreads, threads, TRUE, INFINITE);
-    
-    for (int i = 0; i < numThreads; i++) {
-        CloseHandle(threads[i]);
-    }
-    
-    delete[] threads;
-    delete[] params;
+    WaitForMultipleObjects(numRayThreads, doneEvents, TRUE, INFINITE);
+    delete[] doneEvents;
 }
 
 // --- 3D Rasterizer ---
@@ -1869,17 +1965,25 @@ void UpdateEnemies(float deltaTime) {
                  }
                  if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
                  
-                 // Summoning
                  enemy.summonTimer -= deltaTime;
                  if (enemy.summonTimer <= 0) {
                      enemy.summonTimer = 10.0f;
+                     float spawnDist = (enemy.tacticState != 0) ? -8.0f : 0.0f;
+                     float behindX = player.x - cosf(player.angle) * spawnDist;
+                     float behindY = player.y - sinf(player.angle) * spawnDist;
                      for (int k=0; k<5; k++) {
                          Enemy s;
-                         s.x = enemy.x + (rand()%200 - 100)/50.0f;
-                         s.y = enemy.y + (rand()%200 - 100)/50.0f;
-                         if (worldMap[(int)s.x][(int)s.y] == 0) {
-                             s.active = true; s.health = 1; s.speed = 3.0f; s.spriteIndex = rand()%4; // Melee
+                         if (enemy.tacticState != 0) {
+                             s.x = behindX + (rand()%200 - 100)/50.0f;
+                             s.y = behindY + (rand()%200 - 100)/50.0f;
+                         } else {
+                             s.x = enemy.x + (rand()%200 - 100)/50.0f;
+                             s.y = enemy.y + (rand()%200 - 100)/50.0f;
+                         }
+                         if (s.x > 1 && s.x < MAP_WIDTH-1 && s.y > 1 && s.y < MAP_HEIGHT-1 && worldMap[(int)s.x][(int)s.y] == 0) {
+                             s.active = true; s.health = 1; s.speed = 3.0f; s.spriteIndex = rand()%4;
                              s.isShooter = false; s.isMarshall = false;
+                             s.tacticState = 0; s.flankDir = 0; s.tacticTimer = 0;
                              enemies.push_back(s);
                          }
                      }
@@ -1894,7 +1998,59 @@ void UpdateEnemies(float deltaTime) {
         if (enemy.isShooter) {
             if (enemy.firingTimer > 0) enemy.firingTimer -= deltaTime;
             
-            if (dist <= 16.0f && dist > 1.0f) {
+            int nearbyHordeCount = 0;
+            for (auto& other : enemies) {
+                if (&other == &enemy || !other.active) continue;
+                float ox = enemy.x - other.x;
+                float oy = enemy.y - other.y;
+                if (sqrtf(ox*ox + oy*oy) < 8.0f && other.tacticState != 0) nearbyHordeCount++;
+            }
+            
+            if (nearbyHordeCount >= 4 && enemy.tacticState == 0) {
+                enemy.tacticState = 3;
+                enemy.flankDir = (rand() % 2 == 0) ? 1 : -1;
+                enemy.tacticTimer = 0;
+            } else if (nearbyHordeCount < 2 && enemy.tacticState == 3) {
+                enemy.tacticState = 0;
+            }
+            
+            if (enemy.tacticState == 3) {
+                float targetAngle = atan2f(dy, dx) + (enemy.flankDir * PI / 3.0f);
+                float targetX = player.x + cosf(targetAngle) * 12.0f;
+                float targetY = player.y + sinf(targetAngle) * 12.0f;
+                float tdx = targetX - enemy.x;
+                float tdy = targetY - enemy.y;
+                float tdist = sqrtf(tdx*tdx + tdy*tdy);
+                
+                if (tdist > 2.0f) {
+                    float moveX = (tdx / tdist) * enemy.speed * 1.5f * deltaTime;
+                    float moveY = (tdy / tdist) * enemy.speed * 1.5f * deltaTime;
+                    float newX = enemy.x + moveX;
+                    float newY = enemy.y + moveY;
+                    if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
+                    if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+                }
+                
+                if (dist <= 18.0f && dist > 1.0f) {
+                    enemy.fireTimer -= deltaTime;
+                    if (enemy.fireTimer <= 0) {
+                        EnemyBullet eb;
+                        eb.x = enemy.x;
+                        eb.y = enemy.y;
+                        float edx = player.x - enemy.x;
+                        float edy = player.y - enemy.y;
+                        float edist = sqrtf(edx*edx + edy*edy);
+                        eb.dirX = edx / edist;
+                        eb.dirY = edy / edist;
+                        eb.speed = 8.0f;
+                        eb.active = true;
+                        eb.isLaser = false;
+                        enemyBullets.push_back(eb);
+                        enemy.fireTimer = 1.5f;
+                        enemy.firingTimer = 0.5f;
+                    }
+                }
+            } else if (dist <= 16.0f && dist > 1.0f) {
                 enemy.fireTimer -= deltaTime;
                 if (enemy.fireTimer <= 0) {
                     EnemyBullet eb;
@@ -1922,21 +2078,119 @@ void UpdateEnemies(float deltaTime) {
                 if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
             }
         } else {
-            if (dist > 0.5f) {
-                float moveX = (dx / dist) * enemy.speed * deltaTime;
-                float moveY = (dy / dist) * enemy.speed * deltaTime;
-                float newX = enemy.x + moveX;
-                float newY = enemy.y + moveY;
-                if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
-                if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+            int nearbyCount = 0;
+            float hordeCenterX = enemy.x, hordeCenterY = enemy.y;
+            for (auto& other : enemies) {
+                if (&other == &enemy || !other.active || other.isShooter) continue;
+                float ox = enemy.x - other.x;
+                float oy = enemy.y - other.y;
+                float odist = sqrtf(ox*ox + oy*oy);
+                if (odist < 6.0f) {
+                    nearbyCount++;
+                    hordeCenterX += other.x;
+                    hordeCenterY += other.y;
+                }
             }
+            if (nearbyCount > 0) {
+                hordeCenterX /= (nearbyCount + 1);
+                hordeCenterY /= (nearbyCount + 1);
+            }
+            
+            for (auto& other : enemies) {
+                if (&other == &enemy || !other.active || other.isShooter || other.isMarshall) continue;
+                if (other.tacticState != 0) continue;
+                float ox = other.x - hordeCenterX;
+                float oy = other.y - hordeCenterY;
+                float odist = sqrtf(ox*ox + oy*oy);
+                if (odist < 16.0f && odist >= 6.0f && nearbyCount >= 7) {
+                    other.tacticState = (rand() % 2 == 0) ? 1 : 2;
+                    other.flankDir = (rand() % 2 == 0) ? 1 : -1;
+                    other.tacticTimer = 2.0f;
+                }
+            }
+            
+            if (nearbyCount >= 7 && enemy.tacticState == 0) {
+                enemy.tacticState = (rand() % 2 == 0) ? 1 : 2;
+                enemy.flankDir = (rand() % 2 == 0) ? 1 : -1;
+                enemy.tacticTimer = 2.0f;
+                if (!hordeActive) {
+                    hordeActive = true;
+                    hordeMessageTimer = 3.0f;
+                }
+            } else if (nearbyCount < 4 && enemy.tacticState != 0) {
+                enemy.tacticState = 0;
+            }
+            
+            int hordeCount = 0;
+            for (auto& e : enemies) {
+                if (e.active && e.tacticState != 0) hordeCount++;
+            }
+            if (hordeCount < 4) hordeActive = false;
+            
+            if (enemy.tacticTimer > 0) enemy.tacticTimer -= deltaTime;
+            
+            float separationX = 0, separationY = 0;
+            for (auto& other : enemies) {
+                if (&other == &enemy || !other.active || other.isShooter || other.isMarshall) continue;
+                float ox = enemy.x - other.x;
+                float oy = enemy.y - other.y;
+                float odist = sqrtf(ox*ox + oy*oy);
+                if (odist < 1.5f && odist > 0.01f) {
+                    separationX += (ox / odist) * (1.5f - odist);
+                    separationY += (oy / odist) * (1.5f - odist);
+                }
+            }
+            
+            float moveX = 0, moveY = 0;
+            
+            if (enemy.tacticState == 2 && dist > 2.0f) {
+                float angleToEnemy = atan2f(enemy.y - player.y, enemy.x - player.x);
+                float playerFacing = player.angle;
+                float angleDiff = angleToEnemy - playerFacing;
+                while (angleDiff > PI) angleDiff -= 2 * PI;
+                while (angleDiff < -PI) angleDiff += 2 * PI;
+                
+                float targetAngle;
+                if (enemy.flankDir == 1) {
+                    targetAngle = playerFacing + PI * 0.75f;
+                } else {
+                    targetAngle = playerFacing - PI * 0.75f;
+                }
+                
+                float encircleRadius = 4.0f;
+                float targetX = player.x + cosf(targetAngle) * encircleRadius;
+                float targetY = player.y + sinf(targetAngle) * encircleRadius;
+                
+                float tdx = targetX - enemy.x;
+                float tdy = targetY - enemy.y;
+                float tdist = sqrtf(tdx*tdx + tdy*tdy);
+                
+                if (tdist > 1.5f) {
+                    moveX = (tdx / tdist) * enemy.speed * 1.8f * deltaTime;
+                    moveY = (tdy / tdist) * enemy.speed * 1.8f * deltaTime;
+                } else {
+                    moveX = (dx / dist) * enemy.speed * 1.5f * deltaTime;
+                    moveY = (dy / dist) * enemy.speed * 1.5f * deltaTime;
+                }
+            } else if (dist > 1.2f) {
+                moveX = (dx / dist) * enemy.speed * deltaTime;
+                moveY = (dy / dist) * enemy.speed * deltaTime;
+            }
+            
+            moveX += separationX * enemy.speed * 0.5f * deltaTime;
+            moveY += separationY * enemy.speed * 0.5f * deltaTime;
+            
+            float newX = enemy.x + moveX;
+            float newY = enemy.y + moveY;
+            if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
+            if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
             
             if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
             
-            if (dist < 1.0f && enemy.attackTimer <= 0) {
+            if (dist < 2.0f && enemy.attackTimer <= 0) {
                 if (!godMode) {
-                    if (enemy.spriteIndex == 4) player.health -= 3;
-                    else player.health -= 1;
+                    if (enemy.spriteIndex == 4) player.health -= 10;
+                    else player.health -= 5;
                 }
                 
                 enemy.attackTimer = 1.0f;
@@ -1947,6 +2201,11 @@ void UpdateEnemies(float deltaTime) {
                     player.health = 100;
                     player.x = 10.0f;
                     player.y = 32.0f;
+                    gunUpgraded = false;
+                    currentWeapon = 0;
+                    playerDamage = 1;
+                    maxAmmo = 8;
+                    ammo = 8;
                     
                     if (bossActive) {
                         bossActive = false;
@@ -2508,6 +2767,11 @@ void UpdateEnemies(float deltaTime) {
                 player.health = 100;
                 player.x = 10.0f;
                 player.y = 32.0f;
+                gunUpgraded = false;
+                currentWeapon = 0;
+                playerDamage = 1;
+                maxAmmo = 8;
+                ammo = 8;
                 
                 if (bossActive) {
                     bossActive = false;
@@ -2703,6 +2967,14 @@ void UpdateBullets(float deltaTime) {
                     if (enemy.isMarshall) marshallKilled = true;
                     score++;
                     PlayScoreSound();
+                    
+                    if (score == 50 && !gunUpgraded) {
+                        gunUpgraded = true;
+                        playerDamage = 5;
+                        maxAmmo += 2;
+                        ammo = maxAmmo;
+                        upgradeMessageTimer = 3.0f;
+                    }
                     
                     if (score > highScore) {
                         highScore = score;
@@ -3257,7 +3529,8 @@ void DrawMinimap(HDC hdc) {
             int ey = offsetY + (int)(enemy.y * cellSize);
             
             if (ex >= offsetX && ex < offsetX + mapDrawWidth && ey >= offsetY && ey < offsetY + mapDrawHeight) {
-                HBRUSH enemyBrush = CreateSolidBrush(RGB(255, 0, 0));
+                COLORREF enemyColor = (enemy.tacticState != 0) ? RGB(148, 0, 211) : RGB(255, 0, 0);
+                HBRUSH enemyBrush = CreateSolidBrush(enemyColor);
                 oldBrush = (HBRUSH)SelectObject(hdc, enemyBrush);
                 Ellipse(hdc, ex - 3, ey - 3, ex + 3, ey + 3);
                 SelectObject(hdc, oldBrush);
@@ -3397,21 +3670,28 @@ void UpdatePlayer(float deltaTime) {
 }
 
 void RenderGun() {
-    if (!gunPixels || gunW <= 0 || gunH <= 0) return;
+    DWORD* baseGunPixels = gunUpgraded ? gunUpgrade1Pixels : gunPixels;
+    DWORD* baseFirePixels = gunUpgraded ? gunfire1Pixels : gunfirePixels;
+    int baseGunW = gunUpgraded ? gunUpgrade1W : gunW;
+    int baseGunH = gunUpgraded ? gunUpgrade1H : gunH;
+    int baseFireW = gunUpgraded ? gunfire1W : gunfireW;
+    int baseFireH = gunUpgraded ? gunfire1H : gunfireH;
+    
+    if (!baseGunPixels || baseGunW <= 0 || baseGunH <= 0) return;
     
     int gunScale = 10;
-    int gunDrawW = gunW * gunScale;
-    int gunDrawH = gunH * gunScale;
+    int gunDrawW = baseGunW * gunScale;
+    int gunDrawH = baseGunH * gunScale;
     int gunX = SCREEN_WIDTH - gunDrawW + 20 + (int)gunSwayX;
     int gunY = SCREEN_HEIGHT - gunDrawH - 0 + (int)gunSwayY + (int)gunReloadOffset;
     
-    DWORD* pixels = gunPixels;
-    int srcW = gunW, srcH = gunH;
+    DWORD* pixels = baseGunPixels;
+    int srcW = baseGunW, srcH = baseGunH;
     
-    if (isFiring && gunfirePixels && gunfireW > 0 && !isReloading) {
-        pixels = gunfirePixels;
-        srcW = gunfireW;
-        srcH = gunfireH;
+    if (isFiring && baseFirePixels && baseFireW > 0 && !isReloading) {
+        pixels = baseFirePixels;
+        srcW = baseFireW;
+        srcH = baseFireH;
         gunDrawW = srcW * gunScale;
         gunDrawH = srcH * gunScale;
         gunX = SCREEN_WIDTH - gunDrawW + 20 + (int)gunSwayX;
@@ -3669,6 +3949,22 @@ void RenderGame(HDC hdc) {
         DeleteObject(hFont);
     }
     
+    if (hordeMessageTimer > 0) {
+        HFONT hHFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldHFont = (HFONT)SelectObject(memDC, hHFont);
+        
+        SetTextColor(memDC, RGB(148, 0, 211));
+        SetBkMode(memDC, TRANSPARENT);
+        
+        const wchar_t* hordeMsg = L"The Towns Folk has rallied!";
+        SIZE hsz;
+        GetTextExtentPoint32W(memDC, hordeMsg, (int)wcslen(hordeMsg), &hsz);
+        TextOutW(memDC, (SCREEN_WIDTH - hsz.cx) / 2, SCREEN_HEIGHT / 4, hordeMsg, (int)wcslen(hordeMsg));
+        
+        SelectObject(memDC, hOldHFont);
+        DeleteObject(hHFont);
+    }
+    
     if (paragonMessageTimer > 0) {
         HFONT hPFont = CreateFontW(40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         HFONT hOldPFont = (HFONT)SelectObject(memDC, hPFont);
@@ -3686,6 +3982,27 @@ void RenderGame(HDC hdc) {
         
         SelectObject(memDC, hOldPFont);
         DeleteObject(hPFont);
+    }
+    
+    if (upgradeMessageTimer > 0) {
+        HFONT hUFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldUFont = (HFONT)SelectObject(memDC, hUFont);
+        
+        SetTextColor(memDC, RGB(255, 215, 0));
+        SetBkMode(memDC, TRANSPARENT);
+        
+        const wchar_t* upMsg = L"Gun Upgraded! Damage: 5, Ammo +2";
+        SIZE usz;
+        GetTextExtentPoint32W(memDC, upMsg, (int)wcslen(upMsg), &usz);
+        TextOutW(memDC, (SCREEN_WIDTH - usz.cx) / 2, SCREEN_HEIGHT / 5, upMsg, (int)wcslen(upMsg));
+        
+        const wchar_t* upMsg2 = L"Press 1 or 2 to switch weapons";
+        SIZE usz2;
+        GetTextExtentPoint32W(memDC, upMsg2, (int)wcslen(upMsg2), &usz2);
+        TextOutW(memDC, (SCREEN_WIDTH - usz2.cx) / 2, SCREEN_HEIGHT / 5 + 40, upMsg2, (int)wcslen(upMsg2));
+        
+        SelectObject(memDC, hOldUFont);
+        DeleteObject(hUFont);
     }
     
     // Boss Health Bar
@@ -4009,6 +4326,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (victoryScreen) return 0;
             keys[wParam & 0xFF] = true;
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
+            if (gunUpgraded && !consoleActive) {
+                if (wParam == '1') currentWeapon = 0;
+                else if (wParam == '2') currentWeapon = 1;
+            }
             return 0;
         case WM_KEYUP:
             if (victoryScreen) return 0;
@@ -4114,6 +4435,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (gunnerPixels) delete[] gunnerPixels;
             if (gunnerFiringPixels) delete[] gunnerFiringPixels;
             for (int i = 0; i < 11; i++) if (healthbarPixels[i]) delete[] healthbarPixels[i];
+            CleanupThreadPool();
             PostQuitMessage(0);
             return 0;
     }
@@ -4130,6 +4452,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     SpawnEnemies();
     SpawnMedkit();
     InitClaws();
+    InitThreadPool();
+    
+    enemies.reserve(64);
+    bullets.reserve(32);
+    fireballs.reserve(32);
+    enemyBullets.reserve(64);
+    paragons.reserve(16);
     
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -4184,6 +4513,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (scoreTimer > 0) scoreTimer -= deltaTime;
         if (screenShakeTimer > 0) screenShakeTimer -= deltaTime;
         if (errorTimer > 0) errorTimer -= deltaTime;
+        if (hordeMessageTimer > 0) hordeMessageTimer -= deltaTime;
+        if (upgradeMessageTimer > 0) upgradeMessageTimer -= deltaTime;
         
         fpsCounter++;
         if (currentTime - fpsLastTime >= 1000) {
