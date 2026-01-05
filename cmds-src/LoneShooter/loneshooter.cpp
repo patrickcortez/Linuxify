@@ -127,6 +127,63 @@ void PlayMarshallAttackSound() {
     mciSendStringW(L"play mashsfx from 0", NULL, 0, NULL);
 }
 
+void PlayPlayerHurtSound() {
+    static wchar_t hurtPath[MAX_PATH] = {0};
+    static bool opened = false;
+    if (hurtPath[0] == 0) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(hurtPath, MAX_PATH, L"\"%ls\\assets\\sound-effects\\player_hurt.mp3\"", exePath);
+    }
+    
+    if (!opened) {
+        wchar_t cmd[512];
+        swprintf(cmd, 512, L"open %ls type mpegvideo alias hurtsfx", hurtPath);
+        mciSendStringW(cmd, NULL, 0, NULL);
+        mciSendStringW(L"setaudio hurtsfx volume to 1000", NULL, 0, NULL);
+        opened = true;
+    }
+    mciSendStringW(L"play hurtsfx from 0", NULL, 0, NULL);
+}
+
+int enemyHurtSoundIndex = 0;
+wchar_t enemyHurtPaths[3][MAX_PATH] = {0};
+
+void PlayEnemyHurtSound() {
+    static bool initialized = false;
+    if (!initialized) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        for (int i = 0; i < 3; i++) {
+            swprintf(enemyHurtPaths[i], MAX_PATH, L"%ls\\assets\\sound-effects\\enemy_hurt%d.wav", exePath, i + 1);
+        }
+        initialized = true;
+    }
+    
+    enemyHurtSoundIndex = (enemyHurtSoundIndex + 1) % 3;
+    PlaySoundW(enemyHurtPaths[enemyHurtSoundIndex], NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+}
+
+wchar_t marshallHurtPath[MAX_PATH] = {0};
+
+void PlayMarshallHurtSound() {
+    static bool initialized = false;
+    if (!initialized) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(marshallHurtPath, MAX_PATH, L"%ls\\assets\\sound-effects\\marshall_hurt.wav", exePath);
+        initialized = true;
+    }
+    
+    PlaySoundW(marshallHurtPath, NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+}
+
 void BackgroundMusic(void* arg) {
     const int E2 = 40;
     const int E3 = 52; 
@@ -1874,13 +1931,17 @@ void UpdateEnemies(float deltaTime) {
                 if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
             }
             
-            if (dist < 1.0f) {
+            if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
+            
+            if (dist < 1.0f && enemy.attackTimer <= 0) {
                 if (!godMode) {
                     if (enemy.spriteIndex == 4) player.health -= 3;
                     else player.health -= 1;
                 }
                 
+                enemy.attackTimer = 1.0f;
                 playerHurtTimer = 0.3f;
+                PlayPlayerHurtSound();
                 if (player.health <= 0) {
                     score = 0;
                     player.health = 100;
@@ -1929,6 +1990,7 @@ void UpdateEnemies(float deltaTime) {
             int dmg = eb.isLaser ? 10 : 5;
             if (!godMode) player.health -= dmg;
             playerHurtTimer = 0.3f;
+            PlayPlayerHurtSound();
             eb.active = false;
             
             if (player.health <= 0) {
@@ -2244,6 +2306,7 @@ void UpdateEnemies(float deltaTime) {
                             if(dist < aoeRadius) {
                                 if (!godMode) player.health -= 15;
                                 playerHurtTimer = 0.3f;
+                                PlayPlayerHurtSound();
                                 if(player.health <= 0) {
                                     score = 0;
                                     player.health = 100;
@@ -2373,6 +2436,7 @@ void UpdateEnemies(float deltaTime) {
                         if(dist < aoeRadius) {
                             if (!godMode) player.health -= 10;
                             playerHurtTimer = 0.3f;
+                            PlayPlayerHurtSound();
                             if(player.health <= 0) {
                                 score = 0;
                                 player.health = 100;
@@ -2626,6 +2690,13 @@ void UpdateBullets(float deltaTime) {
                 
                 enemy.health -= playerDamage;
                 if (enemy.spriteIndex == 4 || enemy.isShooter) enemy.hurtTimer = 0.5f;
+                
+                if (enemy.isMarshall) {
+                    enemy.hurtTimer = 0.5f;
+                    PlayMarshallHurtSound();
+                } else {
+                    PlayEnemyHurtSound();
+                }
                 
                 if (enemy.health <= 0) {
                     enemy.active = false;
