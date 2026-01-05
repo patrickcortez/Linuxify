@@ -85,6 +85,12 @@ void PlayScoreSound() {
     NoteOn(3, 84, 127);
 }
 
+void PlayHealSound() {
+    NoteOn(3, 72, 127);
+    NoteOn(3, 76, 127);
+    NoteOn(3, 79, 127);
+}
+
 void PlaySlamSound() {
     static wchar_t slamPath[MAX_PATH] = {0};
     if (slamPath[0] == 0) {
@@ -277,6 +283,19 @@ struct TreeSprite {
     float distance;
 };
 
+struct GrassSprite {
+    float x, y;
+};
+
+struct RockSprite {
+    float x, y;
+    int variant;
+};
+
+struct BushSprite {
+    float x, y;
+};
+
 struct Cloud {
     float x, y;
     float height;
@@ -395,18 +414,22 @@ struct Medkit {
     bool active;
     float respawnTimer;
     static const float RESPAWN_TIME;
-    static const int HEAL_AMOUNT = 20;
+    static const int HEAL_AMOUNT = 25;
 };
-const float Medkit::RESPAWN_TIME = 20.0f;
+const float Medkit::RESPAWN_TIME = 10.0f;
 
 Player player = {10.0f, 32.0f, 0.0f, 0.0f, 100};
 std::vector<Enemy> enemies;
 std::vector<TreeSprite> trees;
+std::vector<GrassSprite> grasses;
+std::vector<RockSprite> rocks;
+std::vector<BushSprite> bushes;
 std::vector<Cloud> clouds;
 std::vector<Bullet> bullets;
 std::vector<Fireball> fireballs;
 std::vector<EnemyBullet> enemyBullets;
-Medkit medkit = {0, 0, false, 0};
+Medkit medkits[3] = {{0, 0, false, 0}, {0, 0, false, 0}, {0, 0, false, 0}};
+float healFlashTimer = 0;
 
 bool bossActive = false;
 bool preBossPhase = false;
@@ -481,6 +504,7 @@ DWORD* paragonPixels = nullptr;
 int paragonW = 0, paragonH = 0;
 DWORD* paragonHurtPixels = nullptr;
 int paragonHurtW = 0, paragonHurtH = 0;
+float paragonSummonCooldown = 0;
 
 bool consoleActive = false;
 std::wstring consoleBuffer = L"";
@@ -492,6 +516,8 @@ DWORD fpsLastTime = 0;
 wchar_t errorMessage[256] = L"";
 float errorTimer = 0;
 wchar_t consoleError[128] = L"";
+std::vector<std::wstring> missingAssets;
+bool assetsFolderMissing = false;
 
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
@@ -578,6 +604,14 @@ DWORD* gunnerPixels = NULL;
 int gunnerW = 0, gunnerH = 0;
 DWORD* gunnerFiringPixels = NULL;
 int gunnerFiringW = 0, gunnerFiringH = 0;
+DWORD* gunnerHurtPixels = NULL;
+int gunnerHurtW = 0, gunnerHurtH = 0;
+DWORD* grassPlantPixels = NULL;
+int grassPlantW = 0, grassPlantH = 0;
+DWORD* rockPixels[3] = {NULL};
+int rockW[3] = {0}, rockH[3] = {0};
+DWORD* bushPixels = NULL;
+int bushW = 0, bushH = 0;
 int treeW = 0, treeH = 0;
 int cloudW = 0, cloudH = 0;
 int gunW = 0, gunH = 0;
@@ -609,6 +643,9 @@ bool preBossPulseFrame = false;
 Claw claws[6];
 int activeClawIndex = 0;
 float clawReturnSpeed = 3.0f;
+
+DWORD* errorPixels = NULL;
+int errorW = 0, errorH = 0;
 
 bool keys[256] = {false};
 wchar_t loadStatus[256] = L"Loading...";
@@ -651,123 +688,164 @@ void TryLoadAssets() {
     if (lastSlash) *lastSlash = L'\0';
     
     wchar_t path[MAX_PATH];
+    missingAssets.clear();
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\error.bmp", exePath);
+    errorPixels = LoadBMPPixels(path, &errorW, &errorH);
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\grass.bmp", exePath);
     grassPixels = LoadBMPPixels(path, &grassW, &grassH);
+    if (!grassPixels) { 
+        missingAssets.push_back(L"grass.bmp");
+        if (errorPixels) { grassPixels = errorPixels; grassW = errorW; grassH = errorH; } 
+    }
     
     for(int i=0; i<5; i++) {
         swprintf(path, MAX_PATH, L"%ls\\assets\\enemy%d.bmp", exePath, i+1);
         enemyPixels[i] = LoadBMPPixels(path, &enemyW[i], &enemyH[i]);
+        if (!enemyPixels[i]) { wchar_t name[32]; swprintf(name, 32, L"enemy%d.bmp", i+1); missingAssets.push_back(name); if (errorPixels) { enemyPixels[i] = errorPixels; enemyW[i] = errorW; enemyH[i] = errorH; } }
     }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\enemy5_hurt.bmp", exePath);
     enemy5HurtPixels = LoadBMPPixels(path, &enemy5HurtW, &enemy5HurtH);
+    if (!enemy5HurtPixels) { missingAssets.push_back(L"enemy5_hurt.bmp"); if (errorPixels) { enemy5HurtPixels = errorPixels; enemy5HurtW = errorW; enemy5HurtH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\gunner.bmp", exePath);
     gunnerPixels = LoadBMPPixels(path, &gunnerW, &gunnerH);
+    if (!gunnerPixels) { missingAssets.push_back(L"gunner.bmp"); if (errorPixels) { gunnerPixels = errorPixels; gunnerW = errorW; gunnerH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\gunner_firing.bmp", exePath);
     gunnerFiringPixels = LoadBMPPixels(path, &gunnerFiringW, &gunnerFiringH);
+    if (!gunnerFiringPixels) { missingAssets.push_back(L"gunner_firing.bmp"); if (errorPixels) { gunnerFiringPixels = errorPixels; gunnerFiringW = errorW; gunnerFiringH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\tree.bmp", exePath);
     treePixels = LoadBMPPixels(path, &treeW, &treeH);
+    if (!treePixels) { missingAssets.push_back(L"tree.bmp"); if (errorPixels) { treePixels = errorPixels; treeW = errorW; treeH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\cloud.bmp", exePath);
     cloudPixels = LoadBMPPixels(path, &cloudW, &cloudH);
+    if (!cloudPixels) { missingAssets.push_back(L"cloud.bmp"); if (errorPixels) { cloudPixels = errorPixels; cloudW = errorW; cloudH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\gun.bmp", exePath);
     gunPixels = LoadBMPPixels(path, &gunW, &gunH);
+    if (!gunPixels) { missingAssets.push_back(L"gun.bmp"); if (errorPixels) { gunPixels = errorPixels; gunW = errorW; gunH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\gunfire.bmp", exePath);
     gunfirePixels = LoadBMPPixels(path, &gunfireW, &gunfireH);
+    if (!gunfirePixels) { missingAssets.push_back(L"gunfire.bmp"); if (errorPixels) { gunfirePixels = errorPixels; gunfireW = errorW; gunfireH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\bullet.bmp", exePath);
     bulletPixels = LoadBMPPixels(path, &bulletW, &bulletH);
+    if (!bulletPixels) { missingAssets.push_back(L"bullet.bmp"); if (errorPixels) { bulletPixels = errorPixels; bulletW = errorW; bulletH = errorH; } }
     
     const wchar_t* healthbarNames[] = {L"healthbar_0.bmp", L"healthbar_10.bmp", L"healthbar_20.bmp", L"healthbar_30.bmp", L"healthbar_40.bmp", L"healthbar_50.bmp", L"healthbar_60.bmp", L"healthbar_70.bmp", L"healthbar_80.bmp", L"healthbar_90.bmp", L"healthbar_full.bmp"};
     for (int i = 0; i < 11; i++) {
         swprintf(path, MAX_PATH, L"%ls\\assets\\healthbar_UI\\%ls", exePath, healthbarNames[i]);
         healthbarPixels[i] = LoadBMPPixels(path, &healthbarW, &healthbarH);
+        if (!healthbarPixels[i]) { missingAssets.push_back(healthbarNames[i]); if (errorPixels) { healthbarPixels[i] = errorPixels; healthbarW = errorW; healthbarH = errorH; } }
     }
     
-    // Load Spire Sprite
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_resting.bmp", exePath);
     spirePixels = LoadBMPPixels(path, &spireW, &spireH);
+    if (!spirePixels) { missingAssets.push_back(L"spire_resting.bmp"); if (errorPixels) { spirePixels = errorPixels; spireW = errorW; spireH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_awake.bmp", exePath);
     spireAwakePixels = LoadBMPPixels(path, &spireAwakeW, &spireAwakeH);
+    if (!spireAwakePixels) { missingAssets.push_back(L"spire_awake.bmp"); if (errorPixels) { spireAwakePixels = errorPixels; spireAwakeW = errorW; spireAwakeH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\Spire_hurt.bmp", exePath);
     spireHurtPixels = LoadBMPPixels(path, &spireHurtW, &spireHurtH);
+    if (!spireHurtPixels) { missingAssets.push_back(L"Spire_hurt.bmp"); if (errorPixels) { spireHurtPixels = errorPixels; spireHurtW = errorW; spireHurtH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\Spire_Death.bmp", exePath);
     spireDeathPixels = LoadBMPPixels(path, &spireDeathW, &spireDeathH);
+    if (!spireDeathPixels) { missingAssets.push_back(L"Spire_Death.bmp"); if (errorPixels) { spireDeathPixels = errorPixels; spireDeathW = errorW; spireDeathH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\fireball.bmp", exePath);
     fireballPixels = LoadBMPPixels(path, &fireballW, &fireballH);
+    if (!fireballPixels) { missingAssets.push_back(L"fireball.bmp"); if (errorPixels) { fireballPixels = errorPixels; fireballW = errorW; fireballH = errorH; } }
     
-    // Load Boss Phase 2 Assets
     for(int i=0; i<3; i++) {
         swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\spire_phase2\\spire_frame%d.bmp", exePath, i+1);
         spirePhase2Pixels[i] = LoadBMPPixels(path, &spirePhase2W[i], &spirePhase2H[i]);
         if(!spirePhase2Pixels[i]) {
-            ShowError(L"Missing Ph2 Spire Asset!");
-            spirePhase2Pixels[i] = spirePixels; 
-            spirePhase2W[i] = spireW;
-            spirePhase2H[i] = spireH;
+            wchar_t name[64]; swprintf(name, 64, L"spire_frame%d.bmp", i+1); missingAssets.push_back(name);
+            if (errorPixels) { spirePhase2Pixels[i] = errorPixels; spirePhase2W[i] = errorW; spirePhase2H[i] = errorH; }
         }
     }
     
-    // Load Claw Phase 2 Assets
     for(int i=0; i<4; i++) {
         swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_awaken\\claw_frame%d.bmp", exePath, i+1);
         clawPhase2Pixels[i] = LoadBMPPixels(path, &clawPhase2W[i], &clawPhase2H[i]);
         if(!clawPhase2Pixels[i]) {
-             ShowError(L"Missing Ph2 Claw Asset!");
-             clawPhase2Pixels[i] = clawDormantPixels; // Fallback
-             clawPhase2W[i] = clawDormantW;
-             clawPhase2H[i] = clawDormantH;
+             wchar_t name[64]; swprintf(name, 64, L"claw_frame%d.bmp", i+1); missingAssets.push_back(name);
+             if (errorPixels) { clawPhase2Pixels[i] = errorPixels; clawPhase2W[i] = errorW; clawPhase2H[i] = errorH; }
         }
     }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_awaken\\claw_hurt.bmp", exePath);
     clawHurtPixels = LoadBMPPixels(path, &clawHurtW, &clawHurtH);
-    if(!clawHurtPixels) {
-         ShowError(L"Missing Claw Hurt Asset!");
-         clawHurtPixels = clawDormantPixels; // Fallback
-         clawHurtW = clawDormantW;
-         clawHurtH = clawDormantH;
-    }
+    if (!clawHurtPixels) { missingAssets.push_back(L"claw_hurt.bmp"); if (errorPixels) { clawHurtPixels = errorPixels; clawHurtW = errorW; clawHurtH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_attack\\laser.bmp", exePath);
     laserPixels = LoadBMPPixels(path, &laserW, &laserH);
-    if(!laserPixels) ShowError(L"Missing Laser Asset!");
+    if (!laserPixels) { missingAssets.push_back(L"laser.bmp"); if (errorPixels) { laserPixels = errorPixels; laserW = errorW; laserH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\items\\Medkit.bmp", exePath);
     medkitPixels = LoadBMPPixels(path, &medkitW, &medkitH);
+    if (!medkitPixels) { missingAssets.push_back(L"Medkit.bmp"); if (errorPixels) { medkitPixels = errorPixels; medkitW = errorW; medkitH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_dormant.bmp", exePath);
     clawDormantPixels = LoadBMPPixels(path, &clawDormantW, &clawDormantH);
+    if (!clawDormantPixels) { missingAssets.push_back(L"claw_dormant.bmp"); if (errorPixels) { clawDormantPixels = errorPixels; clawDormantW = errorW; clawDormantH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_active.bmp", exePath);
     clawActivePixels = LoadBMPPixels(path, &clawActiveW, &clawActiveH);
+    if (!clawActivePixels) { missingAssets.push_back(L"claw_active.bmp"); if (errorPixels) { clawActivePixels = errorPixels; clawActiveW = errorW; clawActiveH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\spire\\claw_activating.bmp", exePath);
     clawActivatingPixels = LoadBMPPixels(path, &clawActivatingW, &clawActivatingH);
+    if (!clawActivatingPixels) { missingAssets.push_back(L"claw_activating.bmp"); if (errorPixels) { clawActivatingPixels = errorPixels; clawActivatingW = errorW; clawActivatingH = errorH; } }
 
     swprintf(path, MAX_PATH, L"%ls\\assets\\Marshall\\marshall.bmp", exePath);
     marshallPixels = LoadBMPPixels(path, &marshallW, &marshallH);
+    if (!marshallPixels) { missingAssets.push_back(L"marshall.bmp"); if (errorPixels) { marshallPixels = errorPixels; marshallW = errorW; marshallH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\Marshall\\marshall_hurt.bmp", exePath);
     marshallHurtPixels = LoadBMPPixels(path, &marshallHurtW, &marshallHurtH);
+    if (!marshallHurtPixels) { missingAssets.push_back(L"marshall_hurt.bmp"); if (errorPixels) { marshallHurtPixels = errorPixels; marshallHurtW = errorW; marshallHurtH = errorH; } }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gunner_hurt.bmp", exePath);
+    gunnerHurtPixels = LoadBMPPixels(path, &gunnerHurtW, &gunnerHurtH);
+    if (!gunnerHurtPixels) { missingAssets.push_back(L"gunner_hurt.bmp"); if (errorPixels) { gunnerHurtPixels = errorPixels; gunnerHurtW = errorW; gunnerHurtH = errorH; } }
 
     swprintf(path, MAX_PATH, L"%ls\\assets\\Viper\\Viper.bmp", exePath);
     paragonPixels = LoadBMPPixels(path, &paragonW, &paragonH);
+    if (!paragonPixels) { missingAssets.push_back(L"Viper.bmp"); if (errorPixels) { paragonPixels = errorPixels; paragonW = errorW; paragonH = errorH; } }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\Viper\\Viper_hurt.bmp", exePath);
     paragonHurtPixels = LoadBMPPixels(path, &paragonHurtW, &paragonHurtH);
+    if (!paragonHurtPixels) { missingAssets.push_back(L"Viper_hurt.bmp"); if (errorPixels) { paragonHurtPixels = errorPixels; paragonHurtW = errorW; paragonHurtH = errorH; } }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\environment\\plants\\grass_plant.bmp", exePath);
+    grassPlantPixels = LoadBMPPixels(path, &grassPlantW, &grassPlantH);
+    if (!grassPlantPixels) { missingAssets.push_back(L"grass_plant.bmp"); if (errorPixels) { grassPlantPixels = errorPixels; grassPlantW = errorW; grassPlantH = errorH; } }
+    
+    for (int i = 0; i < 3; i++) {
+        swprintf(path, MAX_PATH, L"%ls\\assets\\environment\\small_rocks\\rock%d.bmp", exePath, i + 1);
+        rockPixels[i] = LoadBMPPixels(path, &rockW[i], &rockH[i]);
+        if (!rockPixels[i]) { wchar_t name[32]; swprintf(name, 32, L"rock%d.bmp", i+1); missingAssets.push_back(name); if (errorPixels) { rockPixels[i] = errorPixels; rockW[i] = errorW; rockH[i] = errorH; } }
+    }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\environment\\plants\\bush.bmp", exePath);
+    bushPixels = LoadBMPPixels(path, &bushW, &bushH);
+    if (!bushPixels) { missingAssets.push_back(L"bush.bmp"); if (errorPixels) { bushPixels = errorPixels; bushW = errorW; bushH = errorH; } }
 
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
+    
+    if (!errorPixels && !gunPixels && !spirePixels && !treePixels && !grassPixels) {
+        assetsFolderMissing = true;
+    }
 }
 
 void GenerateWorld() {
@@ -796,7 +874,7 @@ void GenerateWorld() {
         trees.push_back(tree);
     }
     
-    for (int i = 0; i < 200; i++) {
+    for (int i = 0; i < 400; i++) {
         int side = rand() % 4;
         float tx, ty;
         switch (side) {
@@ -809,7 +887,7 @@ void GenerateWorld() {
         trees.push_back(tree);
     }
     
-    int numTrees = 40 + rand() % 30;
+    int numTrees = 250 + rand() % 50;
     for (int i = 0; i < numTrees; i++) {
         float tx = 8.0f + (rand() % ((MAP_WIDTH - 16) * 10)) / 10.0f;
         float ty = 8.0f + (rand() % ((MAP_HEIGHT - 16) * 10)) / 10.0f;
@@ -832,7 +910,7 @@ void GenerateWorld() {
         }
     }
     
-    for (int i = 0; i < 25; i++) {
+    for (int i = 0; i < 50; i++) {
         Cloud cloud;
         cloud.x = -50.0f + (rand() % 1500) / 10.0f;
         cloud.y = -50.0f + (rand() % 1500) / 10.0f;
@@ -840,16 +918,50 @@ void GenerateWorld() {
         cloud.speed = 0.5f + (rand() % 100) / 100.0f;
         clouds.push_back(cloud);
     }
+    
+    int rockVariant = 0;
+    for (int i = 0; i < 5000; i++) {
+        float gx = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+        float gy = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+        float distToCenter = sqrtf((gx - 32)*(gx - 32) + (gy - 32)*(gy - 32));
+        if (distToCenter > 6.0f && worldMap[(int)gx][(int)gy] == 0) {
+            GrassSprite grass = {gx, gy};
+            grasses.push_back(grass);
+        }
+    }
+    
+    for (int i = 0; i < 350; i++) {
+        float rx = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+        float ry = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+        float distToCenter = sqrtf((rx - 32)*(rx - 32) + (ry - 32)*(ry - 32));
+        if (distToCenter > 6.0f && worldMap[(int)rx][(int)ry] == 0) {
+            RockSprite rock = {rx, ry, rockVariant};
+            rocks.push_back(rock);
+            rockVariant = (rockVariant + 1) % 3;
+        }
+    }
+    
+    for (int i = 0; i < 80; i++) {
+        float bx = 6.0f + (rand() % ((MAP_WIDTH - 12) * 10)) / 10.0f;
+        float by = 6.0f + (rand() % ((MAP_HEIGHT - 12) * 10)) / 10.0f;
+        float distToCenter = sqrtf((bx - 32)*(bx - 32) + (by - 32)*(by - 32));
+        if (distToCenter > 8.0f && worldMap[(int)bx][(int)by] == 0) {
+            BushSprite bush = {bx, by};
+            bushes.push_back(bush);
+        }
+    }
 }
 
 void SpawnMedkit() {
-    do {
-        medkit.x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
-        medkit.y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
-    } while (worldMap[(int)medkit.x][(int)medkit.y] != 0 || 
-             sqrtf((medkit.x - 32)*(medkit.x - 32) + (medkit.y - 32)*(medkit.y - 32)) < 5.0f);
-    medkit.active = true;
-    medkit.respawnTimer = 0;
+    for (int i = 0; i < 3; i++) {
+        do {
+            medkits[i].x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+            medkits[i].y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+        } while (worldMap[(int)medkits[i].x][(int)medkits[i].y] != 0 || 
+                 sqrtf((medkits[i].x - 32)*(medkits[i].x - 32) + (medkits[i].y - 32)*(medkits[i].y - 32)) < 5.0f);
+        medkits[i].active = true;
+        medkits[i].respawnTimer = 0;
+    }
 }
 
 void InitClaws() {
@@ -1277,11 +1389,13 @@ void RenderSprites() {
         allSprites.push_back({fb.x, fb.y, fdist, 3, 2.0f, 0, false, 0.0f, false});
     }
     
-    if (medkit.active) {
-        float mdx = medkit.x - player.x;
-        float mdy = medkit.y - player.y;
-        float mdist = sqrtf(mdx*mdx + mdy*mdy);
-        allSprites.push_back({medkit.x, medkit.y, mdist, 4, 0.8f, 0, false, 0.0f, false});
+    for (int i = 0; i < 3; i++) {
+        if (medkits[i].active) {
+            float mdx = medkits[i].x - player.x;
+            float mdy = medkits[i].y - player.y;
+            float mdist = sqrtf(mdx*mdx + mdy*mdy);
+            allSprites.push_back({medkits[i].x, medkits[i].y, mdist, 4, 0.8f, 0, false, 0.0f, false});
+        }
     }
 
     for (auto& tree : trees) {
@@ -1293,6 +1407,33 @@ void RenderSprites() {
         }
     }
     
+    for (auto& grass : grasses) {
+        float dx = grass.x - player.x;
+        float dy = grass.y - player.y;
+        float dist = sqrtf(dx*dx + dy*dy);
+        if (dist < 30.0f) {
+            allSprites.push_back({grass.x, grass.y, dist, 11, 0.3f, 0, false, 0.0f, false});
+        }
+    }
+    
+    for (auto& rock : rocks) {
+        float dx = rock.x - player.x;
+        float dy = rock.y - player.y;
+        float dist = sqrtf(dx*dx + dy*dy);
+        if (dist < 30.0f) {
+            allSprites.push_back({rock.x, rock.y, dist, 12, 0.3f, rock.variant, false, 0.0f, false});
+        }
+    }
+    
+    for (auto& bush : bushes) {
+        float dx = bush.x - player.x;
+        float dy = bush.y - player.y;
+        float dist = sqrtf(dx*dx + dy*dy);
+        if (dist < 40.0f) {
+            allSprites.push_back({bush.x, bush.y, dist, 13, 0.6f, 0, false, 0.0f, false});
+        }
+    }
+    
     for (auto& enemy : enemies) {
         if (enemy.active) {
             float dx = enemy.x - player.x;
@@ -1301,7 +1442,7 @@ void RenderSprites() {
             if (enemy.isMarshall) {
                 allSprites.push_back({enemy.x, enemy.y, dist, 9, 2.5f, (enemy.hurtTimer > 0 ? 1 : 0), false, 0.0f, false});
             } else if (enemy.isShooter) {
-                allSprites.push_back({enemy.x, enemy.y, dist, 6, 1.0f, 0, false, 0.0f, enemy.firingTimer > 0});
+                allSprites.push_back({enemy.x, enemy.y, dist, 6, 1.0f, 0, (enemy.hurtTimer > 0), 0.0f, enemy.firingTimer > 0});
             } else {
                 allSprites.push_back({enemy.x, enemy.y, dist, 1, 1.0f, enemy.spriteIndex, (enemy.spriteIndex == 4 && enemy.hurtTimer > 0), 0.0f, false});
             }
@@ -1313,8 +1454,10 @@ void RenderSprites() {
             float dx = eb.x - player.x;
             float dy = eb.y - player.y;
             float dist = sqrtf(dx*dx + dy*dy);
-            int bulletType = eb.isLaser ? 8 : 7; // 8 = laser, 7 = enemy bullet
-            allSprites.push_back({eb.x, eb.y, dist, bulletType, 0.5f, 0, false, 0.0f, false});
+            int bulletType = eb.isLaser ? 8 : 7;
+            float scale = eb.isLaser ? 1.5f : 0.5f;
+            float height = eb.isLaser ? 1.0f : 0.0f;
+            allSprites.push_back({eb.x, eb.y, dist, bulletType, scale, 0, false, height, false});
         }
     }
     
@@ -1436,7 +1579,9 @@ void RenderSprites() {
                 }
             }
         } else if (sp.type == 6) {
-            if (sp.isFiring) {
+            if (sp.isHurt && gunnerHurtPixels) {
+                RenderSprite(gunnerHurtPixels, gunnerHurtW, gunnerHurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else if (sp.isFiring) {
                 RenderSprite(gunnerFiringPixels, gunnerFiringW, gunnerFiringH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             } else {
                 RenderSprite(gunnerPixels, gunnerW, gunnerH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
@@ -1460,6 +1605,20 @@ void RenderSprites() {
                 RenderSprite(paragonHurtPixels, paragonHurtW, paragonHurtH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             } else if (paragonPixels) {
                 RenderSprite(paragonPixels, paragonW, paragonH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 11) {
+            if (grassPlantPixels) {
+                RenderSprite(grassPlantPixels, grassPlantW, grassPlantH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 12) {
+            int v = sp.variant;
+            if (v < 0 || v > 2) v = 0;
+            if (rockPixels[v]) {
+                RenderSprite(rockPixels[v], rockW[v], rockH[v], sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 13) {
+            if (bushPixels) {
+                RenderSprite(bushPixels, bushW, bushH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             }
         }
     }
@@ -2002,8 +2161,16 @@ void UpdateEnemies(float deltaTime) {
                     }
                 } else if (c.state == CLAW_PH2_RISING) {
                     c.timer -= deltaTime;
+                    float progress = c.timer / 2.0f;
+                    if (progress < 0) progress = 0;
+                    c.x = c.homeX;
+                    c.y = c.homeY;
                     if (c.timer <= 0) {
-                        c.state = CLAW_IDLE; // Ready for next selection
+                        if (c.health <= 0) {
+                            c.state = CLAW_PH2_DEAD;
+                        } else {
+                            c.state = CLAW_IDLE;
+                        }
                     }
                 }
             }
@@ -2295,22 +2462,6 @@ void UpdateEnemies(float deltaTime) {
         if(fb.x < 0 || fb.x > MAP_WIDTH || fb.y < 0 || fb.y > MAP_HEIGHT) fb.active = false;
     }
     
-    if (!medkit.active) {
-        medkit.respawnTimer -= deltaTime;
-        if (medkit.respawnTimer <= 0) {
-            SpawnMedkit();
-        }
-    } else {
-        float mdx = player.x - medkit.x;
-        float mdy = player.y - medkit.y;
-        float mdist = sqrtf(mdx*mdx + mdy*mdy);
-        if (mdist < 1.0f) {
-            player.health += Medkit::HEAL_AMOUNT;
-            if (player.health > 100) player.health = 100;
-            medkit.active = false;
-            medkit.respawnTimer = Medkit::RESPAWN_TIME;
-        }
-    }
     
     if (bossHurtTimer > 0) bossHurtTimer -= deltaTime;
     if (playerHurtTimer > 0) playerHurtTimer -= deltaTime;
@@ -2474,7 +2625,7 @@ void UpdateBullets(float deltaTime) {
                 b.active = false;
                 
                 enemy.health -= playerDamage;
-                if (enemy.spriteIndex == 4) enemy.hurtTimer = 0.3f;
+                if (enemy.spriteIndex == 4 || enemy.isShooter) enemy.hurtTimer = 0.5f;
                 
                 if (enemy.health <= 0) {
                     enemy.active = false;
@@ -2619,11 +2770,10 @@ void UpdateBullets(float deltaTime) {
                         claws[i].health -= playerDamage; 
                         claws[i].hurtTimer = 0.2f;
                         if (claws[i].health <= 0) {
-                            claws[i].state = CLAW_PH2_DEAD;
-                            claws[i].x = claws[i].homeX;
-                            claws[i].y = claws[i].homeY;
+                            claws[i].state = CLAW_PH2_RISING;
+                            claws[i].timer = 2.0f;
                             PlayScoreSound();
-                            if (activeLaserClaw == i) activeLaserClaw = -1; // Immediate next turn
+                            if (activeLaserClaw == i) activeLaserClaw = -1;
                         }
                         break;
                     }
@@ -2670,6 +2820,7 @@ void UpdateParagons(float deltaTime) {
     }
     
     if (paragonMessageTimer > 0) paragonMessageTimer -= deltaTime;
+    if (paragonSummonCooldown > 0) paragonSummonCooldown -= deltaTime;
     
     for (auto& p : paragons) {
         if (!p.active) continue;
@@ -2706,6 +2857,71 @@ void UpdateParagons(float deltaTime) {
             }
         }
         
+        float evadeX = 0, evadeY = 0;
+        
+        for (auto& eb : enemyBullets) {
+            if (!eb.active) continue;
+            float dx = p.x - eb.x;
+            float dy = p.y - eb.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < 4.0f && dist > 0.1f) {
+                float dotProduct = dx * eb.dirX + dy * eb.dirY;
+                if (dotProduct > 0) {
+                    float perpX = -eb.dirY;
+                    float perpY = eb.dirX;
+                    evadeX += perpX * (4.0f - dist);
+                    evadeY += perpY * (4.0f - dist);
+                }
+            }
+        }
+        
+        for (auto& fb : fireballs) {
+            if (!fb.active) continue;
+            float dx = p.x - fb.x;
+            float dy = p.y - fb.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < 4.0f && dist > 0.1f) {
+                float dotProduct = dx * fb.dirX + dy * fb.dirY;
+                if (dotProduct > 0) {
+                    float perpX = -fb.dirY;
+                    float perpY = fb.dirX;
+                    evadeX += perpX * (4.0f - dist);
+                    evadeY += perpY * (4.0f - dist);
+                }
+            }
+        }
+        
+        for (int i = 0; i < 6; i++) {
+            if (claws[i].state == CLAW_SLAMMING || claws[i].state == CLAW_CHASING) {
+                float dx = p.x - claws[i].x;
+                float dy = p.y - claws[i].y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if (dist < 6.0f && dist > 0.1f) {
+                    evadeX += (dx / dist) * (6.0f - dist) * 2.0f;
+                    evadeY += (dy / dist) * (6.0f - dist) * 2.0f;
+                }
+            }
+            if (claws[i].state == CLAW_PH2_ANCHORED && activeLaserClaw == i) {
+                float dx = p.x - claws[i].x;
+                float dy = p.y - claws[i].y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                if (dist < 5.0f && dist > 0.1f) {
+                    float perpX = -dy / dist;
+                    float perpY = dx / dist;
+                    evadeX += perpX * (5.0f - dist);
+                    evadeY += perpY * (5.0f - dist);
+                }
+            }
+        }
+        
+        if (evadeX != 0 || evadeY != 0) {
+            float evadeDist = sqrtf(evadeX*evadeX + evadeY*evadeY);
+            if (evadeDist > 0.1f) {
+                p.x += (evadeX / evadeDist) * p.speed * 1.5f * deltaTime;
+                p.y += (evadeY / evadeDist) * p.speed * 1.5f * deltaTime;
+            }
+        }
+        
         if (distToPlayer > 16.0f) {
             float dx = player.x - p.x;
             float dy = player.y - p.y;
@@ -2721,9 +2937,29 @@ void UpdateParagons(float deltaTime) {
             float dx = enemies[nearestEnemyIdx].x - p.x;
             float dy = enemies[nearestEnemyIdx].y - p.y;
             float dist = sqrtf(dx*dx + dy*dy);
+            
+            float repelX = 0, repelY = 0;
+            for (auto& other : paragons) {
+                if (&other == &p || !other.active) continue;
+                float ox = p.x - other.x;
+                float oy = p.y - other.y;
+                float odist = sqrtf(ox*ox + oy*oy);
+                if (odist < 1.2f && odist > 0.01f) {
+                    repelX += (ox / odist) * (1.2f - odist);
+                    repelY += (oy / odist) * (1.2f - odist);
+                }
+            }
+            
             if (dist > 0.5f) {
                 p.x += (dx / dist) * p.speed * deltaTime;
                 p.y += (dy / dist) * p.speed * deltaTime;
+            }
+            if (repelX != 0 || repelY != 0) {
+                float repelDist = sqrtf(repelX*repelX + repelY*repelY);
+                if (repelDist > 0.01f) {
+                    p.x += (repelX / repelDist) * p.speed * 0.3f * deltaTime;
+                    p.y += (repelY / repelDist) * p.speed * 0.3f * deltaTime;
+                }
             }
             if (dist < 1.0f) {
                 enemies[nearestEnemyIdx].health -= 2;
@@ -2741,17 +2977,36 @@ void UpdateParagons(float deltaTime) {
             float dx = claws[nearestClawIdx].x - p.x;
             float dy = claws[nearestClawIdx].y - p.y;
             float dist = sqrtf(dx*dx + dy*dy);
+            
+            float repelX = 0, repelY = 0;
+            for (auto& other : paragons) {
+                if (&other == &p || !other.active) continue;
+                float ox = p.x - other.x;
+                float oy = p.y - other.y;
+                float odist = sqrtf(ox*ox + oy*oy);
+                if (odist < 1.2f && odist > 0.01f) {
+                    repelX += (ox / odist) * (1.2f - odist);
+                    repelY += (oy / odist) * (1.2f - odist);
+                }
+            }
+            
             if (dist > 0.5f) {
                 p.x += (dx / dist) * p.speed * deltaTime;
                 p.y += (dy / dist) * p.speed * deltaTime;
+            }
+            if (repelX != 0 || repelY != 0) {
+                float repelDist = sqrtf(repelX*repelX + repelY*repelY);
+                if (repelDist > 0.01f) {
+                    p.x += (repelX / repelDist) * p.speed * 0.3f * deltaTime;
+                    p.y += (repelY / repelDist) * p.speed * 0.3f * deltaTime;
+                }
             }
             if (dist < 1.5f) {
                 claws[nearestClawIdx].health -= 2;
                 claws[nearestClawIdx].hurtTimer = 0.2f;
                 if (claws[nearestClawIdx].health <= 0) {
-                    claws[nearestClawIdx].state = CLAW_PH2_DEAD;
-                    claws[nearestClawIdx].x = claws[nearestClawIdx].homeX;
-                    claws[nearestClawIdx].y = claws[nearestClawIdx].homeY;
+                    claws[nearestClawIdx].state = CLAW_PH2_RISING;
+                    claws[nearestClawIdx].timer = 2.0f;
                     PlayScoreSound();
                     if (activeLaserClaw == nearestClawIdx) activeLaserClaw = -1;
                 }
@@ -2913,14 +3168,16 @@ void DrawMinimap(HDC hdc) {
     SelectObject(hdc, oldBrush);
     DeleteObject(spireBrush);
     
-    if (medkit.active) {
-        int medkitScreenX = offsetX + (int)(medkit.x * cellSize);
-        int medkitScreenY = offsetY + (int)(medkit.y * cellSize);
-        HBRUSH medkitBrush = CreateSolidBrush(RGB(0, 150, 255));
-        oldBrush = (HBRUSH)SelectObject(hdc, medkitBrush);
-        Ellipse(hdc, medkitScreenX - 4, medkitScreenY - 4, medkitScreenX + 4, medkitScreenY + 4);
-        SelectObject(hdc, oldBrush);
-        DeleteObject(medkitBrush);
+    for (int i = 0; i < 3; i++) {
+        if (medkits[i].active) {
+            int medkitScreenX = offsetX + (int)(medkits[i].x * cellSize);
+            int medkitScreenY = offsetY + (int)(medkits[i].y * cellSize);
+            HBRUSH medkitBrush = CreateSolidBrush(RGB(0, 150, 255));
+            oldBrush = (HBRUSH)SelectObject(hdc, medkitBrush);
+            Ellipse(hdc, medkitScreenX - 4, medkitScreenY - 4, medkitScreenX + 4, medkitScreenY + 4);
+            SelectObject(hdc, oldBrush);
+            DeleteObject(medkitBrush);
+        }
     }
     
     for (auto& enemy : enemies) {
@@ -3038,6 +3295,33 @@ void UpdatePlayer(float deltaTime) {
         }
     } else {
         stepTimer = 0;
+    }
+    
+    if (healFlashTimer > 0) healFlashTimer -= deltaTime;
+    
+    for (int i = 0; i < 3; i++) {
+        if (medkits[i].active) {
+            float dx = player.x - medkits[i].x;
+            float dy = player.y - medkits[i].y;
+            if (sqrtf(dx*dx + dy*dy) < 1.5f) {
+                player.health += Medkit::HEAL_AMOUNT;
+                if (player.health > 100) player.health = 100;
+                medkits[i].active = false;
+                medkits[i].respawnTimer = Medkit::RESPAWN_TIME;
+                healFlashTimer = 1.0f;
+                PlayHealSound();
+            }
+        } else {
+            medkits[i].respawnTimer -= deltaTime;
+            if (medkits[i].respawnTimer <= 0) {
+                do {
+                    medkits[i].x = 5.0f + (rand() % ((MAP_WIDTH - 10) * 10)) / 10.0f;
+                    medkits[i].y = 5.0f + (rand() % ((MAP_HEIGHT - 10) * 10)) / 10.0f;
+                } while (worldMap[(int)medkits[i].x][(int)medkits[i].y] != 0 || 
+                         sqrtf((medkits[i].x - 32)*(medkits[i].x - 32) + (medkits[i].y - 32)*(medkits[i].y - 32)) < 5.0f);
+                medkits[i].active = true;
+            }
+        }
     }
 }
 
@@ -3240,6 +3524,22 @@ void RenderGame(HDC hdc) {
     SetTextColor(memDC, RGB(255, 255, 0));
     TextOutW(memDC, 10, 10, loadStatus, (int)wcslen(loadStatus));
     
+    if (!missingAssets.empty()) {
+        SetTextColor(memDC, RGB(255, 80, 80));
+        int yPos = 30;
+        TextOutA(memDC, 10, yPos, "MISSING ASSETS:", 15);
+        yPos += 15;
+        for (size_t i = 0; i < missingAssets.size() && i < 10; i++) {
+            TextOutW(memDC, 20, yPos, missingAssets[i].c_str(), (int)missingAssets[i].length());
+            yPos += 15;
+        }
+        if (missingAssets.size() > 10) {
+            wchar_t moreText[64];
+            swprintf(moreText, 64, L"... and %zu more", missingAssets.size() - 10);
+            TextOutW(memDC, 20, yPos, moreText, (int)wcslen(moreText));
+        }
+    }
+    
     wchar_t ammoText[64];
     if (isReloading) {
         swprintf(ammoText, 64, L"RELOADING...");
@@ -3254,6 +3554,30 @@ void RenderGame(HDC hdc) {
     swprintf(scoreText, 128, L"Score: %d  High Score: %d", score, highScore);
     SetTextColor(memDC, RGB(255, 255, 255));
     TextOutW(memDC, 10, 90, scoreText, (int)wcslen(scoreText));
+    
+    if (paragonsUnlocked && paragonSummonCooldown > 0) {
+        wchar_t cdText[64];
+        swprintf(cdText, 64, L"Summon: %.1fs", paragonSummonCooldown);
+        SetTextColor(memDC, RGB(147, 112, 219));
+        TextOutW(memDC, 10, 130, cdText, (int)wcslen(cdText));
+        
+        int barW = 100;
+        int barH = 8;
+        int barX = 10;
+        int barY = 155;
+        RECT bgRect = {barX, barY, barX + barW, barY + barH};
+        HBRUSH bgB = CreateSolidBrush(RGB(50, 50, 50));
+        FillRect(memDC, &bgRect, bgB);
+        DeleteObject(bgB);
+        
+        float pct = paragonSummonCooldown / 3.0f;
+        if (pct > 1.0f) pct = 1.0f;
+        int fillW = (int)(barW * (1.0f - pct));
+        RECT fillRect = {barX, barY, barX + fillW, barY + barH};
+        HBRUSH fillB = CreateSolidBrush(RGB(147, 112, 219));
+        FillRect(memDC, &fillRect, fillB);
+        DeleteObject(fillB);
+    }
     
     if (scoreTimer > 0) {
         HFONT hFont = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
@@ -3359,6 +3683,29 @@ void RenderGame(HDC hdc) {
     wchar_t info[128];
     swprintf(info, 128, L"WASD=Move | Mouse=Look | LClick=Shoot | R=Reload | ESC=Quit");
     TextOutW(memDC, 10, SCREEN_HEIGHT - 25, info, (int)wcslen(info));
+    
+    if (healFlashTimer > 0) {
+        float intensity = healFlashTimer / 1.0f;
+        if (intensity > 1.0f) intensity = 1.0f;
+        int alpha = (int)(intensity * 80);
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
+            DWORD col = backBufferPixels[i];
+            int r = (col >> 16) & 0xFF;
+            int g = (col >> 8) & 0xFF;
+            int b = col & 0xFF;
+            g = g + alpha; if (g > 255) g = 255;
+            backBufferPixels[i] = MakeColor(r, g, b);
+        }
+        
+        BITMAPINFO biHeal = {};
+        biHeal.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        biHeal.bmiHeader.biWidth = SCREEN_WIDTH;
+        biHeal.bmiHeader.biHeight = -SCREEN_HEIGHT;
+        biHeal.bmiHeader.biPlanes = 1;
+        biHeal.bmiHeader.biBitCount = 32;
+        SetDIBitsToDevice(memDC, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
+            backBufferPixels, &biHeal, DIB_RGB_COLORS);
+    }
     
     if (victoryScreen) {
         for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
@@ -3638,7 +3985,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_RBUTTONDOWN: {
             if (consoleActive || victoryScreen) return 0;
-            if (paragonsUnlocked && GetAliveParagonCount() < 8) {
+            if (paragonsUnlocked && GetAliveParagonCount() < 8 && paragonSummonCooldown <= 0) {
                 Paragon p;
                 p.x = player.x;
                 p.y = player.y;
@@ -3651,6 +3998,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 p.targetEnemyIndex = -1;
                 p.targetClawIndex = -1;
                 paragons.push_back(p);
+                paragonSummonCooldown = 3.0f;
             }
             return 0;
         }
@@ -3736,6 +4084,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ShowWindow(hMainWnd, nCmdShow);
     UpdateWindow(hMainWnd);
     ShowCursor(FALSE);
+    
+    if (assetsFolderMissing) {
+        MessageBoxW(hMainWnd, L"CRITICAL ERROR: Assets folder is missing or empty!\n\nThe game cannot start without assets.\nPlease ensure the 'assets' folder exists and contains the required files.", L"LoneShooter - Asset Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     
     _beginthread(BackgroundMusic, 0, NULL);
     
