@@ -384,7 +384,17 @@ struct Enemy {
     float pathRecalcTimer;
     NeuralAI::NeuralNet brain;
     bool hasNeuralBrain;
+    bool isPhalanx;
 };
+
+enum MarshallCommand { CMD_NONE, CMD_RALLY, CMD_PINCER, CMD_PHALANX };
+MarshallCommand activeCommand = CMD_NONE;
+bool militiaActive = false;
+float militiaFormTimer = 0.0f;
+int militiaCount = 0;
+int militiaMaxCount = 0;
+float militiaMessageTimer = 0.0f;
+bool militiaBarActive = false;
 
 struct EnemyBullet {
     float x, y;
@@ -748,6 +758,9 @@ DWORD* backBufferPixels = NULL;
 
 DWORD* grassPixels = NULL;
 DWORD* npcPixels = NULL;
+
+float marshallX = 0;
+float marshallY = 0;
 DWORD* treePixels = NULL;
 DWORD* cloudPixels = NULL;
 DWORD* gunPixels = NULL;
@@ -2030,19 +2043,42 @@ void UpdateEnemies(float deltaTime) {
         if (enemy.isMarshall) {
              marshallHealthBarActive = true;
              marshallHP = enemy.health;
+             marshallX = enemy.x;
+             marshallY = enemy.y;
+             
+             // Militia Stats
+             militiaBarActive = true;
+             militiaCount = 0;
+             for (const auto& e : enemies) if (e.active) militiaCount++;
+             if (militiaCount > militiaMaxCount) militiaMaxCount = militiaCount;
         }
         
         // Marshall AI
         if (enemy.isMarshall) {
-             // Heal Logic: Retreat if HP < 5, Return to Chase if HP >= 35
-             if (enemy.health < 5 && enemy.state != 2) {
+             // Default Command Reset
+             activeCommand = CMD_NONE; (enemy.state == 1) ? CMD_PINCER : CMD_NONE;
+
+             // Heal Logic: Retreat if HP < 7, Return to Chase if HP >= 150
+             if (enemy.health < 7 && enemy.state != 2) {
                  enemy.state = 2; // Retreat
+                 // Spawn Phalanx Minions immediately
+                 for(int i=0; i<8; i++) {
+                     Enemy p;
+                     p.x = enemy.x + (rand()%10 - 5);
+                     p.y = enemy.y + (rand()%10 - 5);
+                     p.active = true;
+                     p.health = 4;
+                     p.isPhalanx = true;
+                     p.speed = 4.0f;
+                     enemies.push_back(p);
+                 }
              }
              if (enemy.health >= marshallMaxHP && enemy.state == 2) {
                  enemy.state = 1; // Return to Chase
              }
              
-             if (enemy.state == 2) { // Retreat & Heal
+             if (enemy.state == 2) { // Retreat & Heal (PHALANX)
+                 activeCommand = CMD_PHALANX;
                  float dx = enemy.x - player.x; 
                  float dy = enemy.y - player.y;
                  float dist = sqrtf(dx*dx + dy*dy);
@@ -2122,58 +2158,41 @@ void UpdateEnemies(float deltaTime) {
                  }
 
                  continue;
-             } else if (enemy.state == 0) { // Seek Horde
-                 float avgX = 0, avgY = 0;
-                 int count = 0;
-                 for(auto& other : enemies) {
-                     if (!other.active || other.isMarshall) continue;
-                     float d = sqrtf((other.x - enemy.x)*(other.x - enemy.x) + (other.y - enemy.y)*(other.y - enemy.y));
-                     if (d < 10.0f) {
-                         avgX += other.x;
-                         avgY += other.y;
-                         count++;
-                     }
+             } else if (enemy.state == 0) { // Seek Horde / RALLY
+                 activeCommand = CMD_RALLY;
+                 if (militiaFormTimer == 0) {
+                     militiaFormTimer = 5.0f;
+                     militiaMessageTimer = 3.0f;
+                     militiaActive = true;
                  }
                  
-                 if (count > 2) {
-                     avgX /= count;
-                     avgY /= count;
-                     float dx = avgX - enemy.x;
-                     float dy = avgY - enemy.y;
-                     float dist = sqrtf(dx*dx + dy*dy);
-                     
-                     if (dist > 1.0f) {
-                         enemy.pathRecalcTimer -= deltaTime;
-                         if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
-                             enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, avgX, avgY);
-                             enemy.pathIndex = 0;
-                             enemy.pathRecalcTimer = 0.5f;
-                         }
-                         
-                         float pathTargetX, pathTargetY;
-                         if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
-                             float pdx = pathTargetX - enemy.x;
-                             float pdy = pathTargetY - enemy.y;
-                             float pdist = sqrtf(pdx*pdx + pdy*pdy);
-                             if (pdist > 0.1f) {
-                                 float mx = (pdx / pdist) * enemy.speed * deltaTime;
-                                 float my = (pdy / pdist) * enemy.speed * deltaTime;
-                                 float cdx = (enemy.x + mx) - 32.0f;
-                                 float cdy = (enemy.y + my) - 32.0f;
-                                 if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x + mx, enemy.y)) enemy.x += mx;
-                                 cdx = enemy.x - 32.0f;
-                                 cdy = (enemy.y + my) - 32.0f;
-                                 if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, enemy.y + my)) enemy.y += my;
-                             }
-                         }
-                     } else {
-                         enemy.state = 1;
+                 militiaFormTimer -= deltaTime;
+                 if (militiaFormTimer <= 0) {
+                     // RALLY COMPLETE - BURST SPAWN
+                     for(int i=0; i<15; i++) {
+                         Enemy m;
+                         m.x = enemy.x + (rand()%16 - 8);
+                         m.y = enemy.y + (rand()%16 - 8);
+                         m.active = true;
+                         m.health = 4;
+                         m.speed = 4.0f + ((rand()%10)/10.0f);
+                         if (m.x > 0 && m.x < MAP_WIDTH && m.y > 0 && m.y < MAP_HEIGHT) enemies.push_back(m);
                      }
-                 } else {
-                     enemy.state = 1;
+                     for(int i=0; i<5; i++) {
+                         Enemy s;
+                         s.x = enemy.x + (rand()%20 - 10);
+                         s.y = enemy.y + (rand()%20 - 10);
+                         s.active = true;
+                         s.isShooter = true;
+                         s.health = 3;
+                         s.speed = 3.0f;
+                         if (s.x > 0 && s.x < MAP_WIDTH && s.y > 0 && s.y < MAP_HEIGHT) enemies.push_back(s);
+                     }
+                     enemy.state = 1; // Charge after rally
                  }
                  continue;
-             } else { // Chase (State 1)
+             } else { // Chase (State 1) - PINCER
+                 activeCommand = CMD_PINCER;
                  float dx = player.x - enemy.x;
                  float dy = player.y - enemy.y;
                  float dist = sqrtf(dx*dx + dy*dy);
@@ -2392,6 +2411,63 @@ void UpdateEnemies(float deltaTime) {
                 hordeCenterY /= (nearbyCount + 1);
             }
             
+            // MILITIA TACTICS OVERRIDE
+            if (activeCommand == CMD_RALLY && marshallHealthBarActive) {
+                // Ignore player, seek Marshall
+                dx = marshallX - enemy.x;
+                dy = marshallY - enemy.y;
+                dist = sqrtf(dx*dx + dy*dy);
+                if (dist > 3.0f) {
+                     float mx = (dx/dist) * enemy.speed * 1.5f * deltaTime; // Rush
+                     float my = (dy/dist) * enemy.speed * 1.5f * deltaTime;
+                     if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0) enemy.x += mx;
+                     if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0) enemy.y += my;
+                }
+                continue;
+            } else if (activeCommand == CMD_PHALANX && marshallHealthBarActive) {
+                // Wall Formation
+                float mdx = player.x - marshallX;
+                float mdy = player.y - marshallY;
+                float mdist = sqrtf(mdx*mdx + mdy*mdy);
+                float wallDist = 6.0f; // Distance from Marshall
+                
+                // Position should be between Marshall and Player
+                float tx = marshallX + (mdx/mdist) * wallDist;
+                float ty = marshallY + (mdy/mdist) * wallDist;
+                
+                // Add jitter for wall spread based on enemy address/index
+                int spread = ((intptr_t)&enemy % 5) - 2;
+                float perpX = -mdy/mdist;
+                float perpY = mdx/mdist;
+                tx += perpX * spread * 1.5f;
+                ty += perpY * spread * 1.5f;
+                
+                float tdx = tx - enemy.x;
+                float tdy = ty - enemy.y;
+                float tdist = sqrtf(tdx*tdx + tdy*tdy);
+                
+                // Attack if player is close, else hold line
+                float pDist = sqrtf((player.x - enemy.x)*(player.x - enemy.x) + (player.y - enemy.y)*(player.y - enemy.y));
+                if (pDist < 4.0f) {
+                    // Standard Aggro
+                } else if (tdist > 1.0f) {
+                     float mx = (tdx/tdist) * enemy.speed * deltaTime;
+                     float my = (tdy/tdist) * enemy.speed * deltaTime;
+                     if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0) enemy.x += mx;
+                     if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0) enemy.y += my;
+                     continue;
+                } else {
+                     continue; // Hold
+                }
+            } else if (activeCommand == CMD_PINCER) {
+                // Forced Flanking
+                int side = (enemy.spriteIndex % 2 == 0) ? 1 : -1;
+                float ang = atan2f(dy, dx) + (side * PI * 0.4f); // 72 degrees offset
+                dx = cosf(ang) * 10.0f;
+                dy = sinf(ang) * 10.0f;
+                // Continue to standard movement with modified dx/dy vector direction
+            }
+            
             for (auto& other : enemies) {
                 if (&other == &enemy || !other.active || other.isShooter || other.isMarshall) continue;
                 if (other.tacticState != 0) continue;
@@ -2488,11 +2564,11 @@ void UpdateEnemies(float deltaTime) {
                 
                 if (tdist > 0.5f) {
                     float speedMult = (dist > 12.0f) ? 2.2f : 1.8f;
-                    moveX = (tdx / tdist) * enemy.speed * speedMult * deltaTime;
-                    moveY = (tdy / tdist) * enemy.speed * speedMult * deltaTime;
+                    moveX = (tdx / tdist) * (enemy.speed - 1.0f) * speedMult * deltaTime;
+                    moveY = (tdy / tdist) * (enemy.speed - 1.0f) * speedMult * deltaTime;
                 } else if (dist > 2.0f) {
-                    moveX = (dx / dist) * enemy.speed * 1.5f * deltaTime;
-                    moveY = (dy / dist) * enemy.speed * 1.5f * deltaTime;
+                    moveX = (dx / dist) * (enemy.speed - 1.0f) * 1.5f * deltaTime;
+                    moveY = (dy / dist) * (enemy.speed - 1.0f) * 1.5f * deltaTime;
                 }
             } else if (dist > 1.2f) {
                 if (neuralMoveBias < -0.3f && enemy.hasNeuralBrain) {
@@ -2594,6 +2670,8 @@ void UpdateEnemies(float deltaTime) {
                         fireballs.clear();
                         InitClaws();
                     }
+                    marshallSpawned = false;
+                    militiaBarActive = false; // Reset Militia UI
                     SpawnEnemies();
                 }
             }
@@ -2647,6 +2725,7 @@ void UpdateEnemies(float deltaTime) {
                 fireballs.clear();
                 InitClaws();
                 marshallSpawned = false; // Reset Marshall
+                militiaBarActive = false; // Reset Militia UI
                 SpawnEnemies();
             }
         }
@@ -3456,7 +3535,9 @@ void UpdateBullets(float deltaTime) {
                     float dY = r.y - e.y;
                     float dist = sqrtf(dX*dX + dY*dY);
                     if (dist < 8.0f) {
-                        e.health -= 10;
+                        int damage = 10;
+                        if (e.isMarshall && activeCommand == CMD_PINCER) damage = 5; // 50% Armor
+                        e.health -= damage;
                         if (e.spriteIndex == 4 || e.isShooter || e.isMarshall) e.hurtTimer = 0.5f;
                         if (e.isMarshall) PlayMarshallHurtSound(); else PlayEnemyHurtSound();
                         
@@ -3642,7 +3723,13 @@ void UpdateBullets(float deltaTime) {
                 float bdx = b.x - 32.0f;
                 float bdy = b.y - 32.0f;
                 if (sqrtf(bdx*bdx + bdy*bdy) < 2.5f) {
-                    bossHealth -= playerDamage;
+                    // Check for Marshall Pincer Armor (50%)
+                    bool applyDamage = true;
+                    if (bossActive && marshallSpawned && activeCommand == CMD_PINCER) {
+                        if (rand() % 2 == 0) applyDamage = false; // 50% chance to ignore 1 dmg
+                    }
+                    if (applyDamage) bossHealth -= playerDamage;
+                    
                     bossHurtTimer = 2.0f;
                     b.active = false;
                     PlayScoreSound();
@@ -4145,6 +4232,7 @@ void DrawMinimap(HDC hdc) {
         DeleteObject(clawBrush);
     }
     
+
     // Marshall Health Bar
     if (marshallHealthBarActive) {
         int barW = 300;
@@ -4604,28 +4692,70 @@ void RenderGame(HDC hdc) {
     }
     
     // Boss Health Bar
-    if (bossActive && bossHealth > 0) {
+   
+    if (militiaMessageTimer > 0) {
+        HFONT hMFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldMFont = (HFONT)SelectObject(memDC, hMFont);
+        SetTextColor(memDC, RGB(255, 0, 0));
+        SetBkMode(memDC, TRANSPARENT);
+        const wchar_t* msg = L"A militia is forming...";
+        SIZE sz;
+        GetTextExtentPoint32W(memDC, msg, (int)wcslen(msg), &sz);
+        TextOutW(memDC, (SCREEN_WIDTH - sz.cx) / 2, SCREEN_HEIGHT / 4 + 40, msg, (int)wcslen(msg));
+        SelectObject(memDC, hOldMFont);
+        DeleteObject(hMFont);
+        militiaMessageTimer -= 0.016f; // Approx frame time dec
+    }
+
+    // Boss Bar (The Spire / Experiment) - New Style (400px, Text Inside)
+    if (bossActive) {
         int barW = 400;
         int barH = 20;
         int barX = (SCREEN_WIDTH - barW) / 2;
-        int barY = 40;
+        int barY = 10;
         
-        RECT bgRect = {barX - 2, barY - 2, barX + barW + 2, barY + barH + 2};
-        HBRUSH bgBrush = CreateSolidBrush(RGB(0, 0, 0));
-        FillRect(memDC, &bgRect, bgBrush);
-        DeleteObject(bgBrush);
+        RECT bgRect = {barX, barY, barX + barW, barY + barH};
+        HBRUSH bgB = CreateSolidBrush(RGB(50, 0, 0));
+        FillRect(memDC, &bgRect, bgB);
+        DeleteObject(bgB);
         
-        float healthPct = (float)bossHealth / 200.0f;
-        if (healthPct < 0) healthPct = 0;
-        int hpW = (int)(barW * healthPct);
+        int hp = bossHealth;
+        int max = 200; 
+        int hpW = (int)((float)hp / max * barW);
+        if (hpW < 0) hpW = 0;
+        
         RECT hpRect = {barX, barY, barX + hpW, barY + barH};
-        HBRUSH hpBrush = CreateSolidBrush(RGB(200, 0, 0));
-        FillRect(memDC, &hpRect, hpBrush);
-        DeleteObject(hpBrush);
+        HBRUSH hpB = CreateSolidBrush(RGB(200, 0, 0));
+        FillRect(memDC, &hpRect, hpB);
+        DeleteObject(hpB);
         
-        SetBkMode(memDC, TRANSPARENT);
+        const wchar_t* name = L"The Experiment";
         SetTextColor(memDC, RGB(255, 255, 255));
-        TextOutW(memDC, barX, barY - 20, L"THE SPIRE", 9);
+        TextOutW(memDC, barX + 10, barY + 2, name, (int)wcslen(name));
+    }
+
+    // Militia Bar - Placed below the Marshall bar
+    if (militiaBarActive) {
+         int barW = 300;
+         int barH = 15;
+         int barX = (SCREEN_WIDTH - barW) / 2;
+         int barY = 85; 
+         
+         HBRUSH mBgB = CreateSolidBrush(RGB(30,30,30));
+         RECT mBgRect = {barX - 2, barY - 2, barX + barW + 2, barY + barH + 2}; 
+         FillRect(memDC, &mBgRect, mBgB);
+         DeleteObject(mBgB);
+         
+         int mW = (int)((float)militiaCount / (float)(militiaMaxCount < 1 ? 1 : militiaMaxCount) * barW);
+         if (mW > barW) mW = barW;
+         RECT mHpRect = {barX, barY, barX + mW, barY + barH};
+         HBRUSH mHpB = CreateSolidBrush(RGB(150, 100, 0)); 
+         FillRect(memDC, &mHpRect, mHpB);
+         DeleteObject(mHpB);
+         
+         const wchar_t* mName = L"THE MILITIA";
+         SetTextColor(memDC, RGB(255, 255, 255));
+         TextOutW(memDC, barX, barY - 15, mName, (int)wcslen(mName));
     }
     
     // Countdown Timer during Pre-Boss Phase
