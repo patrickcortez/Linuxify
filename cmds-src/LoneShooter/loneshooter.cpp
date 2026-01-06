@@ -424,6 +424,8 @@ struct Bullet {
     float speed;
     bool active;
     int damage;
+    float startX, startY;
+    float maxRange;
 };
 
 enum ClawState { CLAW_DORMANT, CLAW_IDLE, CLAW_CHASING, CLAW_SLAMMING, CLAW_RISING, CLAW_RETURNING, 
@@ -534,7 +536,9 @@ struct Rocket {
     bool isEnemy;
     float z;
     float verticalSpeed;
-    float targetX, targetY;
+    float targetX, targetY; // Only used for enemy homing rockets
+    float startX, startY;
+    float maxRange;
 };
 
 struct RocketTrail {
@@ -703,6 +707,7 @@ int highScore = 0;
 bool hordeActive = false;
 float hordeMessageTimer = 0;
 
+bool viewRange = false;
 int currentWeapon = 0;
 bool gunUpgraded = false;
 float upgradeMessageTimer = 0;
@@ -2393,14 +2398,14 @@ void UpdateEnemies(float deltaTime) {
                 float ox = other.x - hordeCenterX;
                 float oy = other.y - hordeCenterY;
                 float odist = sqrtf(ox*ox + oy*oy);
-                if (odist < 16.0f && odist >= 6.0f && nearbyCount >= 5) {
+                if (odist < 16.0f && odist >= 6.0f && nearbyCount >= 8) {
                     other.tacticState = (rand() % 2 == 0) ? 1 : 2;
                     other.flankDir = (rand() % 2 == 0) ? 1 : -1;
                     other.tacticTimer = 2.0f;
                 }
             }
             
-            if (nearbyCount >= 5 && enemy.tacticState == 0) {
+            if (nearbyCount >= 8 && enemy.tacticState == 0) {
                 enemy.tacticState = (rand() % 2 == 0) ? 1 : 2;
                 enemy.flankDir = (rand() % 2 == 0) ? 1 : -1;
                 enemy.tacticTimer = 2.0f;
@@ -3297,10 +3302,11 @@ void ShootBullet() {
         r.dirX = cosf(player.angle);
         r.dirY = sinf(player.angle);
         r.speed = 25.0f; // Fast rocket
-        r.active = true;
-        r.isEnemy = false;
         r.z = 0;
         r.verticalSpeed = 0;
+        r.startX = r.x;
+        r.startY = r.y;
+        r.maxRange = 64.0f;
         rockets.push_back(r);
         PlayGunSound(2); // Bazooka Fire Sound
         gunRecoil = 80.0f; // Strong recoil for Bazooka
@@ -3316,6 +3322,9 @@ void ShootBullet() {
             b.speed = 20.0f;
             b.active = true;
             b.damage = 1; // 1 damage per pellet
+            b.startX = b.x;
+            b.startY = b.y;
+            b.maxRange = 12.0f;
             bullets.push_back(b);
         }
         PlayGunSound(0); // Standard sound for now (could pitch shift if needed)
@@ -3328,7 +3337,10 @@ void ShootBullet() {
         b.dirY = sinf(player.angle);
         b.speed = 20.0f;
         b.active = true;
-        b.damage = playerDamage; // Standard damage
+        b.damage = 1; // Standard damage fixed to 1
+        b.startX = b.x;
+        b.startY = b.y;
+        b.maxRange = 24.0f;
         bullets.push_back(b);
         PlayGunSound(0);
         gunRecoil = 20.0f; // Light recoil
@@ -3393,6 +3405,18 @@ void UpdateBullets(float deltaTime) {
             // Player Rocket Logic (Straight)
             r.x += r.dirX * r.speed * deltaTime;
             r.y += r.dirY * r.speed * deltaTime;
+            
+            // Range Check
+            float travelledDx = r.x - r.startX;
+            float travelledDy = r.y - r.startY;
+            if (sqrtf(travelledDx*travelledDx + travelledDy*travelledDy) > r.maxRange) {
+                 r.active = false;
+                 Explosion ex;
+                 ex.x = r.x; ex.y = r.y; ex.timer = 1.0f; ex.active = true;
+                 explosions.push_back(ex);
+                 PlayBazookaExplosionSound();
+                 continue;
+            }
             
             // Spawn Trail
             if ((int)(GetTickCount() / 50) % 2 == 0) {
@@ -3477,6 +3501,14 @@ void UpdateBullets(float deltaTime) {
         b.x += b.dirX * b.speed * deltaTime;
         b.y += b.dirY * b.speed * deltaTime;
         
+        // Range Check
+        float travelledDx = b.x - b.startX;
+        float travelledDy = b.y - b.startY;
+        if (sqrtf(travelledDx*travelledDx + travelledDy*travelledDy) > b.maxRange) {
+            b.active = false;
+            continue;
+        }
+        
         int mx = (int)b.x;
         int my = (int)b.y;
         if (mx < 0 || mx >= MAP_WIDTH || my < 0 || my >= MAP_HEIGHT || worldMap[mx][my] != 0) {
@@ -3513,7 +3545,7 @@ void UpdateBullets(float deltaTime) {
                     
                     if (score == 50 && !gunUpgraded) {
                         gunUpgraded = true;
-                        playerDamage = 5;
+                        // playerDamage = 1; // Keep base damage at 1, handled by weapon logic now
                         maxAmmo += 2;
                         ammo = maxAmmo;
                         upgradeMessageTimer = 3.0f;
@@ -4038,6 +4070,26 @@ void DrawMinimap(HDC hdc) {
     DeleteObject(greenPen);
     DeleteObject(playerBrush);
     
+    if (viewRange) {
+        float range = 0;
+        if (currentWeapon == 0) range = 24.0f;
+        else if (currentWeapon == 1) range = 12.0f;
+        else if (currentWeapon == 2) range = 64.0f;
+        
+        int rangePx = (int)(range * cellSize);
+        HPEN rangePen = CreatePen(PS_DOT, 1, RGB(0, 255, 255)); // Cyan dotted
+        HBRUSH hollowBrush = (HBRUSH)GetStockObject(HOLLOW_BRUSH);
+        HPEN oldPen = (HPEN)SelectObject(hdc, rangePen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hollowBrush);
+        
+        Ellipse(hdc, playerScreenX - rangePx, playerScreenY - rangePx, 
+                     playerScreenX + rangePx, playerScreenY + rangePx);
+                     
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
+        DeleteObject(rangePen);
+    }
+    
     MoveToEx(hdc, playerScreenX, playerScreenY, NULL);
     HPEN fovPen = CreatePen(PS_SOLID, 1, RGB(0, 200, 0));
     SelectObject(hdc, fovPen);
@@ -4499,7 +4551,7 @@ void RenderGame(HDC hdc) {
         HFONT hHFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         HFONT hOldHFont = (HFONT)SelectObject(memDC, hHFont);
         
-        SetTextColor(memDC, RGB(148, 0, 211));
+        SetTextColor(memDC, RGB(255, 0, 0));
         SetBkMode(memDC, TRANSPARENT);
         
         const wchar_t* hordeMsg = L"The Towns Folk has rallied!";
@@ -4828,7 +4880,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         showStats = false;
                         consoleBuffer = L"";
                     } else if (consoleBuffer == L"reset cam") {
-                        player.pitch = 0.0f;
+                        gunSwayX = 0; gunSwayY = 0;
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer.find(L"view-range") == 0) {
+                        if (consoleBuffer.find(L" on") != std::wstring::npos) viewRange = true;
+                        else if (consoleBuffer.find(L" off") != std::wstring::npos) viewRange = false;
+                        else viewRange = !viewRange;
                         consoleBuffer = L"";
                     } else if (consoleBuffer.find(L"player.dmg") == 0) {
                         size_t eqPos = consoleBuffer.find(L'=');
@@ -4857,7 +4914,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                 } else {
                     consoleError[0] = L'\0';
-                    consoleBuffer += (wchar_t)wParam;
+                    if (wParam != L'`' && wParam != L'~') {
+                        consoleBuffer += (wchar_t)wParam;
+                    }
                 }
             }
             return 0;
