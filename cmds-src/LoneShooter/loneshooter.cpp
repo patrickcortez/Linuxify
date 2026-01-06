@@ -700,6 +700,13 @@ int leaderTalkingW = 0, leaderTalkingH = 0;
 DWORD* followerPixels = nullptr;
 int followerW = 0, followerH = 0;
 
+bool spectatorMode = false;
+float spectatorX = 0, spectatorY = 0, spectatorAngle = 0, spectatorPitch = 0;
+float savedPlayerX = 0, savedPlayerY = 0, savedPlayerAngle = 0;
+
+DWORD* playerSpritePixels = nullptr;
+int playerSpriteW = 0, playerSpriteH = 0;
+
 // Prototypes
 void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
 void Render3DScene();
@@ -1097,6 +1104,10 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\the_leader\\followers.bmp", exePath);
     followerPixels = LoadBMPPixels(path, &followerW, &followerH);
     if (!followerPixels) { missingAssets.push_back(L"followers.bmp"); if (errorPixels) { followerPixels = errorPixels; followerW = errorW; followerH = errorH; } }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\player_sprite\\player.bmp", exePath);
+    playerSpritePixels = LoadBMPPixels(path, &playerSpriteW, &playerSpriteH);
+    if (!playerSpritePixels) { missingAssets.push_back(L"player.bmp"); if (errorPixels) { playerSpritePixels = errorPixels; playerSpriteW = errorW; playerSpriteH = errorH; } }
 
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
     
