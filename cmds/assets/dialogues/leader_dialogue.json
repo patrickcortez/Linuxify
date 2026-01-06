@@ -1,0 +1,14 @@
+{
+    "Name": "Leader",
+    "Dialogue": {
+        "Line1": "Well Done Lance, You did the Organization proud. You have just completed your task ",
+        "Line2": "of eliminating a Otherworthy Elder God, those poor townsfolk are free of its influence now.",
+        "Line3": {
+            "Line": "Are you ready to get out of here?",
+            "Options": {
+                "Option1": "Yes",
+                "Option2": "Not yet"
+            }
+        }
+    }
+}

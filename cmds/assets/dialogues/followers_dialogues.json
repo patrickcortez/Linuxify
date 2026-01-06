@@ -1,0 +1,11 @@
+{
+    "name": "Follower",
+    "dialogue": {
+        "line1": "Nice work out there Sir, that stuff is impressive",
+        "line2": "Wow you just killed an elder god, thats insane",
+        "line3": "I wouldn't have expected less from you Sir",
+        "line4": "Hows it been sir?",
+        "line5": "You know I'd probably die if I was in your shoes",
+        "line6": "I wish HQ would let me join you"
+    }
+}

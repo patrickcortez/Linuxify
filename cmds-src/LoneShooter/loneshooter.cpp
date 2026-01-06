@@ -20,6 +20,8 @@
 #include <mmsystem.h>
 #include "pathfinder.hpp"
 #include "neural.hpp"
+#include "dialogue.hpp"
+#include "npcs.hpp"
 
 volatile bool musicRunning = true;
 extern bool bossActive;
@@ -590,7 +592,7 @@ bool preBossPhase = false;
 float preBossTimer = 0;
 float bossEventTimer = 0;
 float fireballSpawnTimer = 0;
-int bossHealth = 200;
+int bossHealth = 1500;
 float bossHurtTimer = 0;
 float playerHurtTimer = 0;
 bool bossDead = false;
@@ -636,7 +638,7 @@ int marshallHurtW = 0, marshallHurtH = 0;
 // Marshall UI
 bool marshallHealthBarActive = false;
 int marshallHP = 0;
-int marshallMaxHP = 50;
+int marshallMaxHP = 100;
 
 struct Paragon {
     float x, y;
@@ -681,6 +683,22 @@ bool bazookaUnlocked = false;
 std::vector<Rocket> rockets;
 std::vector<RocketTrail> rocketTrails;
 std::vector<Explosion> explosions;
+
+bool postBossPhase = false;
+DialogueSystem::Dialogue currentDialogue;
+DialogueSystem::DialogueState dialogueState = DialogueSystem::DIALOGUE_INACTIVE;
+int dialogueLineIndex = 0;
+int selectedDialogueOption = 0;
+NPCSystem::NPC* currentTalkingNPC = nullptr;
+float whiteFadeTimer = 0;
+bool whiteFadeToVictory = false;
+
+DWORD* leaderIdlePixels = nullptr;
+int leaderIdleW = 0, leaderIdleH = 0;
+DWORD* leaderTalkingPixels = nullptr;
+int leaderTalkingW = 0, leaderTalkingH = 0;
+DWORD* followerPixels = nullptr;
+int followerW = 0, followerH = 0;
 
 // Prototypes
 void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
@@ -897,6 +915,10 @@ void TryLoadAssets() {
         missingAssets.push_back(L"grass.bmp");
         if (errorPixels) { grassPixels = errorPixels; grassW = errorW; grassH = errorH; } 
     }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\bullet.bmp", exePath);
+    bulletPixels = LoadBMPPixels(path, &bulletW, &bulletH);
+    if (!bulletPixels) { missingAssets.push_back(L"bullet.bmp"); if (errorPixels) { bulletPixels = errorPixels; bulletW = errorW; bulletH = errorH; } }
     
     for(int i=0; i<5; i++) {
         swprintf(path, MAX_PATH, L"%ls\\assets\\enemy%d.bmp", exePath, i+1);
@@ -951,19 +973,15 @@ void TryLoadAssets() {
 
     swprintf(path, MAX_PATH, L"%ls\\assets\\rocket_proj.bmp", exePath);
     rocketProjPixels = LoadBMPPixels(path, &rocketProjW, &rocketProjH);
-    if (!rocketProjPixels) { rocketProjPixels = bulletPixels; rocketProjW = bulletW; rocketProjH = bulletH; }
+    if (!rocketProjPixels) { missingAssets.push_back(L"rocket_proj.bmp"); if (bulletPixels) { rocketProjPixels = bulletPixels; rocketProjW = bulletW; rocketProjH = bulletH; } }
 
     swprintf(path, MAX_PATH, L"%ls\\assets\\rocket_trail.bmp", exePath);
     rocketTrailPixels = LoadBMPPixels(path, &rocketTrailW, &rocketTrailH);
-    if (!rocketTrailPixels) { rocketTrailPixels = bulletPixels; rocketTrailW = bulletW; rocketTrailH = bulletH; }
+    if (!rocketTrailPixels) { missingAssets.push_back(L"rocket_trail.bmp"); if (bulletPixels) { rocketTrailPixels = bulletPixels; rocketTrailW = bulletW; rocketTrailH = bulletH; } }
 
     swprintf(path, MAX_PATH, L"%ls\\assets\\explosion_impact.bmp", exePath);
     explosionPixels = LoadBMPPixels(path, &explosionW, &explosionH);
     if (!explosionPixels) { explosionPixels = cloudPixels; explosionW = cloudW; explosionH = cloudH; }
-    
-    swprintf(path, MAX_PATH, L"%ls\\assets\\bullet.bmp", exePath);
-    bulletPixels = LoadBMPPixels(path, &bulletW, &bulletH);
-    if (!bulletPixels) { missingAssets.push_back(L"bullet.bmp"); if (errorPixels) { bulletPixels = errorPixels; bulletW = errorW; bulletH = errorH; } }
     
     const wchar_t* healthbarNames[] = {L"healthbar_0.bmp", L"healthbar_10.bmp", L"healthbar_20.bmp", L"healthbar_30.bmp", L"healthbar_40.bmp", L"healthbar_50.bmp", L"healthbar_60.bmp", L"healthbar_70.bmp", L"healthbar_80.bmp", L"healthbar_90.bmp", L"healthbar_full.bmp"};
     for (int i = 0; i < 11; i++) {
@@ -1067,6 +1085,18 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\environment\\plants\\bush.bmp", exePath);
     bushPixels = LoadBMPPixels(path, &bushW, &bushH);
     if (!bushPixels) { missingAssets.push_back(L"bush.bmp"); if (errorPixels) { bushPixels = errorPixels; bushW = errorW; bushH = errorH; } }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\the_leader\\leader_idle.bmp", exePath);
+    leaderIdlePixels = LoadBMPPixels(path, &leaderIdleW, &leaderIdleH);
+    if (!leaderIdlePixels) { missingAssets.push_back(L"leader_idle.bmp"); if (errorPixels) { leaderIdlePixels = errorPixels; leaderIdleW = errorW; leaderIdleH = errorH; } }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\the_leader\\leader_talking.bmp", exePath);
+    leaderTalkingPixels = LoadBMPPixels(path, &leaderTalkingW, &leaderTalkingH);
+    if (!leaderTalkingPixels) { leaderTalkingPixels = leaderIdlePixels; leaderTalkingW = leaderIdleW; leaderTalkingH = leaderIdleH; }
+    
+    swprintf(path, MAX_PATH, L"%ls\\assets\\the_leader\\followers.bmp", exePath);
+    followerPixels = LoadBMPPixels(path, &followerW, &followerH);
+    if (!followerPixels) { missingAssets.push_back(L"followers.bmp"); if (errorPixels) { followerPixels = errorPixels; followerW = errorW; followerH = errorH; } }
 
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
     
@@ -1863,6 +1893,19 @@ void RenderSprites() {
         allSprites.push_back({claws[i].x, claws[i].y, cdist, 5, 8.0f, clawVariant, isClawHurt, clawHeight, false});
     }
     
+    if (postBossPhase) {
+        for (auto& npc : NPCSystem::npcs) {
+            if (!npc.active) continue;
+            float dx = npc.x - player.x;
+            float dy = npc.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < 50.0f && dist > 0.5f) {
+                int type = (npc.name == L"Leader") ? 17 : 18;
+                allSprites.push_back({npc.x, npc.y, dist, type, 1.0f, 0, npc.isTalking, 0.0f, false});
+            }
+        }
+    }
+    
     std::sort(allSprites.begin(), allSprites.end(), [](const SpriteRender& a, const SpriteRender& b) {
         return a.dist > b.dist;
     });
@@ -1960,6 +2003,16 @@ void RenderSprites() {
             if (bushPixels) {
                 RenderSprite(bushPixels, bushW, bushH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             }
+        } else if (sp.type == 17) {
+            if (sp.isHurt && leaderTalkingPixels) {
+                RenderSprite(leaderTalkingPixels, leaderTalkingW, leaderTalkingH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            } else if (leaderIdlePixels) {
+                RenderSprite(leaderIdlePixels, leaderIdleW, leaderIdleH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 18) {
+            if (followerPixels) {
+                RenderSprite(followerPixels, followerW, followerH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
         }
     }
 }
@@ -2031,9 +2084,18 @@ void RenderClouds() {
 }
 
 void UpdateEnemies(float deltaTime) {
-    marshallHealthBarActive = false; // Reset frame flag
+    marshallHealthBarActive = false;
+    militiaBarActive = false;
+    
+    if (postBossPhase) {
+        for (auto& e : enemies) e.active = false;
+        enemies.clear();
+        return;
+    }
     for (auto& enemy : enemies) {
         if (!enemy.active) continue;
+        
+        if (enemy.hurtTimer > 0) enemy.hurtTimer -= deltaTime;
         
         if (enemy.hasNeuralBrain && !enemy.isMarshall) {
             enemy.brain.survivalTime += deltaTime;
@@ -2046,10 +2108,11 @@ void UpdateEnemies(float deltaTime) {
              marshallX = enemy.x;
              marshallY = enemy.y;
              
-             // Militia Stats
              militiaBarActive = true;
              militiaCount = 0;
-             for (const auto& e : enemies) if (e.active) militiaCount++;
+             for (const auto& e : enemies) {
+                 if (e.active && !e.isMarshall) militiaCount++;
+             }
              if (militiaCount > militiaMaxCount) militiaMaxCount = militiaCount;
         }
         
@@ -2854,7 +2917,7 @@ void UpdateEnemies(float deltaTime) {
     // Boss Logic
     if (bossActive) { 
         // Trigger Phase 2
-        if (!phase2Active && bossHealth <= 100) {
+        if (!phase2Active && bossHealth <= 750) {
             phase2Active = true;
             forceFieldActive = true;
             enemies.clear(); // Kill all minions
@@ -2865,7 +2928,7 @@ void UpdateEnemies(float deltaTime) {
                 claws[i].state = CLAW_PH2_AWAKEN;
                 claws[i].animFrame = 0;
                 claws[i].animTimer = 0;
-                claws[i].health = 50;
+                claws[i].health = 250;
                 claws[i].x = claws[i].homeX;
                 claws[i].y = claws[i].homeY;
                 claws[i].hurt = false;
@@ -3381,7 +3444,8 @@ void ShootBullet() {
         r.dirX = cosf(player.angle);
         r.dirY = sinf(player.angle);
         r.speed = 25.0f; // Fast rocket
-        r.z = 0;
+        r.active = true;
+        r.z = 0.5f; // Eye level
         r.verticalSpeed = 0;
         r.startX = r.x;
         r.startY = r.y;
@@ -3515,28 +3579,41 @@ void UpdateBullets(float deltaTime) {
                      if (!e.active) continue;
                      float edx = r.x - e.x;
                      float edy = r.y - e.y;
-                     if (sqrtf(edx*edx + edy*edy) < 1.0f) { hit = true; break; } // Direct hit
+                     if (sqrtf(edx*edx + edy*edy) < 1.0f) { hit = true; break; }
+                 }
+            }
+            
+            if (!hit && bossActive) {
+                 float bdx = r.x - 32.0f;
+                 float bdy = r.y - 32.0f;
+                 if (sqrtf(bdx*bdx + bdy*bdy) < 2.5f) hit = true;
+            }
+            
+            if (!hit && phase2Active) {
+                 for (int i = 0; i < 6; i++) {
+                     if (claws[i].state == CLAW_PH2_DEAD) continue;
+                     float cdx = r.x - claws[i].x;
+                     float cdy = r.y - claws[i].y;
+                     if (sqrtf(cdx*cdx + cdy*cdy) < 2.0f) { hit = true; break; }
                  }
             }
             
             if (hit) {
                 r.active = false;
-                // Spawn Explosion
                 Explosion ex;
                 ex.x = r.x; ex.y = r.y; ex.timer = 1.0f; ex.active = true;
                 explosions.push_back(ex);
                 
                 PlayBazookaExplosionSound();
                 
-                // AoE Damage
                 for (auto& e : enemies) {
                     if (!e.active) continue;
                     float dX = r.x - e.x;
                     float dY = r.y - e.y;
                     float dist = sqrtf(dX*dX + dY*dY);
                     if (dist < 8.0f) {
-                        int damage = 10;
-                        if (e.isMarshall && activeCommand == CMD_PINCER) damage = 5; // 50% Armor
+                        int damage = 50;
+                        if (e.isMarshall && activeCommand == CMD_PINCER) damage = 25;
                         e.health -= damage;
                         if (e.spriteIndex == 4 || e.isShooter || e.isMarshall) e.hurtTimer = 0.5f;
                         if (e.isMarshall) PlayMarshallHurtSound(); else PlayEnemyHurtSound();
@@ -3551,6 +3628,77 @@ void UpdateBullets(float deltaTime) {
                             PlayScoreSound();
                             if (score > highScore) { highScore = score; SaveHighScore(); }
                             if (score >= 300 && !bossActive && !preBossPhase) { preBossPhase = true; preBossTimer = 30.0f; }
+                        }
+                    }
+                }
+                
+                if (bossActive) {
+                    float bdx = r.x - 32.0f;
+                    float bdy = r.y - 32.0f;
+                    if (sqrtf(bdx*bdx + bdy*bdy) < 8.0f) {
+                        if (!forceFieldActive) {
+                            bossHealth -= 50;
+                            bossHurtTimer = 2.0f;
+                            PlayScoreSound();
+                            if (bossHealth <= 0) {
+                                bossActive = false;
+                                bossDead = true;
+                                postBossPhase = true;
+                                musicRunning = false;
+                                score += 50;
+                                if (score > highScore) { highScore = score; SaveHighScore(); }
+                                for (auto& e : enemies) e.active = false;
+                                enemies.clear();
+                                fireballs.clear();
+                                for(int i = 0; i < 6; i++) {
+                                    claws[i].state = CLAW_DORMANT;
+                                    claws[i].x = claws[i].homeX;
+                                    claws[i].y = claws[i].homeY;
+                                }
+                                phase2Active = false;
+                                forceFieldActive = false;
+                                activeLaserClaw = -1;
+                                
+                                wchar_t exePath[MAX_PATH];
+                                GetModuleFileNameW(NULL, exePath, MAX_PATH);
+                                wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+                                if (lastSlash) *lastSlash = L'\0';
+                                wchar_t dialoguePath[MAX_PATH];
+                                swprintf(dialoguePath, MAX_PATH, L"%ls\\assets\\dialogues\\leader_dialogue.json", exePath);
+                                
+                                NPCSystem::ClearNPCs();
+                                NPCSystem::SpawnNPC(32.0f, 28.0f, L"Leader", leaderIdlePixels, leaderIdleW, leaderIdleH, leaderTalkingPixels, leaderTalkingW, leaderTalkingH, dialoguePath);
+                                
+                                wchar_t followerDialoguePath[MAX_PATH];
+                                swprintf(followerDialoguePath, MAX_PATH, L"%ls\\assets\\dialogues\\followers_dialogues.json", exePath);
+                                NPCSystem::SpawnNPC(29.0f, 28.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                                NPCSystem::SpawnNPC(35.0f, 28.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                                NPCSystem::SpawnNPC(27.0f, 30.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                                NPCSystem::SpawnNPC(37.0f, 30.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                                
+                                wchar_t victoryMusicPath[MAX_PATH];
+                                swprintf(victoryMusicPath, MAX_PATH, L"open \"%ls\\assets\\sound-effects\\victory.mp3\" type mpegvideo alias victory", exePath);
+                                mciSendStringW(victoryMusicPath, NULL, 0, NULL);
+                                mciSendStringW(L"play victory repeat", NULL, 0, NULL);
+                            }
+                        }
+                    }
+                }
+                
+                if (phase2Active) {
+                    for (int i = 0; i < 6; i++) {
+                        if (claws[i].state == CLAW_PH2_DEAD) continue;
+                        float cdx = r.x - claws[i].x;
+                        float cdy = r.y - claws[i].y;
+                        if (sqrtf(cdx*cdx + cdy*cdy) < 8.0f) {
+                            claws[i].health -= 50;
+                            claws[i].hurtTimer = 0.2f;
+                            if (claws[i].health <= 0) {
+                                claws[i].state = CLAW_PH2_RISING;
+                                claws[i].timer = 2.0f;
+                                PlayScoreSound();
+                                if (activeLaserClaw == i) activeLaserClaw = -1;
+                            }
                         }
                     }
                 }
@@ -3738,7 +3886,7 @@ void UpdateBullets(float deltaTime) {
                     if (bossHealth <= 0) {
                         bossActive = false;
                         bossDead = true;
-                        victoryScreen = true;
+                        postBossPhase = true;
                         musicRunning = false;
                         score += 50;
                         if (score > highScore) {
@@ -3759,6 +3907,28 @@ void UpdateBullets(float deltaTime) {
                         phase2Active = false;
                         forceFieldActive = false;
                         activeLaserClaw = -1;
+                        
+                        wchar_t exePath[MAX_PATH];
+                        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+                        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+                        if (lastSlash) *lastSlash = L'\0';
+                        wchar_t dialoguePath[MAX_PATH];
+                        swprintf(dialoguePath, MAX_PATH, L"%ls\\assets\\dialogues\\leader_dialogue.json", exePath);
+                        
+                        NPCSystem::ClearNPCs();
+                        NPCSystem::SpawnNPC(32.0f, 28.0f, L"Leader", leaderIdlePixels, leaderIdleW, leaderIdleH, leaderTalkingPixels, leaderTalkingW, leaderTalkingH, dialoguePath);
+                        
+                        wchar_t followerDialoguePath[MAX_PATH];
+                        swprintf(followerDialoguePath, MAX_PATH, L"%ls\\assets\\dialogues\\followers_dialogues.json", exePath);
+                        NPCSystem::SpawnNPC(29.0f, 28.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                        NPCSystem::SpawnNPC(35.0f, 28.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                        NPCSystem::SpawnNPC(27.0f, 30.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                        NPCSystem::SpawnNPC(37.0f, 30.0f, L"Follower", followerPixels, followerW, followerH, followerPixels, followerW, followerH, followerDialoguePath);
+                        
+                        wchar_t victoryMusicPath[MAX_PATH];
+                        swprintf(victoryMusicPath, MAX_PATH, L"open \"%ls\\assets\\sound-effects\\victory.mp3\" type mpegvideo alias victory", exePath);
+                        mciSendStringW(victoryMusicPath, NULL, 0, NULL);
+                        mciSendStringW(L"play victory repeat", NULL, 0, NULL);
                     }
                 }
             }
@@ -4707,12 +4877,12 @@ void RenderGame(HDC hdc) {
         militiaMessageTimer -= 0.016f; // Approx frame time dec
     }
 
-    // Boss Bar (The Spire / Experiment) - New Style (400px, Text Inside)
+    // Boss Bar (The Spire) - Text above, centered
     if (bossActive) {
         int barW = 400;
         int barH = 20;
         int barX = (SCREEN_WIDTH - barW) / 2;
-        int barY = 10;
+        int barY = 40;
         
         RECT bgRect = {barX, barY, barX + barW, barY + barH};
         HBRUSH bgB = CreateSolidBrush(RGB(50, 0, 0));
@@ -4720,21 +4890,28 @@ void RenderGame(HDC hdc) {
         DeleteObject(bgB);
         
         int hp = bossHealth;
-        int max = 200; 
+        int max = 1500; 
         int hpW = (int)((float)hp / max * barW);
         if (hpW < 0) hpW = 0;
+        if (hpW > barW) hpW = barW;
         
         RECT hpRect = {barX, barY, barX + hpW, barY + barH};
         HBRUSH hpB = CreateSolidBrush(RGB(200, 0, 0));
         FillRect(memDC, &hpRect, hpB);
         DeleteObject(hpB);
         
-        const wchar_t* name = L"The Experiment";
+        HFONT hSpireFont = CreateFontW(40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+        HFONT hOldSpireFont = (HFONT)SelectObject(memDC, hSpireFont);
+        const wchar_t* name = L"THE SPIRE";
+        SIZE sz;
+        GetTextExtentPoint32W(memDC, name, (int)wcslen(name), &sz);
         SetTextColor(memDC, RGB(255, 255, 255));
-        TextOutW(memDC, barX + 10, barY + 2, name, (int)wcslen(name));
+        TextOutW(memDC, barX + (barW - sz.cx) / 2, barY - sz.cy - 5, name, (int)wcslen(name));
+        SelectObject(memDC, hOldSpireFont);
+        DeleteObject(hSpireFont);
     }
 
-    // Militia Bar - Placed below the Marshall bar
+    // Militia Bar - Placed below the Marshall bar, shows count
     if (militiaBarActive) {
          int barW = 300;
          int barH = 15;
@@ -4746,16 +4923,55 @@ void RenderGame(HDC hdc) {
          FillRect(memDC, &mBgRect, mBgB);
          DeleteObject(mBgB);
          
-         int mW = (int)((float)militiaCount / (float)(militiaMaxCount < 1 ? 1 : militiaMaxCount) * barW);
+         int maxRef = (militiaMaxCount < 1) ? 1 : militiaMaxCount;
+         int mW = (int)((float)militiaCount / (float)maxRef * barW);
          if (mW > barW) mW = barW;
+         if (mW < 0) mW = 0;
          RECT mHpRect = {barX, barY, barX + mW, barY + barH};
          HBRUSH mHpB = CreateSolidBrush(RGB(150, 100, 0)); 
          FillRect(memDC, &mHpRect, mHpB);
          DeleteObject(mHpB);
          
-         const wchar_t* mName = L"THE MILITIA";
+         wchar_t mText[64];
+         swprintf(mText, 64, L"THE MILITIA  %d / %d", militiaCount, militiaMaxCount);
          SetTextColor(memDC, RGB(255, 255, 255));
-         TextOutW(memDC, barX, barY - 15, mName, (int)wcslen(mName));
+         TextOutW(memDC, barX, barY - 15, mText, (int)wcslen(mText));
+    }
+    
+    // Claw Health Bars (Phase 2 only)
+    if (phase2Active && !enragedMode) {
+        int clawBarW = 80;
+        int clawBarH = 8;
+        int startX = (SCREEN_WIDTH - (clawBarW * 6 + 10 * 5)) / 2;
+        int clawBarY = 110;
+        
+        for (int i = 0; i < 6; i++) {
+            int barX = startX + i * (clawBarW + 10);
+            
+            RECT bgRect = {barX, clawBarY, barX + clawBarW, clawBarY + clawBarH};
+            HBRUSH bgB = CreateSolidBrush(RGB(40, 40, 40));
+            FillRect(memDC, &bgRect, bgB);
+            DeleteObject(bgB);
+            
+            if (claws[i].state != CLAW_PH2_DEAD) {
+                int hp = claws[i].health;
+                if (hp < 0) hp = 0;
+                if (hp > 250) hp = 250;
+                int hpW = (int)((float)hp / 250.0f * clawBarW);
+                
+                RECT hpRect = {barX, clawBarY, barX + hpW, clawBarY + clawBarH};
+                HBRUSH hpB = CreateSolidBrush(RGB(200, 0, 200));
+                FillRect(memDC, &hpRect, hpB);
+                DeleteObject(hpB);
+            }
+            
+            wchar_t clawLabel[16];
+            swprintf(clawLabel, 16, L"C%d", i + 1);
+            SetTextColor(memDC, claws[i].state == CLAW_PH2_DEAD ? RGB(100, 100, 100) : RGB(255, 255, 255));
+            TextOutA(memDC, barX + clawBarW / 2 - 8, clawBarY - 12, (claws[i].state == CLAW_PH2_DEAD ? "X" : ""), 1);
+            SetTextColor(memDC, RGB(255, 255, 255));
+            TextOutW(memDC, barX, clawBarY + clawBarH + 2, clawLabel, (int)wcslen(clawLabel));
+        }
     }
     
     // Countdown Timer during Pre-Boss Phase
@@ -4800,6 +5016,54 @@ void RenderGame(HDC hdc) {
     swprintf(info, 128, L"WASD=Move | Mouse=Look | LClick=Shoot | R=Reload | ESC=Quit");
     TextOutW(memDC, 10, SCREEN_HEIGHT - 25, info, (int)wcslen(info));
     
+    if (postBossPhase && dialogueState == DialogueSystem::DIALOGUE_INACTIVE) {
+        NPCSystem::NPC* nearNPC = NPCSystem::GetNearestInteractableNPC(player.x, player.y, 3.0f);
+        if (nearNPC && !nearNPC->dialoguePath.empty()) {
+            HFONT hPromptFont = CreateFontW(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
+            HFONT hOldPromptFont = (HFONT)SelectObject(memDC, hPromptFont);
+            SetTextColor(memDC, RGB(255, 255, 0));
+            SetBkMode(memDC, TRANSPARENT);
+            const wchar_t* prompt = L"Press E to interact";
+            SIZE sz;
+            GetTextExtentPoint32W(memDC, prompt, (int)wcslen(prompt), &sz);
+            TextOutW(memDC, (SCREEN_WIDTH - sz.cx) / 2, SCREEN_HEIGHT / 2 + 100, prompt, (int)wcslen(prompt));
+            SelectObject(memDC, hOldPromptFont);
+            DeleteObject(hPromptFont);
+        }
+    }
+    
+    if (dialogueState == DialogueSystem::DIALOGUE_ACTIVE || dialogueState == DialogueSystem::DIALOGUE_OPTION_SELECT) {
+        if (dialogueLineIndex < (int)currentDialogue.lines.size()) {
+            auto& line = currentDialogue.lines[dialogueLineIndex];
+            bool showOpts = (dialogueState == DialogueSystem::DIALOGUE_OPTION_SELECT);
+            DialogueSystem::RenderDialogueBox(memDC, SCREEN_WIDTH, SCREEN_HEIGHT, currentDialogue.name, line.text, showOpts, line.option1, line.option2, selectedDialogueOption);
+        }
+    }
+    
+    if (whiteFadeToVictory && whiteFadeTimer > 0) {
+        float fadeProgress = 1.0f - (whiteFadeTimer / 2.0f);
+        if (fadeProgress > 1.0f) fadeProgress = 1.0f;
+        int alpha = (int)(fadeProgress * 255);
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
+            DWORD col = backBufferPixels[i];
+            int r = (col >> 16) & 0xFF;
+            int g = (col >> 8) & 0xFF;
+            int b = col & 0xFF;
+            r = (int)(r + (255 - r) * fadeProgress);
+            g = (int)(g + (255 - g) * fadeProgress);
+            b = (int)(b + (255 - b) * fadeProgress);
+            backBufferPixels[i] = MakeColor(r, g, b);
+        }
+        
+        BITMAPINFO biFade = {};
+        biFade.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        biFade.bmiHeader.biWidth = SCREEN_WIDTH;
+        biFade.bmiHeader.biHeight = -SCREEN_HEIGHT;
+        biFade.bmiHeader.biPlanes = 1;
+        biFade.bmiHeader.biBitCount = 32;
+        SetDIBitsToDevice(memDC, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, backBufferPixels, &biFade, DIB_RGB_COLORS);
+    }
+    
     if (healFlashTimer > 0) {
         float intensity = healFlashTimer / 1.0f;
         if (intensity > 1.0f) intensity = 1.0f;
@@ -4843,6 +5107,12 @@ void RenderGame(HDC hdc) {
         bi2.bmiHeader.biBitCount = 32;
         SetDIBitsToDevice(memDC, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, SCREEN_HEIGHT, 
             backBufferPixels, &bi2, DIB_RGB_COLORS);
+        
+        static bool cursorShownForVictory = false;
+        if (!cursorShownForVictory) {
+            ShowCursor(TRUE);
+            cursorShownForVictory = true;
+        }
         
         HFONT hBigFont = CreateFontW(72, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
         HFONT hMedFont = CreateFontW(36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
@@ -5063,18 +5333,60 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             if (gunUpgraded && !consoleActive) {
                 int nextWeapon = currentWeapon;
-                if (wParam == '1') nextWeapon = 0;
-                else if (wParam == '2') nextWeapon = 1;
-                else if (wParam == '3' && bazookaUnlocked) nextWeapon = 2; // Unlock check
+                if (wParam == '1' && dialogueState != DialogueSystem::DIALOGUE_OPTION_SELECT) nextWeapon = 0;
+                else if (wParam == '2' && dialogueState != DialogueSystem::DIALOGUE_OPTION_SELECT) nextWeapon = 1;
+                else if (wParam == '3' && bazookaUnlocked) nextWeapon = 2;
                 
-                if (nextWeapon != currentWeapon) {
-                    weaponAmmo[currentWeapon] = ammo; // Save current ammo
+                if (nextWeapon != currentWeapon && dialogueState != DialogueSystem::DIALOGUE_OPTION_SELECT) {
+                    weaponAmmo[currentWeapon] = ammo;
                     currentWeapon = nextWeapon;
-                    ammo = weaponAmmo[currentWeapon]; // Load new ammo
-                    maxAmmo = weaponMaxAmmo[currentWeapon]; // Load new max ammo
+                    ammo = weaponAmmo[currentWeapon];
+                    maxAmmo = weaponMaxAmmo[currentWeapon];
                     isReloading = false;
                     reloadTimer = 0;
                     gunReloadOffset = 0;
+                }
+            }
+            
+            if (wParam == 'E' && postBossPhase && !consoleActive) {
+                if (dialogueState == DialogueSystem::DIALOGUE_INACTIVE) {
+                    NPCSystem::NPC* nearNPC = NPCSystem::GetNearestInteractableNPC(player.x, player.y, 3.0f);
+                    if (nearNPC && !nearNPC->dialoguePath.empty()) {
+                        currentTalkingNPC = nearNPC;
+                        nearNPC->isTalking = true;
+                        bool isFollower = (nearNPC->name == L"Follower");
+                        currentDialogue = DialogueSystem::LoadDialogueFromJSON(nearNPC->dialoguePath.c_str(), isFollower);
+                        dialogueState = DialogueSystem::DIALOGUE_ACTIVE;
+                        dialogueLineIndex = 0;
+                    }
+                } else if (dialogueState == DialogueSystem::DIALOGUE_ACTIVE) {
+                    if (dialogueLineIndex < (int)currentDialogue.lines.size()) {
+                        if (currentDialogue.lines[dialogueLineIndex].hasOptions) {
+                            dialogueState = DialogueSystem::DIALOGUE_OPTION_SELECT;
+                            selectedDialogueOption = 0;
+                        } else {
+                            dialogueLineIndex++;
+                            if (dialogueLineIndex >= (int)currentDialogue.lines.size()) {
+                                dialogueState = DialogueSystem::DIALOGUE_INACTIVE;
+                                if (currentTalkingNPC) currentTalkingNPC->isTalking = false;
+                                currentTalkingNPC = nullptr;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (dialogueState == DialogueSystem::DIALOGUE_OPTION_SELECT && !consoleActive) {
+                if (wParam == '1') {
+                    whiteFadeToVictory = true;
+                    whiteFadeTimer = 2.0f;
+                    dialogueState = DialogueSystem::DIALOGUE_INACTIVE;
+                    if (currentTalkingNPC) currentTalkingNPC->isTalking = false;
+                    currentTalkingNPC = nullptr;
+                } else if (wParam == '2') {
+                    dialogueState = DialogueSystem::DIALOGUE_INACTIVE;
+                    if (currentTalkingNPC) currentTalkingNPC->isTalking = false;
+                    currentTalkingNPC = nullptr;
                 }
             }
             return 0;
@@ -5269,6 +5581,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (hordeMessageTimer > 0) hordeMessageTimer -= deltaTime;
         if (upgradeMessageTimer > 0) upgradeMessageTimer -= deltaTime;
         
+        if (whiteFadeToVictory && whiteFadeTimer > 0) {
+            whiteFadeTimer -= deltaTime;
+            if (whiteFadeTimer <= 0) {
+                whiteFadeToVictory = false;
+                postBossPhase = false;
+                victoryScreen = true;
+                NPCSystem::ClearNPCs();
+            }
+        }
+        
         fpsCounter++;
         if (currentTime - fpsLastTime >= 1000) {
             currentFPS = fpsCounter;
@@ -5289,3 +5611,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     return 0;
 }
+
