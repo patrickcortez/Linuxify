@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <process.h>
 #include <mmsystem.h>
+#include "pathfinder.hpp"
+#include "neural.hpp"
 
 volatile bool musicRunning = true;
 extern bool bossActive;
@@ -65,10 +67,59 @@ void CleanupAudio() {
     midiOutClose(hMidiOut);
 }
 
-void PlayGunSound() {
-    NoteOn(2, 45, 127); // Low Gunshot
-    NoteOn(9, 36, 127); // Kick
-    NoteOn(9, 57, 127); // Crash Cymbal (Explosive)
+// Bazooka Sounds
+void PlayBazookaFireSound() {
+    static wchar_t path[MAX_PATH] = {0};
+    static bool opened = false;
+    if (path[0] == 0) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(path, MAX_PATH, L"\"%ls\\assets\\sound-effects\\bazooka_firing.mp3\"", exePath);
+    }
+    if (!opened) {
+        wchar_t cmd[512];
+        swprintf(cmd, 512, L"open %ls type mpegvideo alias bazookafire", path);
+        mciSendStringW(cmd, NULL, 0, NULL);
+        mciSendStringW(L"setaudio bazookafire volume to 1000", NULL, 0, NULL);
+        opened = true;
+    }
+    mciSendStringW(L"play bazookafire from 0", NULL, 0, NULL);
+}
+
+void PlayBazookaExplosionSound() {
+    static wchar_t path[MAX_PATH] = {0};
+    static bool opened = false;
+    if (path[0] == 0) {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) *lastSlash = L'\0';
+        swprintf(path, MAX_PATH, L"\"%ls\\assets\\sound-effects\\bazooka_explosion.mp3\"", exePath);
+    }
+    if (!opened) {
+        wchar_t cmd[512];
+        swprintf(cmd, 512, L"open %ls type mpegvideo alias bazookaexp", path);
+        mciSendStringW(cmd, NULL, 0, NULL);
+        mciSendStringW(L"setaudio bazookaexp volume to 1000", NULL, 0, NULL);
+        opened = true;
+    }
+    mciSendStringW(L"play bazookaexp from 0", NULL, 0, NULL);
+}
+
+void PlayGunSound(int type = 0) {
+    if (type == 2) { // Bazooka
+        PlayBazookaFireSound();
+    } else if (type == 1) { // Shotgun
+        NoteOn(2, 41, 127); // Lower Gunshot
+        NoteOn(9, 36, 127); // Kick
+        NoteOn(9, 57, 127); // Crash Cymbal
+    } else { // Pistol
+        NoteOn(2, 45, 127); // Low Gunshot
+        NoteOn(9, 36, 127); // Kick
+        NoteOn(9, 57, 127); // Crash Cymbal
+    }
 }
 
 void PlayReloadSound(int stage) {
@@ -328,6 +379,11 @@ struct Enemy {
     int tacticState;
     int flankDir;
     float tacticTimer;
+    std::vector<std::pair<int,int>> path;
+    int pathIndex;
+    float pathRecalcTimer;
+    NeuralAI::NeuralNet brain;
+    bool hasNeuralBrain;
 };
 
 struct EnemyBullet {
@@ -367,6 +423,7 @@ struct Bullet {
     float dirX, dirY;
     float speed;
     bool active;
+    int damage;
 };
 
 enum ClawState { CLAW_DORMANT, CLAW_IDLE, CLAW_CHASING, CLAW_SLAMMING, CLAW_RISING, CLAW_RETURNING, 
@@ -469,6 +526,29 @@ struct Fireball {
     bool active;
 };
 
+struct Rocket {
+    float x, y;
+    float dirX, dirY;
+    float speed;
+    bool active;
+    bool isEnemy;
+    float z;
+    float verticalSpeed;
+    float targetX, targetY;
+};
+
+struct RocketTrail {
+    float x, y;
+    float life; // Fades out
+    bool active;
+};
+
+struct Explosion {
+    float x, y;
+    float timer; // Duration of explosion anim
+    bool active;
+};
+
 struct Medkit {
     float x, y;
     bool active;
@@ -542,7 +622,7 @@ int marshallHurtW = 0, marshallHurtH = 0;
 // Marshall UI
 bool marshallHealthBarActive = false;
 int marshallHP = 0;
-int marshallMaxHP = 35;
+int marshallMaxHP = 50;
 
 struct Paragon {
     float x, y;
@@ -560,6 +640,7 @@ std::vector<Paragon> paragons;
 bool marshallKilled = false;
 bool paragonsUnlocked = false;
 float paragonMessageTimer = 0;
+float gunRecoil = 0;
 DWORD* paragonPixels = nullptr;
 int paragonW = 0, paragonH = 0;
 DWORD* paragonHurtPixels = nullptr;
@@ -582,6 +663,11 @@ bool assetsFolderMissing = false;
 std::vector<Object3D> scene3D;
 float* zBuffer = nullptr;
 
+bool bazookaUnlocked = false;
+std::vector<Rocket> rockets;
+std::vector<RocketTrail> rocketTrails;
+std::vector<Explosion> explosions;
+
 // Prototypes
 void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
 void Render3DScene();
@@ -599,6 +685,8 @@ bool isMoving = false;
 
 int ammo = 8;
 int maxAmmo = 8;
+int weaponAmmo[3] = {8, 5, 4}; // Pistol, Shotgun, Bazooka
+int weaponMaxAmmo[3] = {8, 5, 4};
 bool isReloading = false;
 float reloadTimer = 0;
 float reloadDuration = 3.0f;
@@ -687,6 +775,16 @@ DWORD* gunUpgrade1Pixels = NULL;
 DWORD* gunfire1Pixels = NULL;
 int gunUpgrade1W = 0, gunUpgrade1H = 0;
 int gunfire1W = 0, gunfire1H = 0;
+DWORD* gunUpgrade2Pixels = NULL;
+DWORD* gunfire2Pixels = NULL;
+int gunUpgrade2W = 0, gunUpgrade2H = 0;
+int gunfire2W = 0, gunfire2H = 0;
+DWORD* rocketProjPixels = NULL;
+int rocketProjW = 0, rocketProjH = 0;
+DWORD* rocketTrailPixels = NULL;
+int rocketTrailW = 0, rocketTrailH = 0;
+DWORD* explosionPixels = NULL;
+int explosionW = 0, explosionH = 0;
 int bulletW = 0, bulletH = 0;
 int healthbarW = 0, healthbarH = 0;
 DWORD* spirePixels = NULL;
@@ -720,6 +818,17 @@ int errorW = 0, errorH = 0;
 
 bool keys[256] = {false};
 wchar_t loadStatus[256] = L"Loading...";
+
+bool CheckClawCollision(float x, float y) {
+    for (int i = 0; i < 6; i++) {
+        if (claws[i].state == CLAW_PH2_ANCHORED) {
+            float dx = x - claws[i].x;
+            float dy = y - claws[i].y;
+            if (dx*dx + dy*dy < 2.25f) return true;
+        }
+    }
+    return false;
+}
 
 DWORD* LoadBMPPixels(const wchar_t* filename, int* outW, int* outH) {
     HBITMAP hBmp = (HBITMAP)LoadImageW(NULL, filename, IMAGE_BITMAP, 0, 0, 
@@ -812,6 +921,27 @@ void TryLoadAssets() {
     swprintf(path, MAX_PATH, L"%ls\\assets\\gunfire1.bmp", exePath);
     gunfire1Pixels = LoadBMPPixels(path, &gunfire1W, &gunfire1H);
     if (!gunfire1Pixels) { gunfire1Pixels = gunfirePixels; gunfire1W = gunfireW; gunfire1H = gunfireH; }
+    
+    // Bazooka Assets
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gun_upgrade2.bmp", exePath);
+    gunUpgrade2Pixels = LoadBMPPixels(path, &gunUpgrade2W, &gunUpgrade2H);
+    if (!gunUpgrade2Pixels) { gunUpgrade2Pixels = gunPixels; gunUpgrade2W = gunW; gunUpgrade2H = gunH; }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\gunfire2.bmp", exePath);
+    gunfire2Pixels = LoadBMPPixels(path, &gunfire2W, &gunfire2H);
+    if (!gunfire2Pixels) { gunfire2Pixels = gunfirePixels; gunfire2W = gunfireW; gunfire2H = gunfireH; }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\rocket_proj.bmp", exePath);
+    rocketProjPixels = LoadBMPPixels(path, &rocketProjW, &rocketProjH);
+    if (!rocketProjPixels) { rocketProjPixels = bulletPixels; rocketProjW = bulletW; rocketProjH = bulletH; }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\rocket_trail.bmp", exePath);
+    rocketTrailPixels = LoadBMPPixels(path, &rocketTrailW, &rocketTrailH);
+    if (!rocketTrailPixels) { rocketTrailPixels = bulletPixels; rocketTrailW = bulletW; rocketTrailH = bulletH; }
+
+    swprintf(path, MAX_PATH, L"%ls\\assets\\explosion_impact.bmp", exePath);
+    explosionPixels = LoadBMPPixels(path, &explosionW, &explosionH);
+    if (!explosionPixels) { explosionPixels = cloudPixels; explosionW = cloudW; explosionH = cloudH; }
     
     swprintf(path, MAX_PATH, L"%ls\\assets\\bullet.bmp", exePath);
     bulletPixels = LoadBMPPixels(path, &bulletW, &bulletH);
@@ -1087,6 +1217,11 @@ void SpawnEnemies() {
         enemy.tacticState = 0;
         enemy.flankDir = 0;
         enemy.tacticTimer = 0;
+        enemy.path.clear();
+        enemy.pathIndex = 0;
+        enemy.pathRecalcTimer = 0;
+        NeuralAI::InheritBrain(enemy.brain);
+        enemy.hasNeuralBrain = true;
         enemies.push_back(enemy);
     }
 }
@@ -1623,6 +1758,34 @@ void RenderSprites() {
         }
     }
     
+    // Bazooka Projectiles
+    for (auto& r : rockets) {
+        if (r.active) {
+            float dx = r.x - player.x;
+            float dy = r.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            allSprites.push_back({r.x, r.y, dist, 14, 0.5f, 0, false, r.z, false});
+        }
+    }
+    
+    for (auto& t : rocketTrails) {
+        if (t.active) {
+            float dx = t.x - player.x;
+            float dy = t.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            allSprites.push_back({t.x, t.y, dist, 16, 0.5f, 0, false, 0.0f, false});
+        }
+    }
+    
+    for (auto& ex : explosions) {
+        if (ex.active) {
+            float dx = ex.x - player.x;
+            float dy = ex.y - player.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            allSprites.push_back({ex.x, ex.y, dist, 15, 1.5f, 0, false, ex.timer, false});
+        }
+    }
+    
     for(int i = 0; i < 6; i++) {
         float cdx = claws[i].x - player.x;
         float cdy = claws[i].y - player.y;
@@ -1702,7 +1865,13 @@ void RenderSprites() {
         } else if (sp.type == 3) {
             RenderSprite(fireballPixels, fireballW, fireballH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 4) {
-            RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+             RenderSprite(medkitPixels, medkitW, medkitH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+        } else if (sp.type == 14) { // Rocket
+             RenderSprite(rocketProjPixels, rocketProjW, rocketProjH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+        } else if (sp.type == 15) { // Explosion
+             RenderSprite(explosionPixels, explosionW, explosionH, sp.x, sp.y, sp.dist, sp.scale * (1.0f + (1.0f - sp.height)), 0.0f);
+        } else if (sp.type == 16) { // Trail
+             RenderSprite(rocketTrailPixels, rocketTrailW, rocketTrailH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
         } else if (sp.type == 5) {
             if (phase2Active && sp.variant >= 0 && !enragedMode) {
                 if (sp.isHurt) {
@@ -1848,6 +2017,10 @@ void UpdateEnemies(float deltaTime) {
     for (auto& enemy : enemies) {
         if (!enemy.active) continue;
         
+        if (enemy.hasNeuralBrain && !enemy.isMarshall) {
+            enemy.brain.survivalTime += deltaTime;
+        }
+        
         // Marshall UI Sync
         if (enemy.isMarshall) {
              marshallHealthBarActive = true;
@@ -1860,47 +2033,62 @@ void UpdateEnemies(float deltaTime) {
              if (enemy.health < 5 && enemy.state != 2) {
                  enemy.state = 2; // Retreat
              }
-             if (enemy.health >= 35 && enemy.state == 2) {
+             if (enemy.health >= marshallMaxHP && enemy.state == 2) {
                  enemy.state = 1; // Return to Chase
              }
              
              if (enemy.state == 2) { // Retreat & Heal
-                 // Move AWAY from player
                  float dx = enemy.x - player.x; 
                  float dy = enemy.y - player.y;
                  float dist = sqrtf(dx*dx + dy*dy);
-                 if (dist > 0) {
-                     float retreatSpeed = 7.5f; // Player Sprint (6.5) + 1
+                 
+                 float retreatSpeed = 7.5f;
+                 if (dist < 16.0f) {
+                     retreatSpeed = 10.0f;
+                 }
+                 
+                 enemy.pathRecalcTimer -= deltaTime;
+                 if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                     float retreatTargetX = enemy.x + (dx/dist) * 15.0f;
+                     float retreatTargetY = enemy.y + (dy/dist) * 15.0f;
+                     if (retreatTargetX < 7.0f) retreatTargetX = 7.0f;
+                     if (retreatTargetX > MAP_WIDTH - 7.0f) retreatTargetX = MAP_WIDTH - 7.0f;
+                     if (retreatTargetY < 7.0f) retreatTargetY = 7.0f;
+                     if (retreatTargetY > MAP_HEIGHT - 7.0f) retreatTargetY = MAP_HEIGHT - 7.0f;
+                     
+                     enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, retreatTargetX, retreatTargetY);
+                     enemy.pathIndex = 0;
+                     enemy.pathRecalcTimer = 0.3f;
+                 }
+                 
+                 float pathTargetX, pathTargetY;
+                 if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
+                     float pdx = pathTargetX - enemy.x;
+                     float pdy = pathTargetY - enemy.y;
+                     float pdist = sqrtf(pdx*pdx + pdy*pdy);
+                     if (pdist > 0.1f) {
+                         float mx = (pdx / pdist) * retreatSpeed * deltaTime;
+                         float my = (pdy / pdist) * retreatSpeed * deltaTime;
+                         float nextX = enemy.x + mx;
+                         float nextY = enemy.y + my;
+                         float cdx = nextX - 32.0f;
+                         float cdy = nextY - 32.0f;
+                         if (nextX >= 7.0f && nextX <= MAP_WIDTH - 7.0f && worldMap[(int)nextX][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(nextX, enemy.y)) enemy.x = nextX;
+                         cdx = enemy.x - 32.0f;
+                         cdy = nextY - 32.0f;
+                         if (nextY >= 7.0f && nextY <= MAP_HEIGHT - 7.0f && worldMap[(int)enemy.x][(int)nextY] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, nextY)) enemy.y = nextY;
+                     }
+                 } else {
                      float mx = (dx/dist) * retreatSpeed * deltaTime;
                      float my = (dy/dist) * retreatSpeed * deltaTime;
-                     
-                     bool moved = false;
-                     // Try standard retreat (sliding allowed) with Boundary Check (4 unit padding)
                      float nextX = enemy.x + mx;
                      float nextY = enemy.y + my;
-                     
-                     if (nextX >= 4.0f && nextX <= MAP_WIDTH - 4.0f && worldMap[(int)nextX][(int)enemy.y] == 0) {
-                          enemy.x = nextX; moved = true; 
-                     }
-                     if (nextY >= 4.0f && nextY <= MAP_HEIGHT - 4.0f && worldMap[(int)enemy.x][(int)nextY] == 0) { 
-                          enemy.y = nextY; moved = true; 
-                     }
-                     
-                     // Corner Escape: If stuck, try moving perpendicular
-                     if (!moved) {
-                         // Try Left Perpendicular (-y, x)
-                         float px = -my;
-                         float py = mx;
-                         if (worldMap[(int)(enemy.x + px)][(int)(enemy.y + py)] == 0) {
-                             enemy.x += px; enemy.y += py;
-                         } else {
-                             // Try Right Perpendicular (y, -x)
-                             px = my; py = -mx;
-                             if (worldMap[(int)(enemy.x + px)][(int)(enemy.y + py)] == 0) {
-                                 enemy.x += px; enemy.y += py;
-                             }
-                         }
-                     }
+                     float cdx = nextX - 32.0f;
+                     float cdy = nextY - 32.0f;
+                     if (nextX >= 7.0f && nextX <= MAP_WIDTH - 7.0f && worldMap[(int)nextX][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(nextX, enemy.y)) enemy.x = nextX;
+                     cdx = enemy.x - 32.0f;
+                     cdy = nextY - 32.0f;
+                     if (nextY >= 7.0f && nextY <= MAP_HEIGHT - 7.0f && worldMap[(int)enemy.x][(int)nextY] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, nextY)) enemy.y = nextY;
                  }
                  
                  enemy.healTimer += deltaTime;
@@ -1908,9 +2096,28 @@ void UpdateEnemies(float deltaTime) {
                      enemy.health++;
                      enemy.healTimer = 0;
                  }
-                 continue; // Skip standard logic
+                 
+                 enemy.fireTimer -= deltaTime;
+                 float rangeCheckDist = sqrtf((enemy.x - player.x)*(enemy.x - player.x) + (enemy.y - player.y)*(enemy.y - player.y));
+                 if (enemy.fireTimer <= 0 && rangeCheckDist < 24.0f) {
+                     enemy.fireTimer = 2.0f;
+                     Rocket r;
+                     r.x = enemy.x;
+                     r.y = enemy.y;
+                     r.dirX = 0; r.dirY = 0;
+                     r.speed = 0;
+                     r.active = true;
+                     r.isEnemy = true;
+                     r.z = 0;
+                     r.verticalSpeed = 10.0f;
+                     r.targetX = player.x;
+                     r.targetY = player.y;
+                     rockets.push_back(r);
+                     PlayBazookaFireSound();
+                 }
+
+                 continue;
              } else if (enemy.state == 0) { // Seek Horde
-                 // Find average position of nearby enemies
                  float avgX = 0, avgY = 0;
                  int count = 0;
                  for(auto& other : enemies) {
@@ -1931,39 +2138,91 @@ void UpdateEnemies(float deltaTime) {
                      float dist = sqrtf(dx*dx + dy*dy);
                      
                      if (dist > 1.0f) {
-                         // Move to horde
-                         float mx = (dx/dist) * enemy.speed * deltaTime;
-                         float my = (dy/dist) * enemy.speed * deltaTime;
-                         if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0) enemy.x += mx;
-                         if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0) enemy.y += my;
+                         enemy.pathRecalcTimer -= deltaTime;
+                         if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                             enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, avgX, avgY);
+                             enemy.pathIndex = 0;
+                             enemy.pathRecalcTimer = 0.5f;
+                         }
+                         
+                         float pathTargetX, pathTargetY;
+                         if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
+                             float pdx = pathTargetX - enemy.x;
+                             float pdy = pathTargetY - enemy.y;
+                             float pdist = sqrtf(pdx*pdx + pdy*pdy);
+                             if (pdist > 0.1f) {
+                                 float mx = (pdx / pdist) * enemy.speed * deltaTime;
+                                 float my = (pdy / pdist) * enemy.speed * deltaTime;
+                                 float cdx = (enemy.x + mx) - 32.0f;
+                                 float cdy = (enemy.y + my) - 32.0f;
+                                 if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x + mx, enemy.y)) enemy.x += mx;
+                                 cdx = enemy.x - 32.0f;
+                                 cdy = (enemy.y + my) - 32.0f;
+                                 if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, enemy.y + my)) enemy.y += my;
+                             }
+                         }
                      } else {
-                         enemy.state = 1; // Blended in, now chase
+                         enemy.state = 1;
                      }
                  } else {
-                     enemy.state = 1; // No horde found, chase
+                     enemy.state = 1;
                  }
-                 continue; // Skip standard logic
-             } else { // Chase (State 1) - Falls through to standard move, but handle Attacks
+                 continue;
+             } else { // Chase (State 1)
                  float dx = player.x - enemy.x;
                  float dy = player.y - enemy.y;
                  float dist = sqrtf(dx*dx + dy*dy);
                  
                  if (dist < 3.0f && enemy.attackTimer <= 0) {
-                     // AOE Attack
                      if (!godMode) player.health -= 20;
                      PlayMarshallAttackSound();
-                     screenShakeTimer = 1.0f; // Violent shake
+                     screenShakeTimer = 1.0f;
                      playerHurtTimer = 0.5f;
                      
-                     // Knockback
                      float kx = (player.x - enemy.x) / dist;
                      float ky = (player.y - enemy.y) / dist;
                      player.x += kx * 2.0f;
                      player.y += ky * 2.0f;
                      
-                     enemy.attackTimer = 2.0f; // Cooldown
+                     enemy.attackTimer = 2.0f;
                  }
                  if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
+                 
+                 if (dist > 2.5f) {
+                     enemy.pathRecalcTimer -= deltaTime;
+                     if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                         enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, player.x, player.y);
+                         enemy.pathIndex = 0;
+                         enemy.pathRecalcTimer = 0.3f;
+                     }
+                     
+                     float pathTargetX, pathTargetY;
+                     float chaseSpeed = 4.5f;
+                     if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
+                         float pdx = pathTargetX - enemy.x;
+                         float pdy = pathTargetY - enemy.y;
+                         float pdist = sqrtf(pdx*pdx + pdy*pdy);
+                         if (pdist > 0.1f) {
+                             float mx = (pdx / pdist) * chaseSpeed * deltaTime;
+                             float my = (pdy / pdist) * chaseSpeed * deltaTime;
+                             float cdx = (enemy.x + mx) - 32.0f;
+                             float cdy = (enemy.y + my) - 32.0f;
+                             if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x + mx, enemy.y)) enemy.x += mx;
+                             cdx = enemy.x - 32.0f;
+                             cdy = (enemy.y + my) - 32.0f;
+                             if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, enemy.y + my)) enemy.y += my;
+                         }
+                     } else {
+                         float mx = (dx / dist) * chaseSpeed * deltaTime;
+                         float my = (dy / dist) * chaseSpeed * deltaTime;
+                         float cdx = (enemy.x + mx) - 32.0f;
+                         float cdy = (enemy.y + my) - 32.0f;
+                         if (worldMap[(int)(enemy.x + mx)][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x + mx, enemy.y)) enemy.x += mx;
+                         cdx = enemy.x - 32.0f;
+                         cdy = (enemy.y + my) - 32.0f;
+                         if (worldMap[(int)enemy.x][(int)(enemy.y + my)] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, enemy.y + my)) enemy.y += my;
+                     }
+                 }
                  
                  enemy.summonTimer -= deltaTime;
                  if (enemy.summonTimer <= 0) {
@@ -1984,12 +2243,14 @@ void UpdateEnemies(float deltaTime) {
                              s.active = true; s.health = 1; s.speed = 3.0f; s.spriteIndex = rand()%4;
                              s.isShooter = false; s.isMarshall = false;
                              s.tacticState = 0; s.flankDir = 0; s.tacticTimer = 0;
+                             s.path.clear(); s.pathIndex = 0; s.pathRecalcTimer = 0;
                              enemies.push_back(s);
                          }
                      }
                  }
+                 continue;
              }
-        }
+         }
 
         float dx = player.x - enemy.x;
         float dy = player.y - enemy.y;
@@ -2070,12 +2331,42 @@ void UpdateEnemies(float deltaTime) {
                     enemy.firingTimer = 0.5f;
                 }
             } else if (dist > 16.0f) {
-                float moveX = (dx / dist) * enemy.speed * deltaTime;
-                float moveY = (dy / dist) * enemy.speed * deltaTime;
-                float newX = enemy.x + moveX;
-                float newY = enemy.y + moveY;
-                if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
-                if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+                enemy.pathRecalcTimer -= deltaTime;
+                if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                    enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, player.x, player.y);
+                    enemy.pathIndex = 0;
+                    enemy.pathRecalcTimer = 0.5f;
+                }
+                
+                float pathTargetX, pathTargetY;
+                if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
+                    float pdx = pathTargetX - enemy.x;
+                    float pdy = pathTargetY - enemy.y;
+                    float pdist = sqrtf(pdx*pdx + pdy*pdy);
+                    if (pdist > 0.1f) {
+                        float moveX = (pdx / pdist) * enemy.speed * deltaTime;
+                        float moveY = (pdy / pdist) * enemy.speed * deltaTime;
+                        float newX = enemy.x + moveX;
+                        float newY = enemy.y + moveY;
+                        float cdx = newX - 32.0f;
+                        float cdy = newY - 32.0f;
+                        if (worldMap[(int)newX][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(newX, enemy.y)) enemy.x = newX;
+                        cdx = enemy.x - 32.0f;
+                        cdy = newY - 32.0f;
+                        if (worldMap[(int)enemy.x][(int)newY] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, newY)) enemy.y = newY;
+                    }
+                } else {
+                    float moveX = (dx / dist) * enemy.speed * deltaTime;
+                    float moveY = (dy / dist) * enemy.speed * deltaTime;
+                    float newX = enemy.x + moveX;
+                    float newY = enemy.y + moveY;
+                    float cdx = newX - 32.0f;
+                    float cdy = newY - 32.0f;
+                    if (worldMap[(int)newX][(int)enemy.y] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(newX, enemy.y)) enemy.x = newX;
+                    cdx = enemy.x - 32.0f;
+                    cdy = newY - 32.0f;
+                    if (worldMap[(int)enemy.x][(int)newY] == 0 && (cdx*cdx + cdy*cdy >= 9.0f) && !CheckClawCollision(enemy.x, newY)) enemy.y = newY;
+                }
             }
         } else {
             int nearbyCount = 0;
@@ -2085,7 +2376,7 @@ void UpdateEnemies(float deltaTime) {
                 float ox = enemy.x - other.x;
                 float oy = enemy.y - other.y;
                 float odist = sqrtf(ox*ox + oy*oy);
-                if (odist < 6.0f) {
+                if (odist < 8.0f) {
                     nearbyCount++;
                     hordeCenterX += other.x;
                     hordeCenterY += other.y;
@@ -2102,30 +2393,33 @@ void UpdateEnemies(float deltaTime) {
                 float ox = other.x - hordeCenterX;
                 float oy = other.y - hordeCenterY;
                 float odist = sqrtf(ox*ox + oy*oy);
-                if (odist < 16.0f && odist >= 6.0f && nearbyCount >= 7) {
+                if (odist < 16.0f && odist >= 6.0f && nearbyCount >= 5) {
                     other.tacticState = (rand() % 2 == 0) ? 1 : 2;
                     other.flankDir = (rand() % 2 == 0) ? 1 : -1;
                     other.tacticTimer = 2.0f;
                 }
             }
             
-            if (nearbyCount >= 7 && enemy.tacticState == 0) {
+            if (nearbyCount >= 5 && enemy.tacticState == 0) {
                 enemy.tacticState = (rand() % 2 == 0) ? 1 : 2;
                 enemy.flankDir = (rand() % 2 == 0) ? 1 : -1;
                 enemy.tacticTimer = 2.0f;
-                if (!hordeActive) {
-                    hordeActive = true;
-                    hordeMessageTimer = 3.0f;
-                }
-            } else if (nearbyCount < 4 && enemy.tacticState != 0) {
+            } else if (nearbyCount < 3 && enemy.tacticState != 0) {
                 enemy.tacticState = 0;
+            }
+            
+            if (nearbyCount >= 8 && !hordeActive) {
+                hordeActive = true;
+                hordeMessageTimer = 3.0f;
             }
             
             int hordeCount = 0;
             for (auto& e : enemies) {
                 if (e.active && e.tacticState != 0) hordeCount++;
             }
-            if (hordeCount < 4) hordeActive = false;
+            if (hordeCount < 4) {
+                hordeActive = false;
+            }
             
             if (enemy.tacticTimer > 0) enemy.tacticTimer -= deltaTime;
             
@@ -2142,8 +2436,30 @@ void UpdateEnemies(float deltaTime) {
             }
             
             float moveX = 0, moveY = 0;
+            float neuralMoveBias = 1.0f;
+            float neuralStrafe = 0;
+            float neuralAggression = 0;
             
-            if (enemy.tacticState == 2 && dist > 2.0f) {
+            if (enemy.hasNeuralBrain) {
+                float inputs[NeuralAI::INPUT_COUNT];
+                inputs[0] = dist / 30.0f;
+                inputs[1] = atan2f(dy, dx) / PI;
+                inputs[2] = player.angle / PI;
+                inputs[3] = (float)enemy.health / 4.0f;
+                inputs[4] = (float)nearbyCount / 10.0f;
+                inputs[5] = isMoving ? 1.0f : 0.0f;
+                inputs[6] = (float)currentWeapon / 2.0f;
+                inputs[7] = enemy.brain.survivalTime / 30.0f;
+                
+                float outputs[NeuralAI::OUTPUT_COUNT];
+                enemy.brain.Evaluate(inputs, outputs);
+                
+                neuralMoveBias = outputs[0];
+                neuralStrafe = outputs[1];
+                neuralAggression = outputs[2];
+            }
+            
+            if (enemy.tacticState == 2) {
                 float angleToEnemy = atan2f(enemy.y - player.y, enemy.x - player.x);
                 float playerFacing = player.angle;
                 float angleDiff = angleToEnemy - playerFacing;
@@ -2157,7 +2473,7 @@ void UpdateEnemies(float deltaTime) {
                     targetAngle = playerFacing - PI * 0.75f;
                 }
                 
-                float encircleRadius = 4.0f;
+                float encircleRadius = (dist > 10.0f) ? 10.0f : 4.0f;
                 float targetX = player.x + cosf(targetAngle) * encircleRadius;
                 float targetY = player.y + sinf(targetAngle) * encircleRadius;
                 
@@ -2165,32 +2481,85 @@ void UpdateEnemies(float deltaTime) {
                 float tdy = targetY - enemy.y;
                 float tdist = sqrtf(tdx*tdx + tdy*tdy);
                 
-                if (tdist > 1.5f) {
-                    moveX = (tdx / tdist) * enemy.speed * 1.8f * deltaTime;
-                    moveY = (tdy / tdist) * enemy.speed * 1.8f * deltaTime;
-                } else {
+                if (tdist > 0.5f) {
+                    float speedMult = (dist > 12.0f) ? 2.2f : 1.8f;
+                    moveX = (tdx / tdist) * enemy.speed * speedMult * deltaTime;
+                    moveY = (tdy / tdist) * enemy.speed * speedMult * deltaTime;
+                } else if (dist > 2.0f) {
                     moveX = (dx / dist) * enemy.speed * 1.5f * deltaTime;
                     moveY = (dy / dist) * enemy.speed * 1.5f * deltaTime;
                 }
             } else if (dist > 1.2f) {
-                moveX = (dx / dist) * enemy.speed * deltaTime;
-                moveY = (dy / dist) * enemy.speed * deltaTime;
+                if (neuralMoveBias < -0.3f && enemy.hasNeuralBrain) {
+                    float retreatDist = 20.0f;
+                    float retreatX = enemy.x - (dx/dist) * retreatDist;
+                    float retreatY = enemy.y - (dy/dist) * retreatDist;
+                    if (retreatX < 5.0f) retreatX = 5.0f;
+                    if (retreatX > MAP_WIDTH - 5.0f) retreatX = MAP_WIDTH - 5.0f;
+                    if (retreatY < 5.0f) retreatY = 5.0f;
+                    if (retreatY > MAP_HEIGHT - 5.0f) retreatY = MAP_HEIGHT - 5.0f;
+                    
+                    enemy.pathRecalcTimer -= deltaTime;
+                    if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                        enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, retreatX, retreatY);
+                        enemy.pathIndex = 0;
+                        enemy.pathRecalcTimer = 0.5f;
+                    }
+                } else {
+                    enemy.pathRecalcTimer -= deltaTime;
+                    if (enemy.pathRecalcTimer <= 0 || enemy.path.empty()) {
+                        enemy.path = Pathfinder::FindPath(enemy.x, enemy.y, player.x, player.y);
+                        enemy.pathIndex = 0;
+                        enemy.pathRecalcTimer = 0.5f;
+                    }
+                }
+                
+                float pathTargetX, pathTargetY;
+                if (Pathfinder::GetNextPathPoint(enemy.x, enemy.y, enemy.path, enemy.pathIndex, pathTargetX, pathTargetY)) {
+                    float pdx = pathTargetX - enemy.x;
+                    float pdy = pathTargetY - enemy.y;
+                    float pdist = sqrtf(pdx*pdx + pdy*pdy);
+                    if (pdist > 0.1f) {
+                        moveX = (pdx / pdist) * enemy.speed * deltaTime;
+                        moveY = (pdy / pdist) * enemy.speed * deltaTime;
+                    }
+                } else {
+                    moveX = (dx / dist) * enemy.speed * deltaTime;
+                    moveY = (dy / dist) * enemy.speed * deltaTime;
+                }
             }
             
             moveX += separationX * enemy.speed * 0.5f * deltaTime;
             moveY += separationY * enemy.speed * 0.5f * deltaTime;
             
+            if (enemy.hasNeuralBrain && fabsf(neuralStrafe) > 0.2f) {
+                float strafeX = -dy / (dist > 0.1f ? dist : 0.1f);
+                float strafeY = dx / (dist > 0.1f ? dist : 0.1f);
+                moveX += strafeX * neuralStrafe * enemy.speed * 0.5f * deltaTime;
+                moveY += strafeY * neuralStrafe * enemy.speed * 0.5f * deltaTime;
+            }
+            
             float newX = enemy.x + moveX;
             float newY = enemy.y + moveY;
-            if (worldMap[(int)newX][(int)enemy.y] == 0) enemy.x = newX;
-            if (worldMap[(int)enemy.x][(int)newY] == 0) enemy.y = newY;
+            float centerDx = newX - 32.0f;
+            float centerDy = newY - 32.0f;
+            bool blockedBySpire = (centerDx*centerDx + centerDy*centerDy < 9.0f);
+            if (worldMap[(int)newX][(int)enemy.y] == 0 && !blockedBySpire && !CheckClawCollision(newX, enemy.y)) enemy.x = newX;
+            centerDx = enemy.x - 32.0f;
+            centerDy = newY - 32.0f;
+            blockedBySpire = (centerDx*centerDx + centerDy*centerDy < 9.0f);
+            if (worldMap[(int)enemy.x][(int)newY] == 0 && !blockedBySpire && !CheckClawCollision(enemy.x, newY)) enemy.y = newY;
             
             if (enemy.attackTimer > 0) enemy.attackTimer -= deltaTime;
             
-            if (dist < 2.0f && enemy.attackTimer <= 0) {
+            float attackRange = 2.0f + (enemy.hasNeuralBrain ? neuralAggression * 0.5f : 0);
+            if (dist < attackRange && enemy.attackTimer <= 0) {
                 if (!godMode) {
                     if (enemy.spriteIndex == 4) player.health -= 10;
                     else player.health -= 5;
+                }
+                if (enemy.hasNeuralBrain) {
+                    enemy.brain.damageDealt += (enemy.spriteIndex == 4) ? 10.0f : 5.0f;
                 }
                 
                 enemy.attackTimer = 1.0f;
@@ -2206,6 +2575,9 @@ void UpdateEnemies(float deltaTime) {
                     playerDamage = 1;
                     maxAmmo = 8;
                     ammo = 8;
+                    // Reset weapon ammo to defaults
+                    weaponAmmo[0] = 8; weaponAmmo[1] = 5; weaponAmmo[2] = 4;
+                    weaponMaxAmmo[0] = 8; weaponMaxAmmo[1] = 5; weaponMaxAmmo[2] = 4;
                     
                     if (bossActive) {
                         bossActive = false;
@@ -2266,8 +2638,6 @@ void UpdateEnemies(float deltaTime) {
                 bossHealth = 200;
                 phase2Active = false;
                 enragedMode = false;
-                enemies.clear();
-                fireballs.clear();
                 enemies.clear();
                 fireballs.clear();
                 InitClaws();
@@ -2899,6 +3269,13 @@ void UpdateGun(float deltaTime) {
             ammo = maxAmmo;
         }
     }
+    
+    // Recoil Decay
+    if (gunRecoil > 0.1f) {
+        gunRecoil *= 0.85f; // Decay recoil
+    } else {
+        gunRecoil = 0;
+    }
 }
 
 void StartReload() {
@@ -2913,14 +3290,49 @@ void ShootBullet() {
     
     ammo--;
     
-    Bullet b;
-    b.x = player.x;
-    b.y = player.y;
-    b.dirX = cosf(player.angle);
-    b.dirY = sinf(player.angle);
-    b.speed = 20.0f;
-    b.active = true;
-    bullets.push_back(b);
+    if (currentWeapon == 2) {
+        Rocket r;
+        r.x = player.x;
+        r.y = player.y;
+        r.dirX = cosf(player.angle);
+        r.dirY = sinf(player.angle);
+        r.speed = 25.0f; // Fast rocket
+        r.active = true;
+        r.isEnemy = false;
+        r.z = 0;
+        r.verticalSpeed = 0;
+        rockets.push_back(r);
+        PlayGunSound(2); // Bazooka Fire Sound
+        gunRecoil = 80.0f; // Strong recoil for Bazooka
+    } else if (currentWeapon == 1) { // Shotgun - 5 Pellets
+        for (int i = 0; i < 5; i++) {
+            Bullet b;
+            b.x = player.x;
+            b.y = player.y;
+            // Spread: -0.1 to +0.1 radians
+            float spread = (i - 2) * 0.05f; 
+            b.dirX = cosf(player.angle + spread);
+            b.dirY = sinf(player.angle + spread);
+            b.speed = 20.0f;
+            b.active = true;
+            b.damage = 1; // 1 damage per pellet
+            bullets.push_back(b);
+        }
+        PlayGunSound(0); // Standard sound for now (could pitch shift if needed)
+        gunRecoil = 40.0f; // Medium recoil
+    } else {
+        Bullet b;
+        b.x = player.x;
+        b.y = player.y;
+        b.dirX = cosf(player.angle);
+        b.dirY = sinf(player.angle);
+        b.speed = 20.0f;
+        b.active = true;
+        b.damage = playerDamage; // Standard damage
+        bullets.push_back(b);
+        PlayGunSound(0);
+        gunRecoil = 20.0f; // Light recoil
+    }
     
     isFiring = true;
     fireTimer = 0.30f;
@@ -2930,8 +3342,135 @@ void ShootBullet() {
 
 void UpdateBullets(float deltaTime) {
     bool shouldClearEnemies = false;
+    
+    // Update Rockets
+    for (auto& r : rockets) {
+        if (!r.active) continue;
+        
+        if (r.isEnemy) {
+            // Marshall Rocket Logic: Arc + Homing
+            r.verticalSpeed -= 20.0f * deltaTime; // Gravity
+            r.z += r.verticalSpeed * deltaTime;
+            
+            // Homing Movement
+            float dx = r.targetX - r.x;
+            float dy = r.targetY - r.y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            
+            if (dist > 0.1f) {
+                // Move towards target
+                float moveSpeed = 12.0f; // Horizontal speed
+                r.x += (dx / dist) * moveSpeed * deltaTime;
+                r.y += (dy / dist) * moveSpeed * deltaTime;
+            }
+            
+            // Spawn Trail
+            if ((int)(GetTickCount() / 50) % 2 == 0) {
+                 RocketTrail t;
+                 t.x = r.x; t.y = r.y; t.life = 0.5f; t.active = true;
+                 rocketTrails.push_back(t); // Note: Trails don't support Z yet, but looks okay
+            }
+            
+            if (r.z <= 0) { // Ground Impact
+                r.active = false;
+                Explosion ex;
+                ex.x = r.x; ex.y = r.y; ex.timer = 1.0f; ex.active = true;
+                explosions.push_back(ex);
+                PlayBazookaExplosionSound();
+                
+                // Damage Player
+                float pdx = player.x - r.x;
+                float pdy = player.y - r.y;
+                if (sqrtf(pdx*pdx + pdy*pdy) < 3.0f) {
+                    if (!godMode) player.health -= 15;
+                    PlayPlayerHurtSound();
+                    playerHurtTimer = 0.5f;
+                    screenShakeTimer = 0.5f;
+                }
+            }
+            
+        } else {
+            // Player Rocket Logic (Straight)
+            r.x += r.dirX * r.speed * deltaTime;
+            r.y += r.dirY * r.speed * deltaTime;
+            
+            // Spawn Trail
+            if ((int)(GetTickCount() / 50) % 2 == 0) {
+                 RocketTrail t;
+                 t.x = r.x; t.y = r.y; t.life = 0.5f; t.active = true;
+                 rocketTrails.push_back(t);
+            }
+            
+            bool hit = false;
+            int mx = (int)r.x;
+            int my = (int)r.y;
+            
+            if (mx < 0 || mx >= MAP_WIDTH || my < 0 || my >= MAP_HEIGHT || worldMap[mx][my] != 0) hit = true;
+            
+            if (!hit) {
+                 for (auto& e : enemies) {
+                     if (!e.active) continue;
+                     float edx = r.x - e.x;
+                     float edy = r.y - e.y;
+                     if (sqrtf(edx*edx + edy*edy) < 1.0f) { hit = true; break; } // Direct hit
+                 }
+            }
+            
+            if (hit) {
+                r.active = false;
+                // Spawn Explosion
+                Explosion ex;
+                ex.x = r.x; ex.y = r.y; ex.timer = 1.0f; ex.active = true;
+                explosions.push_back(ex);
+                
+                PlayBazookaExplosionSound();
+                
+                // AoE Damage
+                for (auto& e : enemies) {
+                    if (!e.active) continue;
+                    float dX = r.x - e.x;
+                    float dY = r.y - e.y;
+                    float dist = sqrtf(dX*dX + dY*dY);
+                    if (dist < 8.0f) {
+                        e.health -= 10;
+                        if (e.spriteIndex == 4 || e.isShooter || e.isMarshall) e.hurtTimer = 0.5f;
+                        if (e.isMarshall) PlayMarshallHurtSound(); else PlayEnemyHurtSound();
+                        
+                        if (e.health <= 0) {
+                            if (e.hasNeuralBrain && !e.isMarshall) {
+                                NeuralAI::UpdateGlobalBest(e.brain);
+                            }
+                            e.active = false;
+                            if (e.isMarshall) { marshallKilled = true; bazookaUnlocked = true; upgradeMessageTimer = 3.0f; }
+                            score++;
+                            PlayScoreSound();
+                            if (score > highScore) { highScore = score; SaveHighScore(); }
+                            if (score >= 300 && !bossActive && !preBossPhase) { preBossPhase = true; preBossTimer = 30.0f; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Update Trails and Explosions
+    for (auto& t : rocketTrails) {
+        if (t.active) {
+            t.life -= deltaTime;
+            if (t.life <= 0) t.active = false;
+        }
+    }
+    for (auto& ex : explosions) {
+        if (ex.active) {
+            ex.timer -= deltaTime;
+            if (ex.timer <= 0) ex.active = false;
+        }
+    }
+
     if (isFiring && fireTimer < 0.1f) isFiring = false;
     
+
+
     for (auto& b : bullets) {
         if (!b.active) continue;
         
@@ -2952,7 +3491,7 @@ void UpdateBullets(float deltaTime) {
             if (sqrtf(edx*edx + edy*edy) < 1.0f) {
                 b.active = false;
                 
-                enemy.health -= playerDamage;
+                enemy.health -= b.damage;
                 if (enemy.spriteIndex == 4 || enemy.isShooter) enemy.hurtTimer = 0.5f;
                 
                 if (enemy.isMarshall) {
@@ -2964,7 +3503,11 @@ void UpdateBullets(float deltaTime) {
                 
                 if (enemy.health <= 0) {
                     enemy.active = false;
-                    if (enemy.isMarshall) marshallKilled = true;
+                    if (enemy.isMarshall) {
+                        marshallKilled = true;
+                        bazookaUnlocked = true;
+                        upgradeMessageTimer = 3.0f;
+                    }
                     score++;
                     PlayScoreSound();
                     
@@ -3010,7 +3553,7 @@ void UpdateBullets(float deltaTime) {
                         
                         if (worldMap[(int)marshall.x][(int)marshall.y] == 0) {
                             marshall.active = true;
-                            marshall.health = 35; 
+                            marshall.health = marshallMaxHP; 
                             marshall.speed = 2.5f;
                             marshall.spriteIndex = 4; // Use elite/red imp base but override render
                             marshall.hurtTimer = 0;
@@ -3670,12 +4213,12 @@ void UpdatePlayer(float deltaTime) {
 }
 
 void RenderGun() {
-    DWORD* baseGunPixels = gunUpgraded ? gunUpgrade1Pixels : gunPixels;
-    DWORD* baseFirePixels = gunUpgraded ? gunfire1Pixels : gunfirePixels;
-    int baseGunW = gunUpgraded ? gunUpgrade1W : gunW;
-    int baseGunH = gunUpgraded ? gunUpgrade1H : gunH;
-    int baseFireW = gunUpgraded ? gunfire1W : gunfireW;
-    int baseFireH = gunUpgraded ? gunfire1H : gunfireH;
+    DWORD* baseGunPixels = gunUpgraded ? (currentWeapon == 1 ? gunUpgrade1Pixels : (currentWeapon == 2 ? gunUpgrade2Pixels : gunPixels)) : gunPixels;
+    DWORD* baseFirePixels = gunUpgraded ? (currentWeapon == 1 ? gunfire1Pixels : (currentWeapon == 2 ? gunfire2Pixels : gunfirePixels)) : gunfirePixels;
+    int baseGunW = gunUpgraded ? (currentWeapon == 1 ? gunUpgrade1W : (currentWeapon == 2 ? gunUpgrade2W : gunW)) : gunW;
+    int baseGunH = gunUpgraded ? (currentWeapon == 1 ? gunUpgrade1H : (currentWeapon == 2 ? gunUpgrade2H : gunH)) : gunH;
+    int baseFireW = gunUpgraded ? (currentWeapon == 1 ? gunfire1W : (currentWeapon == 2 ? gunfire2W : gunfireW)) : gunfireW;
+    int baseFireH = gunUpgraded ? (currentWeapon == 1 ? gunfire1H : (currentWeapon == 2 ? gunfire2H : gunfireH)) : gunfireH;
     
     if (!baseGunPixels || baseGunW <= 0 || baseGunH <= 0) return;
     
@@ -3695,8 +4238,11 @@ void RenderGun() {
         gunDrawW = srcW * gunScale;
         gunDrawH = srcH * gunScale;
         gunX = SCREEN_WIDTH - gunDrawW + 20 + (int)gunSwayX;
-        gunY = SCREEN_HEIGHT - gunDrawH - 0 + (int)gunSwayY + (int)gunReloadOffset;
+        gunY = SCREEN_HEIGHT - gunDrawH - 0 + (int)gunSwayY + (int)gunReloadOffset + (int)gunRecoil;
     }
+    
+    // Apply recoil to idle gun too if recoil persists
+    gunY += (int)gunRecoil;
     
     for (int y = 0; y < gunDrawH; y++) {
         int screenY = gunY + y;
@@ -4327,8 +4873,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             keys[wParam & 0xFF] = true;
             if (wParam == VK_ESCAPE) PostQuitMessage(0);
             if (gunUpgraded && !consoleActive) {
-                if (wParam == '1') currentWeapon = 0;
-                else if (wParam == '2') currentWeapon = 1;
+                int nextWeapon = currentWeapon;
+                if (wParam == '1') nextWeapon = 0;
+                else if (wParam == '2') nextWeapon = 1;
+                else if (wParam == '3' && bazookaUnlocked) nextWeapon = 2; // Unlock check
+                
+                if (nextWeapon != currentWeapon) {
+                    weaponAmmo[currentWeapon] = ammo; // Save current ammo
+                    currentWeapon = nextWeapon;
+                    ammo = weaponAmmo[currentWeapon]; // Load new ammo
+                    maxAmmo = weaponMaxAmmo[currentWeapon]; // Load new max ammo
+                    isReloading = false;
+                    reloadTimer = 0;
+                    gunReloadOffset = 0;
+                }
             }
             return 0;
         case WM_KEYUP:
@@ -4356,7 +4914,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     player.x = 10.0f;
                     player.y = 32.0f;
                     player.angle = 0.0f;
-                    ammo = maxAmmo;
+                    // Reset weapon ammo to defaults
+                    weaponAmmo[0] = 8; weaponAmmo[1] = 5; weaponAmmo[2] = 4;
+                    weaponMaxAmmo[0] = 8; weaponMaxAmmo[1] = 5; weaponMaxAmmo[2] = 4;
+                    currentWeapon = 0;
+                    ammo = weaponAmmo[0];
+                    maxAmmo = weaponMaxAmmo[0];
                     enemies.clear();
                     fireballs.clear();
                     bullets.clear();
@@ -4449,6 +5012,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     InitTrigTables();
     TryLoadAssets();
     GenerateWorld();
+    Pathfinder::Init(worldMap, CheckClawCollision);
     SpawnEnemies();
     SpawnMedkit();
     InitClaws();
