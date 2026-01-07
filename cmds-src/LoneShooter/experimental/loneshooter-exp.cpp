@@ -1,6 +1,6 @@
 /*
  * LoneShooter - Open World 2.5D Raycaster
- * Compile: g++ -o cmds/LoneShooter.exe cmds-src/LoneShooter/loneshooter.cpp -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -O2
+ * Compile:  g++ -o cmds/LoneShooter.exe cmds-src/LoneShooter/loneshooter.cpp -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -lgdiplus -O2
  * Run: ./LoneShooter.exe
  * Controls: WASD=Move, Mouse=Look, ESC=Quit
  * By Patrick Andrew Cortez
@@ -29,7 +29,13 @@
 volatile bool musicRunning = true;
 extern bool bossActive;
 extern bool preBossPhase;
+extern bool preBossPhase;
 HMIDIOUT hMidiOut;
+
+#include <gdiplus.h>
+#pragma comment (lib, "gdiplus.lib")
+using namespace Gdiplus;
+ULONG_PTR gdiplusToken;
 
 void MidiMsg(DWORD msg) {
     midiOutShortMsg(hMidiOut, msg);
@@ -714,6 +720,19 @@ int playerSpriteW = 0, playerSpriteH = 0;
 DWORD* compassPixels = nullptr;
 int compassW = 0, compassH = 0;
 
+struct Reks {
+    float x, y;
+    float targetX, targetY;
+    float speed;
+    bool active;
+    float medkitTimer;
+    float roamTimer;
+};
+
+Reks reksNPC = {0, 0, 0, 0, 2.5f, false, 0, 0};
+DWORD* reksPixels = nullptr;
+int reksW = 0, reksH = 0;
+
 // Prototypes
 void LoadModelCurrentDir(const wchar_t* filename, float x, float z);
 void Render3DScene();
@@ -880,6 +899,8 @@ bool CheckClawCollision(float x, float y) {
     return false;
 }
 
+DWORD* LoadGDIPlusPixels(const wchar_t* filename, int* outW, int* outH);
+
 DWORD* LoadBMPPixels(const wchar_t* filename, int* outW, int* outH) {
     HBITMAP hBmp = (HBITMAP)LoadImageW(NULL, filename, IMAGE_BITMAP, 0, 0, 
         LR_LOADFROMFILE | LR_CREATEDIBSECTION);
@@ -906,6 +927,39 @@ DWORD* LoadBMPPixels(const wchar_t* filename, int* outW, int* outH) {
     DeleteObject(hBmp);
     
     return pixels;
+}
+
+DWORD* LoadGDIPlusPixels(const wchar_t* filename, int* outW, int* outH) {
+    Bitmap* bmp = Bitmap::FromFile(filename);
+    if (!bmp || bmp->GetLastStatus() != Ok) {
+        if (bmp) delete bmp;
+        return nullptr;
+    }
+    
+    *outW = bmp->GetWidth();
+    *outH = bmp->GetHeight();
+    
+    Rect rect(0, 0, *outW, *outH);
+    BitmapData bmpData;
+    if (bmp->LockBits(&rect, ImageLockModeRead, PixelFormat32bppARGB, &bmpData) != Ok) {
+        delete bmp;
+        return nullptr;
+    }
+    
+    DWORD* pixels = new DWORD[(*outW) * (*outH)];
+    DWORD* src = (DWORD*)bmpData.Scan0;
+    
+    for (int i = 0; i < (*outW) * (*outH); i++) {
+        pixels[i] = src[i];
+    }
+    
+    bmp->UnlockBits(&bmpData);
+    delete bmp;
+    return pixels;
+}
+
+DWORD* LoadJPGPixels(const wchar_t* filename, int* outW, int* outH) {
+    return LoadGDIPlusPixels(filename, outW, outH);
 }
 
 void TryLoadAssets() {
@@ -1120,10 +1174,34 @@ void TryLoadAssets() {
     compassPixels = LoadBMPPixels(path, &compassW, &compassH);
     if (!compassPixels) { missingAssets.push_back(L"compass.bmp"); if (errorPixels) { compassPixels = errorPixels; compassW = errorW; compassH = errorH; } }
 
+    swprintf(path, MAX_PATH, L"%ls\\assets\\extra\\reks.bmp", exePath);
+    reksPixels = LoadGDIPlusPixels(path, &reksW, &reksH);
+    if (!reksPixels) {
+        swprintf(path, MAX_PATH, L"%ls\\assets\\extra\\reks.jpg", exePath);
+        reksPixels = LoadGDIPlusPixels(path, &reksW, &reksH);
+    }
+    
+    // Fallback only if genuinely missing
+    if (!reksPixels) {
+        missingAssets.push_back(L"reks.bmp/jpg");
+        if (paragonPixels) { reksPixels = paragonPixels; reksW = paragonW; reksH = paragonH; }
+        else if (leaderIdlePixels) { reksPixels = leaderIdlePixels; reksW = leaderIdleW; reksH = leaderIdleH; }
+        else if (errorPixels) { reksPixels = errorPixels; reksW = errorW; reksH = errorH; }
+    }
+
     swprintf(loadStatus, 256, L"G:%ls S:%ls A:%ls H:%ls D:%ls F:%ls M:%ls C:%ls", gunPixels?L"OK":L"X", spirePixels?L"OK":L"X", spireAwakePixels?L"OK":L"X", spireHurtPixels?L"OK":L"X", spireDeathPixels?L"OK":L"X", fireballPixels?L"OK":L"X", medkitPixels?L"OK":L"X", clawDormantPixels?L"OK":L"X");
     
     if (!errorPixels && !gunPixels && !spirePixels && !treePixels && !grassPixels) {
         assetsFolderMissing = true;
+    } else if (!missingAssets.empty()) {
+        std::wstring missingList = L"The following assets failed to load:\n";
+        int count = 0;
+        for (const auto& asset : missingAssets) {
+            missingList += asset + L"\n";
+            count++;
+            if (count >= 15) { missingList += L"... and others"; break; }
+        }
+        MessageBoxW(NULL, missingList.c_str(), L"Missing Assets", MB_OK | MB_ICONWARNING);
     }
 }
 
@@ -1937,6 +2015,15 @@ void RenderSprites() {
         }
     }
     
+    if (reksNPC.active) {
+        float rdx = reksNPC.x - player.x;
+        float rdy = reksNPC.y - player.y;
+        float rdist = sqrtf(rdx*rdx + rdy*rdy);
+        if (rdist < 50.0f && rdist > 0.5f) {
+            allSprites.push_back({reksNPC.x, reksNPC.y, rdist, 20, 1.5f, 0, false, 0.0f, false});
+        }
+    }
+    
     std::sort(allSprites.begin(), allSprites.end(), [](const SpriteRender& a, const SpriteRender& b) {
         return a.dist > b.dist;
     });
@@ -2047,6 +2134,10 @@ void RenderSprites() {
         } else if (sp.type == 19) {
             if (playerSpritePixels) {
                  RenderSprite(playerSpritePixels, playerSpriteW, playerSpriteH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
+            }
+        } else if (sp.type == 20) {
+            if (reksPixels) {
+                RenderSprite(reksPixels, reksW, reksH, sp.x, sp.y, sp.dist, sp.scale, sp.height);
             }
         }
     }
@@ -4311,6 +4402,52 @@ void UpdateParagons(float deltaTime) {
     }
 }
 
+void UpdateReks(float deltaTime) {
+    if (!reksNPC.active) return;
+    
+    reksNPC.medkitTimer += deltaTime;
+    if (reksNPC.medkitTimer >= 10.0f) {
+        reksNPC.medkitTimer = 0;
+        for (int i = 0; i < 3; i++) {
+            if (!medkits[i].active) {
+                medkits[i].x = reksNPC.x;
+                medkits[i].y = reksNPC.y;
+                medkits[i].active = true;
+                medkits[i].respawnTimer = 0;
+                break;
+            }
+        }
+    }
+    
+    reksNPC.roamTimer -= deltaTime;
+    if (reksNPC.roamTimer <= 0) {
+        reksNPC.targetX = 6.0f + (rand() % ((MAP_WIDTH - 12) * 10)) / 10.0f;
+        reksNPC.targetY = 6.0f + (rand() % ((MAP_HEIGHT - 12) * 10)) / 10.0f;
+        reksNPC.roamTimer = 3.0f + (rand() % 50) / 10.0f;
+    }
+    
+    float dx = reksNPC.targetX - reksNPC.x;
+    float dy = reksNPC.targetY - reksNPC.y;
+    float dist = sqrtf(dx*dx + dy*dy);
+    
+    if (dist > 0.5f) {
+        float moveX = (dx / dist) * reksNPC.speed * deltaTime;
+        float moveY = (dy / dist) * reksNPC.speed * deltaTime;
+        
+        float nextX = reksNPC.x + moveX;
+        float nextY = reksNPC.y + moveY;
+        
+        if (nextX >= 5.0f && nextX <= MAP_WIDTH - 5.0f && worldMap[(int)nextX][(int)reksNPC.y] == 0) {
+            reksNPC.x = nextX;
+        }
+        if (nextY >= 5.0f && nextY <= MAP_HEIGHT - 5.0f && worldMap[(int)reksNPC.x][(int)nextY] == 0) {
+            reksNPC.y = nextY;
+        }
+    } else {
+        reksNPC.roamTimer = 0;
+    }
+}
+
 void DrawCompass(HDC hdc) {
     if (!compassPixels || compassW <= 0 || compassH <= 0) return;
     
@@ -4491,6 +4628,15 @@ void DrawMinimap(HDC hdc) {
         DeleteObject(clawBrush);
     }
     
+    if (reksNPC.active) {
+        int rx = offsetX + (int)(reksNPC.x * cellSize);
+        int ry = offsetY + (int)(reksNPC.y * cellSize);
+        HBRUSH reksBrush = CreateSolidBrush(RGB(255, 215, 0));
+        oldBrush = (HBRUSH)SelectObject(hdc, reksBrush);
+        Ellipse(hdc, rx - 5, ry - 5, rx + 5, ry + 5);
+        SelectObject(hdc, oldBrush);
+        DeleteObject(reksBrush);
+    }
 
     // Marshall Health Bar
     if (marshallHealthBarActive) {
@@ -5466,8 +5612,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             // Pitch is shared or reset? Let's keep current pitch or reset
                         }
                         consoleBuffer = L"";
+                    } else if (consoleBuffer == L"reks init") {
+                        if (!reksNPC.active) {
+                            reksNPC.x = player.x + 3.0f;
+                            reksNPC.y = player.y + 3.0f;
+                            reksNPC.targetX = reksNPC.x;
+                            reksNPC.targetY = reksNPC.y;
+                            reksNPC.active = true;
+                            reksNPC.medkitTimer = 0;
+                            reksNPC.roamTimer = 1.0f;
+                            wcscpy(consoleError, L"Reks spawned!");
+                        } else {
+                            wcscpy(consoleError, L"Reks already active!");
+                        }
+                        consoleBuffer = L"";
+                    } else if (consoleBuffer == L"reks kill") {
+                        if (reksNPC.active) {
+                            reksNPC.active = false;
+                            wcscpy(consoleError, L"Reks killed!");
+                        } else {
+                            wcscpy(consoleError, L"Reks is not active!");
+                        }
+                        consoleBuffer = L"";
                     } else if (consoleBuffer == L"help") {
-                        wcscpy(consoleError, L"Commands: score=N, stat on/off, reset cam, view-range on/off, player.dmg=N, player.gmode on/off, spec on/off, help, exit");
+                        wcscpy(consoleError, L"Commands: score=N, stat on/off, reks init/kill, help, exit");
                         consoleBuffer = L"";
                     } else {
                         wcscpy(consoleError, L"Unknown command");
@@ -5653,6 +5821,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             for(int i=0; i<5; i++) if (enemyPixels[i]) delete[] enemyPixels[i];
             if (enemy5HurtPixels) delete[] enemy5HurtPixels;
             
+            GdiplusShutdown(gdiplusToken);
+            PostQuitMessage(0);
+            return 0;
+            
             for(int i=0; i<3; i++) if(spirePhase2Pixels[i] && spirePhase2Pixels[i] != spirePixels) delete[] spirePhase2Pixels[i];
             for(int i=0; i<4; i++) if(clawPhase2Pixels[i] && clawPhase2Pixels[i] != clawDormantPixels) delete[] clawPhase2Pixels[i];
             if(clawHurtPixels) delete[] clawHurtPixels;
@@ -5705,6 +5877,9 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pExceptionInfo) {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     SetUnhandledExceptionFilter(CrashHandler);
     (void)hPrevInstance; (void)lpCmdLine;
+    
+    GdiplusStartupInput gdiplusStartupInput;
+    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
     
     LoadHighScore();
     InitTrigTables();
@@ -5805,6 +5980,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             UpdateGun(deltaTime);
             UpdateBullets(deltaTime);
             UpdateParagons(deltaTime);
+            UpdateReks(deltaTime);
         }
         
         HDC hdc = GetDC(hMainWnd);
