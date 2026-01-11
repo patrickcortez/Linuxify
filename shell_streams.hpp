@@ -166,9 +166,10 @@ namespace ShellIO {
     // --- Input Stream ---
     class ShellInStream {
     private:
+        std::mutex inputMutex;
         HANDLE hIn;
         bool isConsole;
-        std::string buffer; // Internal buffer for tokenization
+        std::string buffer;
 
         bool readChunk() {
             const DWORD CHUNK_SIZE = 128;
@@ -177,10 +178,8 @@ namespace ShellIO {
             bool success;
 
             if (isConsole) {
-                // ReadConsoleA reads logic lines (until enter)
                 success = ReadConsoleA(hIn, chunk, CHUNK_SIZE - 1, &read, NULL);
             } else {
-                // ReadFile reads raw bytes (pipe)
                  success = ReadFile(hIn, chunk, CHUNK_SIZE - 1, &read, NULL);
             }
 
@@ -192,19 +191,37 @@ namespace ShellIO {
             return false;
         }
 
-        // Skip whitespace
         void skipWhitespace() {
             while (true) {
                 size_t firstNonSpace = buffer.find_first_not_of(" \t\r\n");
                 if (firstNonSpace == std::string::npos) {
-                    // All whitespace, clear and read more
                     buffer.clear();
-                    if (!readChunk()) return; // EOF
+                    if (!readChunk()) return;
                 } else {
                     buffer.erase(0, firstNonSpace);
                     return;
                 }
             }
+        }
+
+        // Internal helper: assumes lock is held
+        std::string readTokenInternal() {
+            skipWhitespace();
+            if (buffer.empty() && !readChunk()) return "";
+
+            size_t end = buffer.find_first_of(" \t\r\n");
+            while (end == std::string::npos) {
+                if (!readChunk()) {
+                    std::string token = buffer;
+                    buffer.clear();
+                    return token;
+                }
+                end = buffer.find_first_of(" \t\r\n");
+            }
+            
+            std::string token = buffer.substr(0, end);
+            buffer.erase(0, end);
+            return token;
         }
 
     public:
@@ -220,43 +237,33 @@ namespace ShellIO {
         }
 
         ShellInStream& operator>>(std::string& out) {
-            skipWhitespace();
-            if (buffer.empty() && !readChunk()) return *this; // EOF
-
-            size_t end = buffer.find_first_of(" \t\r\n");
-            while (end == std::string::npos) {
-                if (!readChunk()) { // End of stream
-                    out = buffer;
-                    buffer.clear();
-                    return *this;
-                }
-                end = buffer.find_first_of(" \t\r\n");
-            }
-            
-            out = buffer.substr(0, end);
-            buffer.erase(0, end);
+            std::lock_guard<std::mutex> lock(inputMutex);
+            out = readTokenInternal();
             return *this;
         }
 
         ShellInStream& operator>>(int& out) {
-            std::string token;
-            *this >> token;
-            if (!token.empty()) out = std::stoi(token);
+            std::lock_guard<std::mutex> lock(inputMutex);
+            std::string token = readTokenInternal();
+            if (!token.empty()) {
+                try { out = std::stoi(token); } catch(...) {}
+            }
             return *this;
         }
         
          ShellInStream& operator>>(float& out) {
-            std::string token;
-            *this >> token;
-            if (!token.empty()) out = std::stof(token);
+            std::lock_guard<std::mutex> lock(inputMutex);
+            std::string token = readTokenInternal();
+            if (!token.empty()) {
+                try { out = std::stof(token); } catch(...) {}
+            }
             return *this;
         }
         
-        // Helper to read entire line
         bool getline(std::string& line) {
+            std::lock_guard<std::mutex> lock(inputMutex);
             line.clear();
-             // Consuming logic for whole line...
-             // For now simple implementation:
+            
              if (buffer.empty() && !readChunk()) return false;
              
              size_t newline = buffer.find('\n');
@@ -270,7 +277,6 @@ namespace ShellIO {
              }
              
              line = buffer.substr(0, newline);
-             // Remove \r if present
              if (!line.empty() && line.back() == '\r') line.pop_back();
              
              buffer.erase(0, newline + 1);

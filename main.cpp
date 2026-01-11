@@ -42,6 +42,7 @@
 #include "io_handler.hpp"
 #include "input_handler.hpp"
 #include "shell_streams.hpp"
+#include "crash_handler.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -51,19 +52,21 @@ const char* CROND_PIPE_NAME = "\\\\.\\pipe\\LinuxifyCrond";
 
 namespace fs = std::filesystem;
 
-class Linuxify {
+#include "engine/continuation.hpp"
+#include "engine/shell_context.hpp"
+#include "engine/states.hpp"
+
+class ShellLogic {
 private:
-    bool running;
-    std::string currentDir;
-    std::vector<std::string> commandHistory;
-    std::map<std::string, std::string> sessionEnv;
-    std::map<std::string, std::vector<std::string>> sessionArrayEnv;
-    std::set<std::string> persistentVars;
-    std::set<std::string> persistentArrayVars;
-    Bash::Interpreter interpreter;
-    int lastExitCode = 0;
+    ShellContext& ctx; 
+
+
+public:
+    ShellLogic(ShellContext& context) : ctx(context) {}
+
 
     std::vector<std::string> tokenize(const std::string& input) {
+
         std::vector<std::string> tokens;
         std::string token;
         bool inQuotes = false;
@@ -150,7 +153,7 @@ private:
             // Execute as internal command via executeAndCapture or directly
             std::string output = executeAndCapture(cmdLine);
             std::cout << output;
-            return lastExitCode;
+            return ctx.lastExitCode;
         }
         
         // External command - use CreateProcessA
@@ -167,7 +170,7 @@ private:
         char cmdBuffer[8192];
         strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
         
-        const char* dir = workDir.empty() ? currentDir.c_str() : workDir.c_str();
+        const char* dir = workDir.empty() ? ctx.currentDir.c_str() : workDir.c_str();
         
         if (!CreateProcessA(
             NULL,
@@ -311,7 +314,7 @@ private:
             strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
             
             if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL,
-                               currentDir.c_str(), &si, &pi)) {
+                               ctx.currentDir.c_str(), &si, &pi)) {
                 processes.push_back(pi.hProcess);
                 threads.push_back(pi.hThread);
             }
@@ -346,7 +349,7 @@ private:
 
     std::string resolvePath(const std::string& path) {
         if (path.empty()) {
-            return currentDir;
+            return ctx.currentDir;
         }
         
         fs::path p(path);
@@ -354,7 +357,7 @@ private:
             return fs::canonical(p).string();
         }
         
-        fs::path fullPath = fs::path(currentDir) / path;
+        fs::path fullPath = fs::path(ctx.currentDir) / path;
         try {
             return fs::canonical(fullPath).string();
         } catch (...) {
@@ -363,7 +366,7 @@ private:
     }
 
     void cmdPwd(const std::vector<std::string>& args) {
-        std::cout << currentDir << std::endl;
+        std::cout << ctx.currentDir << std::endl;
     }
 
     void cmdCd(const std::vector<std::string>& args) {
@@ -381,7 +384,7 @@ private:
             printError("Previous directory tracking not implemented");
             return;
         } else if (args[1] == "..") {
-            fs::path parent = fs::path(currentDir).parent_path();
+            fs::path parent = fs::path(ctx.currentDir).parent_path();
             targetDir = parent.string();
         } else if (args[1] == "~") {
             char* homeDir = getenv("USERPROFILE");
@@ -397,7 +400,7 @@ private:
 
         try {
             if (fs::exists(targetDir) && fs::is_directory(targetDir)) {
-                currentDir = fs::canonical(targetDir).string();
+                ctx.currentDir = fs::canonical(targetDir).string();
             } else {
                 printError("cd: " + args[1] + ": No such directory");
             }
@@ -445,7 +448,7 @@ private:
             else paths.push_back(arg);
         }
 
-        if (paths.empty()) paths.push_back(currentDir);
+        if (paths.empty()) paths.push_back(ctx.currentDir);
 
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -1298,7 +1301,7 @@ private:
             std::string line;
             while (std::getline(file, line)) {
                 if (!line.empty()) {
-                    commandHistory.push_back(line);
+                    ctx.commandHistory.push_back(line);
                 }
             }
         }
@@ -1306,7 +1309,7 @@ private:
 
     // Save command to history
     void saveToHistory(const std::string& cmd) {
-        commandHistory.push_back(cmd);
+        ctx.commandHistory.push_back(cmd);
         
         std::ofstream file(getHistoryFilePath(), std::ios::app);
         if (file) {
@@ -1361,11 +1364,11 @@ private:
                     }
                 }
                 
-                sessionArrayEnv[arrName] = arr;
-                persistentArrayVars.insert(arrName);
+                ctx.sessionArrayEnv[arrName] = arr;
+                ctx.persistentArrayVars.insert(arrName);
             } else {
-                sessionEnv[name] = value;
-                persistentVars.insert(name);
+                ctx.sessionEnv[name] = value;
+                ctx.persistentVars.insert(name);
                 SetEnvironmentVariableA(name.c_str(), value.c_str());
             }
         }
@@ -1378,16 +1381,16 @@ private:
         file << "# Linuxify Persistent Variables\n";
         file << "# Format: VAR=value or ARR[]={val1,val2,val3}\n\n";
         
-        for (const auto& varName : persistentVars) {
-            auto it = sessionEnv.find(varName);
-            if (it != sessionEnv.end()) {
+        for (const auto& varName : ctx.persistentVars) {
+            auto it = ctx.sessionEnv.find(varName);
+            if (it != ctx.sessionEnv.end()) {
                 file << it->first << "=" << it->second << "\n";
             }
         }
         
-        for (const auto& arrName : persistentArrayVars) {
-            auto it = sessionArrayEnv.find(arrName);
-            if (it != sessionArrayEnv.end()) {
+        for (const auto& arrName : ctx.persistentArrayVars) {
+            auto it = ctx.sessionArrayEnv.find(arrName);
+            if (it != ctx.sessionArrayEnv.end()) {
                 file << it->first << "[]={";
                 for (size_t i = 0; i < it->second.size(); ++i) {
                     if (i > 0) file << ",";
@@ -1427,8 +1430,8 @@ private:
                     if (bracket != std::string::npos && inner.back() == ']') {
                         std::string arrName = inner.substr(0, bracket);
                         std::string idxStr = inner.substr(bracket + 1, inner.size() - bracket - 2);
-                        auto it = sessionArrayEnv.find(arrName);
-                        if (it != sessionArrayEnv.end()) {
+                        auto it = ctx.sessionArrayEnv.find(arrName);
+                        if (it != ctx.sessionArrayEnv.end()) {
                             try {
                                 size_t idx = std::stoul(idxStr);
                                 if (idx < it->second.size()) {
@@ -1441,8 +1444,8 @@ private:
                     else if (inner.find(' ') == std::string::npos && 
                              inner.find('\t') == std::string::npos) {
                         // First try as variable
-                        auto it = sessionEnv.find(inner);
-                        if (it != sessionEnv.end()) {
+                        auto it = ctx.sessionEnv.find(inner);
+                        if (it != ctx.sessionEnv.end()) {
                             value = it->second;
                         } else {
                             char* envVal = nullptr;
@@ -1502,8 +1505,8 @@ private:
                 if (close != std::string::npos) {
                     std::string varName = text.substr(end + 1, close - end - 1);
                     std::string value;
-                    auto it = sessionEnv.find(varName);
-                    if (it != sessionEnv.end()) {
+                    auto it = ctx.sessionEnv.find(varName);
+                    if (it != ctx.sessionEnv.end()) {
                         value = it->second;
                     } else {
                         char* envVal = nullptr;
@@ -1520,8 +1523,8 @@ private:
                 }
                 std::string varName = text.substr(pos + 1, end - pos - 1);
                 std::string value;
-                auto it = sessionEnv.find(varName);
-                if (it != sessionEnv.end()) {
+                auto it = ctx.sessionEnv.find(varName);
+                if (it != ctx.sessionEnv.end()) {
                     value = it->second;
                 } else {
                     char* envVal = nullptr;
@@ -1553,7 +1556,7 @@ private:
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "-c" || args[i] == "--clear") {
                 // Clear history
-                commandHistory.clear();
+                ctx.commandHistory.clear();
                 std::ofstream file(getHistoryFilePath(), std::ios::trunc);
                 printSuccess("History cleared.");
                 return;
@@ -1565,15 +1568,15 @@ private:
         }
         
         size_t start = 0;
-        if (limit > 0 && limit < (int)commandHistory.size()) {
-            start = commandHistory.size() - limit;
+        if (limit > 0 && limit < (int)ctx.commandHistory.size()) {
+            start = ctx.commandHistory.size() - limit;
         }
         
-        for (size_t i = start; i < commandHistory.size(); ++i) {
+        for (size_t i = start; i < ctx.commandHistory.size(); ++i) {
             if (showNumbers) {
                 std::cout << std::setw(5) << (i + 1) << "  ";
             }
-            std::cout << commandHistory[i] << std::endl;
+            std::cout << ctx.commandHistory[i] << std::endl;
         }
     }
 
@@ -1675,8 +1678,8 @@ private:
                         if (bracket != std::string::npos && inner.back() == ']') {
                             std::string arrName = inner.substr(0, bracket);
                             std::string idxStr = inner.substr(bracket + 1, inner.size() - bracket - 2);
-                            auto it = sessionArrayEnv.find(arrName);
-                            if (it != sessionArrayEnv.end()) {
+                            auto it = ctx.sessionArrayEnv.find(arrName);
+                            if (it != ctx.sessionArrayEnv.end()) {
                                 try {
                                     size_t idx = std::stoul(idxStr);
                                     if (idx < it->second.size()) {
@@ -1685,8 +1688,8 @@ private:
                                 } catch (...) {}
                             }
                         } else {
-                            auto it = sessionEnv.find(inner);
-                            if (it != sessionEnv.end()) {
+                            auto it = ctx.sessionEnv.find(inner);
+                            if (it != ctx.sessionEnv.end()) {
                                 value = it->second;
                             } else {
                                 char* envVal = nullptr;
@@ -1703,8 +1706,8 @@ private:
                     if (close != std::string::npos) {
                         std::string varName = text.substr(end + 1, close - end - 1);
                         std::string value;
-                        auto it = sessionEnv.find(varName);
-                        if (it != sessionEnv.end()) {
+                        auto it = ctx.sessionEnv.find(varName);
+                        if (it != ctx.sessionEnv.end()) {
                             value = it->second;
                         } else {
                             char* envVal = nullptr;
@@ -1721,8 +1724,8 @@ private:
                     }
                     std::string varName = text.substr(pos + 1, end - pos - 1);
                     std::string value;
-                    auto it = sessionEnv.find(varName);
-                    if (it != sessionEnv.end()) {
+                    auto it = ctx.sessionEnv.find(varName);
+                    if (it != ctx.sessionEnv.end()) {
                         value = it->second;
                     } else {
                         char* envVal = nullptr;
@@ -1754,8 +1757,8 @@ private:
             std::string varName = args[1];
             
             // Check session env first
-            auto it = sessionEnv.find(varName);
-            if (it != sessionEnv.end()) {
+            auto it = ctx.sessionEnv.find(varName);
+            if (it != ctx.sessionEnv.end()) {
                 std::cout << it->second << std::endl;
                 return;
             }
@@ -1774,11 +1777,11 @@ private:
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         
         // First show session variables
-        if (!sessionEnv.empty()) {
+        if (!ctx.sessionEnv.empty()) {
             SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
             std::cout << "# Session Variables:\n";
             SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-            for (const auto& pair : sessionEnv) {
+            for (const auto& pair : ctx.sessionEnv) {
                 std::cout << pair.first << "=" << pair.second << std::endl;
             }
             std::cout << std::endl;
@@ -1798,12 +1801,12 @@ private:
 
     void cmdExport(const std::vector<std::string>& args) {
         if (args.size() < 2) {
-            for (const auto& pair : sessionEnv) {
-                bool isPersistent = persistentVars.find(pair.first) != persistentVars.end();
+            for (const auto& pair : ctx.sessionEnv) {
+                bool isPersistent = ctx.persistentVars.find(pair.first) != ctx.persistentVars.end();
                 std::cout << "export " << (isPersistent ? "-p " : "") << pair.first << "=\"" << pair.second << "\"" << std::endl;
             }
-            for (const auto& pair : sessionArrayEnv) {
-                bool isPersistent = persistentArrayVars.find(pair.first) != persistentArrayVars.end();
+            for (const auto& pair : ctx.sessionArrayEnv) {
+                bool isPersistent = ctx.persistentArrayVars.find(pair.first) != ctx.persistentArrayVars.end();
                 std::cout << "export " << (isPersistent ? "-p " : "") << "-arr " << pair.first << "={";
                 for (size_t i = 0; i < pair.second.size(); ++i) {
                     if (i > 0) std::cout << ",";
@@ -1864,17 +1867,17 @@ private:
                     continue;
                 }
                 
-                sessionArrayEnv[name] = arr;
+                ctx.sessionArrayEnv[name] = arr;
                 if (persistent) {
-                    persistentArrayVars.insert(name);
+                    ctx.persistentArrayVars.insert(name);
                     savePersistentVars();
                 }
                 printSuccess("Exported array: " + name + " (" + std::to_string(arr.size()) + " elements)" + (persistent ? " [persistent]" : ""));
             } else {
-                sessionEnv[name] = value;
+                ctx.sessionEnv[name] = value;
                 SetEnvironmentVariableA(name.c_str(), value.c_str());
                 if (persistent) {
-                    persistentVars.insert(name);
+                    ctx.persistentVars.insert(name);
                     savePersistentVars();
                 }
                 printSuccess("Exported: " + name + "=" + value + (persistent ? " [persistent]" : ""));
@@ -2040,7 +2043,7 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << std::endl;
         
-        running = false;
+        ctx.running = false;
     }
 
     void cmdPs(const std::vector<std::string>& args) {
@@ -2275,7 +2278,7 @@ private:
             FALSE,
             creationFlags,
             NULL,
-            currentDir.c_str(),
+            ctx.currentDir.c_str(),
             &si,
             &pi
         )) {
@@ -2471,7 +2474,7 @@ private:
                      std::ifstream ifs(resolvePath(file));
                      if (!ifs) {
                          if (!opts.recursive) printError("grep: " + file + ": No such file or directory");
-                         lastExitCode = 2;
+                         ctx.lastExitCode = 2;
                      } else {
                          totalMatches += performGrep(ifs, file);
                      }
@@ -2479,7 +2482,7 @@ private:
             }
         }
         
-        lastExitCode = (totalMatches > 0) ? 0 : 1;
+        ctx.lastExitCode = (totalMatches > 0) ? 0 : 1;
     }
 
     // head - output first part of files
@@ -2636,7 +2639,7 @@ private:
              if (follow) {
                  file.clear(); // Clear EOF
                  std::streampos lastPos = file.tellg();
-                 while (running) {
+                 while (ctx.running) {
                      // Check for new data
                      // In real implementation we should use generic filesystem watcher
                      // Polling here:
@@ -5558,7 +5561,7 @@ private:
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  ps";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "            List running processes (-aux for details)\n";
+        std::cout << "            List ctx.running processes (-aux for details)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  kill";
@@ -5927,7 +5930,7 @@ private:
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
         fs::path lishPath = fs::path(exePath).parent_path() / "cmds" / "lish.exe";
         
-        // Check if running as admin - ALL setup commands require admin
+        // Check if ctx.running as admin - ALL setup commands require admin
         {
             BOOL isAdmin = FALSE;
             PSID adminGroup = NULL;
@@ -6269,7 +6272,7 @@ private:
                 }
             }
             
-            // 4. Check if crond is currently running
+            // 4. Check if crond is currently ctx.running
             std::cout << "[4/4] Checking if crond is running... ";
             HANDLE hPipe = CreateFileA(
                 CROND_PIPE_NAME,
@@ -6402,7 +6405,7 @@ private:
                 printSuccess("'Open in Windux' added to Explorer context menu!");
                 std::cout << "Right-click in Explorer to see the option.\n";
             } else {
-                printError("Some entries failed. Try running as Administrator.");
+                printError("Some entries failed. Try ctx.running as Administrator.");
             }
             
         } else if (action == "integrate") {
@@ -6575,7 +6578,7 @@ private:
 
         std::vector<std::string> expandedTokens = expandTokens(tokens);
         const std::string& cmd = expandedTokens[0];
-        lastExitCode = 0;
+        ctx.lastExitCode = 0;
 
         std::string fullInput;
         for (size_t i = 0; i < expandedTokens.size(); i++) {
@@ -6839,7 +6842,7 @@ private:
         } else if (cmd == "dig" || cmd == "host") {
             Networking::dig(expandedTokens);
         } else if (cmd == "wget") {
-            Networking::wget(expandedTokens, currentDir);
+            Networking::wget(expandedTokens, ctx.currentDir);
         } else if (cmd == "net") {
             Networking::netCommand(expandedTokens);
         } else if (cmd == "netstat") {
@@ -6917,7 +6920,7 @@ private:
                     TRUE,
                     0,
                     NULL,
-                    currentDir.c_str(),
+                    ctx.currentDir.c_str(),
                     &si,
                     &pi
                 )) {
@@ -7133,13 +7136,13 @@ private:
         } else if (cmd == "yes") {
             std::string text = "y";
             if (expandedTokens.size() > 1) text = expandedTokens[1];
-            while (running) {
+            while (ctx.running) {
                 std::cout << text << std::endl;
                 if (SignalHandler::g_signalsBlocked.load()) break; // Rudimentary check, rely on CTRL+C
                 Sleep(1); // Avoid 100% CPU
             }
         } else if (cmd == "exit" || cmd == "quit") {
-            running = false;
+            ctx.running = false;
         } else {
             char exePath[MAX_PATH];
             GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -7173,7 +7176,7 @@ private:
                         TRUE,
                         0,
                         NULL,
-                        currentDir.c_str(),
+                        ctx.currentDir.c_str(),
                         &si,
                         &pi
                     )) {
@@ -7188,7 +7191,7 @@ private:
             }
             
             if (!foundInCmds) {
-                if (!g_registry.executeRegisteredCommand(cmd, expandedTokens, currentDir)) {
+                if (!g_registry.executeRegisteredCommand(cmd, expandedTokens, ctx.currentDir)) {
                     printError("Command not found: " + cmd + ". Type 'help' for available commands.");
                 }
             }
@@ -7208,25 +7211,25 @@ private:
             } else {
                 printError("File system error: " + std::string(e.what()));
             }
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         } catch (const std::invalid_argument& e) {
             printError("Invalid argument: " + std::string(e.what()));
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         } catch (const std::out_of_range& e) {
             printError("Value out of range: " + std::string(e.what()));
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         } catch (const std::runtime_error& e) {
             printError("Runtime error: " + std::string(e.what()));
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         } catch (const std::exception& e) {
             printError("Error: " + std::string(e.what()));
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         } catch (...) {
             printError("An unexpected error occurred.");
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         }
 
-        if (cmd != "clear" && cmd != "cls" && running) {
+        if (cmd != "clear" && cmd != "cls" && ctx.running) {
             ShellIO::sout << ShellIO::endl;
         }
     }
@@ -7363,7 +7366,7 @@ private:
             TRUE,
             0,
             NULL,
-            currentDir.c_str(),
+            ctx.currentDir.c_str(),
             &si,
             &pi
         )) {
@@ -7371,41 +7374,33 @@ private:
             
             DWORD exitCode;
             GetExitCodeProcess(pi.hProcess, &exitCode);
-            lastExitCode = (int)exitCode;
+            ctx.lastExitCode = (int)exitCode;
             
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
             printError("Failed to execute (error " + std::to_string(err) + ")");
-            lastExitCode = 1;
+            ctx.lastExitCode = 1;
         }
     }
 
-public:
-    Linuxify() : running(true) {
-        currentDir = fs::current_path().string();
-        
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(NULL, exePath, MAX_PATH);
-        SetEnvironmentVariableA("SHELL", exePath);
-        SetEnvironmentVariableA("LINUXIFY", "1");
-        SetEnvironmentVariableA("LINUXIFY_VERSION", "1.0");
-
-        loadPersistentVars();
-
-        interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) {
-            this->executeCommand(args);
-            return 0;
-        });
-
+    void init() {
+        // Init Shell API
         ShellAPI::setCommandHandler([this](const std::string& cmd) {
             return this->executeAndCapture(cmd);
         });
         ShellAPI::startServer();
+        
+        loadPersistentVars();
+
+        ctx.interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) {
+            this->executeCommand(args);
+            return 0;
+        });
     }
 
-    ~Linuxify() {
+    void shutdown() {
         ShellAPI::stopServer();
     }
 
@@ -7584,7 +7579,7 @@ public:
         strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
         
         if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL,
-                           currentDir.c_str(), &si, &pi)) {
+                           ctx.currentDir.c_str(), &si, &pi)) {
             // Close write handles so reading can detect EOF
             if (hStdoutFile != INVALID_HANDLE_VALUE) {
                 // Don't close yet, process is using it
@@ -7715,7 +7710,7 @@ public:
                     strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
                     
                     if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, 
-                                       currentDir.c_str(), &si, &pi)) {
+                                       ctx.currentDir.c_str(), &si, &pi)) {
                         CloseHandle(hWritePipe);
                         
                         // Read output
@@ -7888,7 +7883,7 @@ public:
         
         int exitCode = 0;
         if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, 
-                           currentDir.c_str(), &si, &pi)) {
+                           ctx.currentDir.c_str(), &si, &pi)) {
             WaitForSingleObject(pi.hProcess, INFINITE);
             DWORD code;
             GetExitCodeProcess(pi.hProcess, &code);
@@ -8039,7 +8034,7 @@ public:
                 }
                 else {
                     std::cout.rdbuf(oldCout);
-                    lastExitCode = executeWithStdin(cmdPart, stringPart + "\n");
+                    ctx.lastExitCode = executeWithStdin(cmdPart, stringPart + "\n");
                     return true;
                 }
                 
@@ -8074,7 +8069,7 @@ public:
                     std::cout << heredocContent;
                 }
                 else {
-                    lastExitCode = executeWithStdin(cmdPart, heredocContent);
+                    ctx.lastExitCode = executeWithStdin(cmdPart, heredocContent);
                 }
             }
             return true;
@@ -8100,7 +8095,7 @@ public:
                 std::string inputFile = resolvePath(filePart);
                 if (!fs::exists(inputFile)) {
                     printError("No such file: " + filePart);
-                    lastExitCode = 1;
+                    ctx.lastExitCode = 1;
                     return true;
                 }
                 
@@ -8118,7 +8113,7 @@ public:
                         std::cout << fileContent;
                     }
                     else {
-                        lastExitCode = executeWithStdin(cmdPart, fileContent);
+                        ctx.lastExitCode = executeWithStdin(cmdPart, fileContent);
                     }
                 }
                 return true;
@@ -8333,7 +8328,7 @@ public:
             
             // If no internal pipe commands, use real Windows pipes
             if (!hasInternalCmd) {
-                lastExitCode = executePipeline(commands);
+                ctx.lastExitCode = executePipeline(commands);
                 return true;
             }
             
@@ -8422,7 +8417,7 @@ public:
         if (trimmed.empty()) return 0;
 
         if (handleRedirection(trimmed)) {
-            return lastExitCode;
+            return ctx.lastExitCode;
         }
 
         std::vector<std::string> tokens = tokenize(trimmed);
@@ -8441,16 +8436,16 @@ public:
         } else {
             executeCommand(tokens);
         }
-        return lastExitCode;
+        return ctx.lastExitCode;
     }
 
     std::string expandHistoryInString(const std::string& input) {
         std::string result = input;
         size_t pos = 0;
         while ((pos = result.find("!!", pos)) != std::string::npos) {
-            if (!commandHistory.empty()) {
-                result.replace(pos, 2, commandHistory.back());
-                pos += commandHistory.back().length();
+            if (!ctx.commandHistory.empty()) {
+                result.replace(pos, 2, ctx.commandHistory.back());
+                pos += ctx.commandHistory.back().length();
             } else {
                 pos += 2;
             }
@@ -8583,7 +8578,7 @@ public:
         std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
         std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
 
-        // Silently start crond if not running (auto-setup cron on first run)
+        // Silently start crond if not ctx.running (auto-setup cron on first run)
         {
             char exePath[MAX_PATH];
             GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -8591,7 +8586,7 @@ public:
             fs::path crontabPath = fs::path(exePath).parent_path() / "linuxdb" / "crontab";
             
             if (fs::exists(crondPath)) {
-                // Check if crond is running via IPC
+                // Check if crond is ctx.running via IPC
                 HANDLE hPipe = CreateFileA(
                     CROND_PIPE_NAME,
                     GENERIC_READ | GENERIC_WRITE,
@@ -8660,13 +8655,13 @@ public:
         std::string input;
         bool previousWasEmpty = true;
         
-        while (running) {
+        while (ctx.running) {
             if (!previousWasEmpty) {
                 ShellIO::sout << ShellIO::endl;
             }
             
             // Use syntax-highlighted input
-            input = InputHandler::read(currentDir, commandHistory);
+            input = InputHandler::read(ctx.currentDir, ctx.commandHistory);
 
             input.erase(0, input.find_first_not_of(" \t"));
             if (!input.empty()) {
@@ -8689,8 +8684,8 @@ public:
                 if (input[1] == '-' && input.length() > 2) {
                     try {
                         int n = std::stoi(input.substr(2));
-                        if (n > 0 && n <= (int)commandHistory.size()) {
-                            expandedInput = commandHistory[commandHistory.size() - n];
+                        if (n > 0 && n <= (int)ctx.commandHistory.size()) {
+                            expandedInput = ctx.commandHistory[ctx.commandHistory.size() - n];
                             expanded = true;
                         } else {
                             printError("!" + input.substr(1) + ": event not found");
@@ -8703,8 +8698,8 @@ public:
                 } else if (std::isdigit(input[1])) {
                     try {
                         int n = std::stoi(input.substr(1));
-                        if (n > 0 && n <= (int)commandHistory.size()) {
-                            expandedInput = commandHistory[n - 1];
+                        if (n > 0 && n <= (int)ctx.commandHistory.size()) {
+                            expandedInput = ctx.commandHistory[n - 1];
                             expanded = true;
                         } else {
                             printError("!" + input.substr(1) + ": event not found");
@@ -8716,7 +8711,7 @@ public:
                     }
                 } else {
                     std::string prefix = input.substr(1);
-                    for (auto it = commandHistory.rbegin(); it != commandHistory.rend(); ++it) {
+                    for (auto it = ctx.commandHistory.rbegin(); it != ctx.commandHistory.rend(); ++it) {
                         if (it->substr(0, prefix.length()) == prefix) {
                             expandedInput = *it;
                             expanded = true;
@@ -8750,11 +8745,11 @@ public:
             }
 
             // Fish-like auto-cd: if input is a path to a directory, auto-navigate
-            if (AutoNav::isNavigablePath(input, currentDir)) {
-                std::string targetDir = AutoNav::getResolvedDirectory(input, currentDir);
+            if (AutoNav::isNavigablePath(input, ctx.currentDir)) {
+                std::string targetDir = AutoNav::getResolvedDirectory(input, ctx.currentDir);
                 try {
                     if (fs::exists(targetDir) && fs::is_directory(targetDir)) {
-                        currentDir = fs::canonical(targetDir).string();
+                        ctx.currentDir = fs::canonical(targetDir).string();
                         continue;
                     }
                 } catch (...) {}
@@ -8850,31 +8845,121 @@ public:
         for (const auto& arg : args) {
             scriptArgs.push_back(arg);
         }
-        interpreter.setScriptArgs(scriptArgs);
+        ctx.interpreter.setScriptArgs(scriptArgs);
         
         std::stringstream buffer;
         buffer << file.rdbuf();
-        int result = interpreter.runCode(buffer.str());
+        int result = ctx.interpreter.runCode(buffer.str());
         
-        interpreter.clearScriptArgs();
+        ctx.interpreter.clearScriptArgs();
         return result;
     }
     
     // Run a single command string (e.g. from -c)
     int runCommand(const std::string& command) {
-        return interpreter.runCode(command);
+        return ctx.interpreter.runCode(command);
     }
     
 };
 
 
 
+// --- Glue Logic ---
+void execute_command_logic(ShellContext& ctx, const std::string& input) {
+    ShellLogic logic(ctx);
+    logic.executeCommandLine(input);
+}
+
+// --- State Boot ---
+class StateBoot : public Continuation {
+public:
+    std::string getName() const override { return "Boot"; }
+
+    std::unique_ptr<Continuation> run(ShellContext& ctx) override {
+        // We can access ShellLogic generic init methods if we expose them
+        // For now, let's just do the visual init here or call a helper in ShellLogic
+        ShellLogic logic(ctx);
+        
+        // Load History (was in run() before)
+        logic.loadHistory(); 
+        
+        // Print Tux (was in run() before)
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        IO::get().clearScreen();
+        
+        // Initialize Row
+        // promptStartRow logic was inside InputHandler
+        
+        // Print Tux penguin with colors (yellow body, white eyes)
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "         .---.         ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "  _     _                  _  __\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        /     \\        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |   (_)_ __  _   ___  _(_)/ _|_   _\n";
+        
+        // Eyes line - split for white eyes
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        \\.";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY); // White
+        std::cout << "@-@";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "./        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |   | | '_ \\| | | \\ \\/ / | |_| | | |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "        /`\\_/`\\        ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " | |___| | | | | |_| |>  <| |  _| |_| |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "       //  _  \\\\       ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << " |_____|_|_| |_|\\__,_/_/\\_\\_|_|  \\__, |\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "      | \\     )|_      ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        std::cout << "                                 |___/\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+        std::cout << "     /`\\_`>  <_/ \\     \n";
+        std::cout << "     \\__/'---'\\__/     ";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "                             By Cortez\n" << std::endl;
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
+        std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
+
+        // Note: Crond starting logic was also in run(). 
+        // We can replicate it here or move it to a shared helper. 
+        // For brevity implying it's handled or we add it later if needed.
+        // Actually, let's just call into logic if possible or assume system handles it.
+        // The original logic had a block for crond inside run().
+        
+        return std::make_unique<StatePrompt>();
+    }
+};
+
 int main(int argc, char* argv[]) {
+    // 1. Initialize Crash Handler immediately
+    CrashHandler::init();
+    
     // Enterprise System Initialization
     Interrupt::init();
+    
+    // 2. Initialize Signal Handler
     SignalHandler::init();
+    
+    // 3. Initialize Shell API
 
-    // Register safe Input Providers for API usage (Prevents hangs)
+    
+    // Register safe Input Providers
     ShellAPI::setInputProviders(
         [](const std::string& prompt, bool isPassword) -> std::string {
             return InputHandler::readSimpleLine(prompt, isPassword);
@@ -8885,48 +8970,48 @@ int main(int argc, char* argv[]) {
         }
     );
     
-    // Register Resource Cleanup (Safe Termination)
     SignalHandler::registerCleanupHandler([]() {
         g_procMgr.killAll();
     });
     
-    // Manual Job Control: Signal Propagation
     SignalHandler::registerInterruptHandler([]() {
-        // Try to kill foreground process first
         if (g_procMgr.killForeground()) {
             std::cout << "\n[SIGINT] Terminated foreground process.\n";
             return; 
         }
-        
-        // If no foreground process, interrupt the shell
         std::cout << "^C\n";
-        // Optional: Clear input buffer logic if we had access to shell instance
     });
     
-    Linuxify shell;
+    ShellContext context;
+    // We need to initialize context similar to Linuxify constructor
+    // (registry paths, etc - currently handled by global g_registry)
     
-    // Handle -c flag: execute command and exit
+    // Handle -c flag
     if (argc >= 3 && std::string(argv[1]) == "-c") {
         std::string command;
         for (int i = 2; i < argc; i++) {
             if (i > 2) command += " ";
             command += argv[i];
         }
-        shell.runCommand(command);
+        ShellLogic logic(context);
+        logic.runCommand(command);
         return 0;
     }
     
-    // Handle script file execution
+    // Handle script
     if (argc >= 2 && argv[1][0] != '-') {
-        // Collect script arguments
         std::vector<std::string> scriptArgs;
         for (int i = 2; i < argc; i++) {
             scriptArgs.push_back(argv[i]);
         }
-        return shell.runScript(argv[1], scriptArgs);
+        ShellLogic logic(context);
+        return logic.runScript(argv[1], scriptArgs);
     }
     
-    shell.run();
+    // Engine Start
+    ShellEngine engine;
+    engine.execute(std::make_unique<StateBoot>(), context);
+    
     return 0;
 }
 

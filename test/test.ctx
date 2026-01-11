@@ -11,3 +11,11 @@ int main() {
 void unknownFunction() {
     badVariable = 123;
 }
+
+
+
+linuxify:C:\Users\patri$ ddddd
+
+Error: Command not found: ddddd. Type 'help' for available commands.
+
+linuxify:C:\Users\patri$
