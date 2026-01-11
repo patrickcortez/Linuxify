@@ -1,7 +1,6 @@
 // Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
 // Alternate compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
-#include <iostream>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -42,6 +41,7 @@
 #include "signal_handler.hpp"
 #include "io_handler.hpp"
 #include "input_handler.hpp"
+#include "shell_streams.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -96,15 +96,13 @@ private:
     }
 
     void printError(const std::string& message) {
-        IO::get().setColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::cerr << "Error: " << message << std::endl;
-        IO::get().resetColor();
+        ShellIO::serr << ShellIO::Color::LightRed << "Error: " << message 
+                      << ShellIO::Color::Reset << ShellIO::endl;
     }
 
     void printSuccess(const std::string& message) {
-        IO::get().setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << message << std::endl;
-        IO::get().resetColor();
+        ShellIO::sout << ShellIO::Color::LightGreen << message 
+                      << ShellIO::Color::Reset << ShellIO::endl;
     }
 
     // Execute a command - handles built-in commands internally or uses CreateProcessA for external
@@ -734,10 +732,8 @@ private:
              }
              
              if (interactive) {
-                 std::cout << "rm: remove " << (fs::is_directory(fullPath) ? "directory" : "regular file") << " '" << target << "'? ";
-                 std::string answer;
-                 std::getline(std::cin, answer);
-                 if (answer.empty() || (answer[0] != 'y' && answer[0] != 'Y')) continue;
+                 std::string prompt = "rm: remove " + std::string(fs::is_directory(fullPath) ? "directory" : "regular file") + " '" + target + "'? ";
+                 if (!ShellAPI::confirm(prompt)) continue;
              }
 
              try {
@@ -807,10 +803,8 @@ private:
                        } catch(...) {}
                    }
                    if (interactive) {
-                       std::cout << "mv: overwrite '" << actualDest << "'? ";
-                       std::string ans;
-                       std::getline(std::cin, ans);
-                       if (ans.empty() || (ans[0] != 'y' && ans[0] != 'Y')) continue;
+                       std::string prompt = "mv: overwrite '" + actualDest + "'? ";
+                       if (!ShellAPI::confirm(prompt)) continue;
                    }
                    fs::remove_all(actualDest); 
               }
@@ -7120,6 +7114,30 @@ private:
             }
         } else if (cmd == "uninstall") {
             cmdUninstall(expandedTokens);
+        } else if (cmd == "sleep") {
+            if (expandedTokens.size() > 1) {
+                try {
+                	double seconds = std::stod(expandedTokens[1]);
+                    Sleep((DWORD)(seconds * 1000));
+                } catch (...) {
+                    printError("Invalid time interval '" + expandedTokens[1] + "'");
+                }
+            } else {
+                printError("missing operand");
+            }
+        } else if (cmd == "uname") {
+            bool all = false;
+            if (expandedTokens.size() > 1 && expandedTokens[1] == "-a") all = true;
+            if (all) std::cout << "Windows_NT " << "Linuxify-Shell" << " 1.0 " << "x86_64 " << "MS/Windows" << std::endl;
+            else std::cout << "Windows_NT" << std::endl;
+        } else if (cmd == "yes") {
+            std::string text = "y";
+            if (expandedTokens.size() > 1) text = expandedTokens[1];
+            while (running) {
+                std::cout << text << std::endl;
+                if (SignalHandler::g_signalsBlocked.load()) break; // Rudimentary check, rely on CTRL+C
+                Sleep(1); // Avoid 100% CPU
+            }
         } else if (cmd == "exit" || cmd == "quit") {
             running = false;
         } else {
@@ -7209,7 +7227,7 @@ private:
         }
 
         if (cmd != "clear" && cmd != "cls" && running) {
-            std::cout << std::endl;
+            ShellIO::sout << ShellIO::endl;
         }
     }
 
@@ -7414,7 +7432,9 @@ public:
             // Admin commands
             "sudo", "setup", "uninstall",
             // Scheduler commands
-            "crontab"
+            "crontab",
+            // Utils
+            "sleep", "printf", "seq", "yes", "uname"
         };
         for (const auto& builtin : builtins) {
             if (cmd == builtin) return true;
@@ -8638,8 +8658,12 @@ public:
     }
 
         std::string input;
+        bool previousWasEmpty = true;
         
         while (running) {
+            if (!previousWasEmpty) {
+                ShellIO::sout << ShellIO::endl;
+            }
             
             // Use syntax-highlighted input
             input = InputHandler::read(currentDir, commandHistory);
@@ -8650,8 +8674,11 @@ public:
             }
 
             if (input.empty()) {
+                previousWasEmpty = true;
                 continue;
             }
+            previousWasEmpty = false;
+            ShellIO::sout << ShellIO::endl;
 
             input = expandHistoryInString(input);
 
@@ -8846,6 +8873,17 @@ int main(int argc, char* argv[]) {
     // Enterprise System Initialization
     Interrupt::init();
     SignalHandler::init();
+
+    // Register safe Input Providers for API usage (Prevents hangs)
+    ShellAPI::setInputProviders(
+        [](const std::string& prompt, bool isPassword) -> std::string {
+            return InputHandler::readSimpleLine(prompt, isPassword);
+        },
+        [](const std::string& prompt) -> bool {
+            std::string ans = InputHandler::readSimpleLine(prompt, false);
+            return (!ans.empty() && (ans[0] == 'y' || ans[0] == 'Y'));
+        }
+    );
     
     // Register Resource Cleanup (Safe Termination)
     SignalHandler::registerCleanupHandler([]() {

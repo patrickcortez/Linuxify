@@ -10,8 +10,7 @@
 #include <map>
 #include <set>
 #include <functional>
-#include <iostream>
-#include <iomanip>
+#include "shell_streams.hpp"
 #include <psapi.h>
 #include <algorithm>
 #include <conio.h>
@@ -70,21 +69,19 @@ public:
             if (job.running) {
                 hasJobs = true;
                 DWORD elapsed = (GetTickCount() - job.startTime) / 1000;
-                std::cout << "[" << job.jobId << "] " 
-                          << "Running    PID:" << std::setw(6) << job.pid 
-                          << "  " << std::setw(4) << elapsed << "s  "
-                          << job.command << std::endl;
+                ShellIO::sout << "[" << job.jobId << "] Running    PID:" << job.pid 
+                              << "  " << elapsed << "s  " << job.command << ShellIO::endl;
             }
         }
         
         for (const auto& job : jobs) {
             if (!job.running) {
-                std::cout << "[" << job.jobId << "] Done       " << job.command << std::endl;
+                ShellIO::sout << "[" << job.jobId << "] Done       " << job.command << ShellIO::endl;
             }
         }
         
         if (!hasJobs && jobs.empty()) {
-            std::cout << "No background jobs." << std::endl;
+            ShellIO::sout << "No background jobs." << ShellIO::endl;
         }
     }
 
@@ -152,7 +149,7 @@ public:
                 job.running = false;
             }
         }
-        std::cout << "[ProcessManager] All background jobs terminated." << std::endl;
+        ShellIO::sout << "[ProcessManager] All background jobs terminated." << ShellIO::endl;
     }
 
     void cleanupCompletedJobs() {
@@ -221,25 +218,23 @@ public:
     static void listProcesses() {
         HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (hSnapshot == INVALID_HANDLE_VALUE) {
-            std::cerr << "Failed to create process snapshot" << std::endl;
+            ShellIO::serr << "Failed to create process snapshot" << ShellIO::endl;
             return;
         }
 
         PROCESSENTRY32 pe32;
         pe32.dwSize = sizeof(PROCESSENTRY32);
 
-        std::cout << std::setw(8) << "PID" << "  "
-                  << std::setw(8) << "PPID" << "  "
-                  << std::setw(6) << "THR" << "  "
-                  << "NAME" << std::endl;
-        std::cout << std::string(50, '-') << std::endl;
+        ShellIO::sout << "PID       PPID      THR     NAME" << ShellIO::endl;
+        ShellIO::sout << "--------------------------------------------------" << ShellIO::endl;
 
         if (Process32First(hSnapshot, &pe32)) {
             do {
-                std::cout << std::setw(8) << pe32.th32ProcessID << "  "
-                          << std::setw(8) << pe32.th32ParentProcessID << "  "
-                          << std::setw(6) << pe32.cntThreads << "  "
-                          << pe32.szExeFile << std::endl;
+                // Manual formatting since we removed iomanip
+                char buffer[128];
+                wsprintfA(buffer, "%-8lu  %-8lu  %-6lu  %s", 
+                    pe32.th32ProcessID, pe32.th32ParentProcessID, pe32.cntThreads, pe32.szExeFile);
+                ShellIO::sout << buffer << ShellIO::endl;
             } while (Process32Next(hSnapshot, &pe32));
         }
 
@@ -249,20 +244,15 @@ public:
     static void listProcessesDetailed() {
         HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (hSnapshot == INVALID_HANDLE_VALUE) {
-            std::cerr << "Failed to create process snapshot" << std::endl;
+            ShellIO::serr << "Failed to create process snapshot" << ShellIO::endl;
             return;
         }
 
         PROCESSENTRY32 pe32;
         pe32.dwSize = sizeof(PROCESSENTRY32);
 
-        std::cout << std::setw(8) << "PID" << "  "
-                  << std::setw(8) << "PPID" << "  "
-                  << std::setw(10) << "RSS(KB)" << "  "
-                  << std::setw(6) << "THR" << "  "
-                  << std::setw(6) << "PRI" << "  "
-                  << "NAME" << std::endl;
-        std::cout << std::string(70, '-') << std::endl;
+        ShellIO::sout << "PID       PPID      RSS(KB)   THR     PRI     NAME" << ShellIO::endl;
+        ShellIO::sout << "----------------------------------------------------------------------" << ShellIO::endl;
 
         if (Process32First(hSnapshot, &pe32)) {
             do {
@@ -280,12 +270,31 @@ public:
                     CloseHandle(hProcess);
                 }
 
-                std::cout << std::setw(8) << pe32.th32ProcessID << "  "
-                          << std::setw(8) << pe32.th32ParentProcessID << "  "
-                          << std::setw(10) << memUsage << "  "
-                          << std::setw(6) << pe32.cntThreads << "  "
-                          << std::setw(6) << priority << "  "
-                          << pe32.szExeFile << std::endl;
+                char buffer[256];
+                // Using snprintf for safe formatting if available, or just string composition
+                // Using standard string manipulation for independence
+                std::string line = std::to_string(pe32.th32ProcessID);
+                while(line.length() < 10) line += " ";
+                
+                std::string ppidStr = std::to_string(pe32.th32ParentProcessID);
+                while(ppidStr.length() < 10) ppidStr += " ";
+                line += ppidStr;
+                
+                std::string memStr = std::to_string(memUsage);
+                while(memStr.length() < 10) memStr += " ";
+                line += memStr;
+                
+                std::string thrStr = std::to_string(pe32.cntThreads);
+                while(thrStr.length() < 8) thrStr += " ";
+                line += thrStr;
+                
+                while(priority.length() < 8) priority += " ";
+                line += priority;
+                
+                line += "  ";
+                line += pe32.szExeFile;
+
+                ShellIO::sout << line << ShellIO::endl;
             } while (Process32Next(hSnapshot, &pe32));
         }
 
@@ -338,9 +347,9 @@ public:
             }
 
             if (depth == 0) {
-                std::cout << name << "(" << pid << ")" << std::endl;
+                ShellIO::sout << name << "(" << pid << ")" << ShellIO::endl;
             } else {
-                std::cout << prefix << (isLast ? "`-" : "|-") << name << "(" << pid << ")" << std::endl;
+                ShellIO::sout << prefix << (isLast ? "`-" : "|-") << name << "(" << pid << ")" << ShellIO::endl;
             }
 
             auto cit = children.find(pid);
@@ -378,8 +387,13 @@ public:
         }
     }
 
+    // Helper for pstree printing
+    static void printTreeLine(const std::string& line) {
+         ShellIO::sout << line << ShellIO::endl;
+    }
+
     static void topView() {
-        std::cout << "Press 'q' to quit, any other key to refresh...\n\n";
+        ShellIO::sout << "Press 'q' to quit, any other key to refresh...\n" << ShellIO::endl;
         
         while (true) {
             HANDLE hCon = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -399,14 +413,11 @@ public:
             FILETIME idleTime, kernelTime, userTime;
             GetSystemTimes(&idleTime, &kernelTime, &userTime);
             
-            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "=== Linuxify Top ===" << std::endl;
-            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            ShellIO::sout << ShellIO::Color::Green << "=== Linuxify Top ===" << ShellIO::Color::Reset << ShellIO::endl;
             
-            std::cout << "Memory: " << (memInfo.ullTotalPhys - memInfo.ullAvailPhys) / (1024*1024) 
-                      << " MB used / " << memInfo.ullTotalPhys / (1024*1024) << " MB total ("
-                      << memInfo.dwMemoryLoad << "% used)" << std::endl;
+            ShellIO::sout << "Memory: " << (unsigned long long)((memInfo.ullTotalPhys - memInfo.ullAvailPhys) / (1024*1024)) 
+                      << " MB used / " << (unsigned long long)(memInfo.ullTotalPhys / (1024*1024)) << " MB total ("
+                      << memInfo.dwMemoryLoad << "% used)" << ShellIO::endl;
             
             HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (hSnapshot != INVALID_HANDLE_VALUE) {
@@ -417,13 +428,13 @@ public:
                     do { procCount++; } while (Process32Next(hSnapshot, &pe32));
                 }
                 CloseHandle(hSnapshot);
-                std::cout << "Processes: " << procCount << std::endl;
+                ShellIO::sout << "Processes: " << procCount << ShellIO::endl;
             }
             
-            std::cout << std::endl;
+            ShellIO::sout << ShellIO::endl;
             listProcessesDetailed();
             
-            std::cout << "\nPress 'q' to quit..." << std::endl;
+            ShellIO::sout << "\nPress 'q' to quit..." << ShellIO::endl;
             
             if (_kbhit()) {
                 char c = _getch();

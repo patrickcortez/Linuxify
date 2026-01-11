@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <iostream>
+#include "../shell_streams.hpp"
 #include <string>
 #include <vector>
 #include <map>
@@ -824,10 +824,10 @@ private:
     void setupBuiltins() {
         builtins["echo"] = [this](const std::vector<std::string>& args) {
             for (size_t i = 1; i < args.size(); i++) {
-                if (i > 1) std::cout << " ";
-                std::cout << expandVariables(args[i]);
+                if (i > 1) ShellIO::sout << " ";
+                ShellIO::sout << expandVariables(args[i]);
             }
-            std::cout << "\n";
+            ShellIO::sout << ShellIO::endl;
             return 0;
         };
         
@@ -852,7 +852,7 @@ private:
                 currentDir = buf;
                 return 0;
             }
-            std::cerr << "cd: " << path << ": No such directory\n";
+            ShellIO::serr << "cd: " << path << ": No such directory" << ShellIO::endl;
             return 1;
         };
         
@@ -864,7 +864,7 @@ private:
         
         builtins["set"] = [this](const std::vector<std::string>& args) {
             for (const auto& [name, value] : variables) {
-                std::cout << name << "=" << value << "\n";
+                ShellIO::sout << name << "=" << value << ShellIO::endl;
             }
             return 0;
         };
@@ -881,51 +881,44 @@ private:
         };
         
         builtins["pwd"] = [this](const std::vector<std::string>&) {
-            std::cout << currentDir << "\n";
+            ShellIO::sout << currentDir << ShellIO::endl;
             return 0;
         };
         
         builtins["help"] = [](const std::vector<std::string>&) {
-            HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "Linuxify Shell (lish) Built-in Commands:\n\n";
-            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            ShellIO::sout << ShellIO::Color::LightGreen << "Linuxify Shell (lish) Built-in Commands:\n\n" << ShellIO::Color::Reset;
             
-            std::cout << "  echo <args>       Print arguments to stdout\n";
-            std::cout << "  cd <dir>          Change current directory\n";
-            std::cout << "  pwd               Print working directory\n";
-            std::cout << "  export VAR=val    Set environment variable\n";
-            std::cout << "  set               Display all variables\n";
-            std::cout << "  exit [code]       Exit the shell\n";
-            std::cout << "  test / [ ... ]    Evaluate conditional expressions\n";
-            std::cout << "  true              Return exit code 0\n";
-            std::cout << "  false             Return exit code 1\n";
-            std::cout << "\n";
+            ShellIO::sout << "  echo <args>       Print arguments to stdout\n";
+            ShellIO::sout << "  cd <dir>          Change current directory\n";
+            ShellIO::sout << "  pwd               Print working directory\n";
+            ShellIO::sout << "  export VAR=val    Set environment variable\n";
+            ShellIO::sout << "  set               Display all variables\n";
+            ShellIO::sout << "  exit [code]       Exit the shell\n";
+            ShellIO::sout << "  test / [ ... ]    Evaluate conditional expressions\n";
+            ShellIO::sout << "  true              Return exit code 0\n";
+            ShellIO::sout << "  false             Return exit code 1\n";
+            ShellIO::sout << "\n";
             
-            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "Script Features:\n";
-            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            ShellIO::sout << ShellIO::Color::LightGreen << "Script Features:\n" << ShellIO::Color::Reset;
             
-            std::cout << "  Variables         NAME=\"value\", $NAME, ${NAME}\n";
-            std::cout << "  If/Else           if [ cond ]; then ... fi\n";
-            std::cout << "  For Loop          for i in 1 2 3; do ... done\n";
-            std::cout << "  While Loop        while [ cond ]; do ... done\n";
-            std::cout << "  Pipes             cmd1 | cmd2\n";
-            std::cout << "  Comments          # comment\n";
-            std::cout << "\n";
+            ShellIO::sout << "  Variables         NAME=\"value\", $NAME, ${NAME}\n";
+            ShellIO::sout << "  If/Else           if [ cond ]; then ... fi\n";
+            ShellIO::sout << "  For Loop          for i in 1 2 3; do ... done\n";
+            ShellIO::sout << "  While Loop        while [ cond ]; do ... done\n";
+            ShellIO::sout << "  Pipes             cmd1 | cmd2\n";
+            ShellIO::sout << "  Comments          # comment\n";
+            ShellIO::sout << "\n";
             
-            SetConsoleTextAttribute(h, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "Test Operators:\n";
-            SetConsoleTextAttribute(h, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            ShellIO::sout << ShellIO::Color::LightGreen << "Test Operators:\n" << ShellIO::Color::Reset;
             
-            std::cout << "  -f FILE           File exists\n";
-            std::cout << "  -d FILE           Directory exists\n";
-            std::cout << "  -e FILE           Path exists\n";
-            std::cout << "  -z STRING         String is empty\n";
-            std::cout << "  -n STRING         String is not empty\n";
-            std::cout << "  a = b             Strings equal\n";
-            std::cout << "  a -eq b           Numbers equal\n";
-            std::cout << "  a -lt/-gt b       Less/Greater than\n";
+            ShellIO::sout << "  -f FILE           File exists\n";
+            ShellIO::sout << "  -d FILE           Directory exists\n";
+            ShellIO::sout << "  -e FILE           Path exists\n";
+            ShellIO::sout << "  -z STRING         String is empty\n";
+            ShellIO::sout << "  -n STRING         String is not empty\n";
+            ShellIO::sout << "  a = b             Strings equal\n";
+            ShellIO::sout << "  a -eq b           Numbers equal\n";
+            ShellIO::sout << "  a -lt/-gt b       Less/Greater than\n";
             
             return 0;
         };
@@ -995,7 +988,7 @@ private:
                 if (op == "-gt") return std::stoi(left) > std::stoi(right) ? 0 : 1;
                 if (op == "-ge") return std::stoi(left) >= std::stoi(right) ? 0 : 1;
             } catch (const std::exception&) {
-                std::cerr << "bash: test: integer expression expected\n";
+                ShellIO::serr << "bash: test: integer expression expected" << ShellIO::endl;
                 return 2;
             }
         }
@@ -1058,7 +1051,7 @@ private:
             &si,
             &pi
         )) {
-            std::cerr << "lish: command not found: " << args[0] << "\n";
+            ShellIO::serr << "lish: command not found: " << args[0] << ShellIO::endl;
             return 127;
         }
         
@@ -1094,7 +1087,7 @@ public:
         if (!node) return 0;
         
         if (debugMode) {
-            std::cout << "[DEBUG] Executing: " << node->type() << "\n";
+            ShellIO::sout << "[DEBUG] Executing: " << node->type() << ShellIO::endl;
         }
         
         // Assignment
@@ -1297,11 +1290,11 @@ public:
                         CloseHandle(pi.hThread);
                         return (int)exitCode;
                     } else {
-                        std::cerr << "lish: cannot execute interpreter: " << interpreterSpec << "\n";
+                        ShellIO::serr << "lish: cannot execute interpreter: " << interpreterSpec << ShellIO::endl;
                         return 127;
                     }
                 } else {
-                    std::cerr << "lish: interpreter not found: " << interpreterSpec << "\n";
+                    ShellIO::serr << "lish: interpreter not found: " << interpreterSpec << ShellIO::endl;
                     return 127;
                 }
             }
@@ -1336,19 +1329,15 @@ public:
             
             return executor.run(program);
         } catch (const std::exception& e) {
-            std::cerr << "lish: error: " << e.what() << "\n";
+            ShellIO::serr << "lish: error: " << e.what() << ShellIO::endl;
             return 1;
         }
     }
     
     void interactive() {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        
         // Print header
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "Linuxify Shell (lish) - Interactive Mode\n";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "Type 'exit' to quit, 'help' for commands.\n\n";
+        ShellIO::sout << ShellIO::Color::LightGreen << "Linuxify Shell (lish) - Interactive Mode\n" << ShellIO::Color::Reset;
+        ShellIO::sout << "Type 'exit' to quit, 'help' for commands.\n\n";
         
         std::string line;
         
@@ -1358,26 +1347,22 @@ public:
             GetCurrentDirectoryA(MAX_PATH, cwd);
             
             // Print colored prompt
-            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "lish";
-            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-            std::cout << ":";
-            SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-            std::cout << cwd;
-            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-            std::cout << "$ ";
+            ShellIO::sout << ShellIO::Color::LightGreen << "lish" << ShellIO::Color::Reset << ":";
+            ShellIO::sout << ShellIO::Color::LightBlue << cwd << ShellIO::Color::Reset << "$ ";
             
-            if (!std::getline(std::cin, line)) break;
+            if (!ShellIO::sin.getline(line)) break;
             
             // Trim whitespace
             line.erase(0, line.find_first_not_of(" \t\r\n"));
-            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            if (line.find_last_not_of(" \t\r\n") != std::string::npos) {
+                line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            }
             
             if (line.empty()) continue;
             if (line == "exit") break;
             
             runCode(line);
-            std::cout << std::endl;
+            ShellIO::sout << ShellIO::endl;
         }
     }
 };

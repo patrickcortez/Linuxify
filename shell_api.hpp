@@ -20,6 +20,28 @@ static std::thread g_serverThread;
 using CommandHandler = std::function<std::string(const std::string&)>;
 static CommandHandler g_commandHandler = nullptr;
 
+// Input API - Forward declarations to implementation in main/input_handler
+using InputProvider = std::function<std::string(const std::string& prompt, bool isPassword)>;
+using ConfirmationProvider = std::function<bool(const std::string& prompt)>;
+
+static InputProvider g_inputProvider = nullptr;
+static ConfirmationProvider g_confirmationProvider = nullptr;
+
+inline void setInputProviders(InputProvider input, ConfirmationProvider confirm) {
+    g_inputProvider = input;
+    g_confirmationProvider = confirm;
+}
+
+inline std::string readLine(const std::string& prompt = "", bool isPassword = false) {
+    if (g_inputProvider) return g_inputProvider(prompt, isPassword);
+    return "";
+}
+
+inline bool confirm(const std::string& prompt) {
+    if (g_confirmationProvider) return g_confirmationProvider(prompt);
+    return false;
+}
+
 inline void setCommandHandler(CommandHandler handler) {
     g_commandHandler = handler;
 }
@@ -28,45 +50,40 @@ inline void handleClient(HANDLE hPipe) {
     char buffer[BUFFER_SIZE];
     DWORD bytesRead, bytesWritten;
     
-    while (g_serverRunning) {
-        if (ReadFile(hPipe, buffer, BUFFER_SIZE - 1, &bytesRead, NULL) && bytesRead > 0) {
-            buffer[bytesRead] = '\0';
-            std::string request(buffer);
+    // Read request
+    if (ReadFile(hPipe, buffer, BUFFER_SIZE - 1, &bytesRead, NULL) && bytesRead > 0) {
+        buffer[bytesRead] = '\0';
+        std::string request(buffer);
+        
+        std::string response;
+        
+        if (request.substr(0, 5) == "EXEC ") {
+            std::string command = request.substr(5);
             
-            std::string response;
-            
-            if (request.substr(0, 5) == "EXEC ") {
-                std::string command = request.substr(5);
-                
-                if (g_commandHandler) {
-                    try {
-                        std::string output = g_commandHandler(command);
-                        response = "0\n" + output;
-                    } catch (const std::exception& e) {
-                        response = "1\nError: " + std::string(e.what());
-                    }
-                } else {
-                    response = "1\nNo command handler registered";
+            if (g_commandHandler) {
+                try {
+                    std::string output = g_commandHandler(command);
+                    response = "0\n" + output;
+                } catch (const std::exception& e) {
+                    response = "1\nError: " + std::string(e.what());
                 }
-            } else if (request == "PING") {
-                response = "PONG";
-            } else if (request == "STATUS") {
-                response = "OK\nLinuxify Shell API v1.0";
             } else {
-                response = "1\nUnknown command. Use: EXEC <command>, PING, STATUS";
+                response = "1\nNo command handler registered";
             }
-            
-            WriteFile(hPipe, response.c_str(), (DWORD)response.length(), &bytesWritten, NULL);
-            FlushFileBuffers(hPipe);
+        } else if (request == "PING") {
+            response = "PONG";
+        } else if (request == "STATUS") {
+            response = "OK\nLinuxify Shell API v1.0";
+        } else {
+            response = "1\nUnknown command. Use: EXEC <command>, PING, STATUS";
         }
         
-        DisconnectNamedPipe(hPipe);
-        
-        if (!ConnectNamedPipe(hPipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
-            break;
-        }
+        WriteFile(hPipe, response.c_str(), (DWORD)response.length(), &bytesWritten, NULL);
+        FlushFileBuffers(hPipe);
     }
     
+    // Clean up
+    DisconnectNamedPipe(hPipe);
     CloseHandle(hPipe);
 }
 

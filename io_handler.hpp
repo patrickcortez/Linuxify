@@ -4,7 +4,6 @@
 
 #include <windows.h>
 #include <string>
-#include <iostream>
 #include <vector>
 
 namespace IO {
@@ -89,6 +88,15 @@ namespace IO {
                     FillConsoleOutputCharacterA(hOut, ' ', csbi.dwSize.X, clearPos, &written);
                 }
             }
+        }
+
+        void clearFromCursor() {
+            updateInfo();
+            DWORD written;
+            DWORD cells = (csbi.dwSize.X - csbi.dwCursorPosition.X); 
+            // Clear rest of the current line
+            FillConsoleOutputCharacterA(hOut, ' ', cells, csbi.dwCursorPosition, &written);
+            FillConsoleOutputAttribute(hOut, COLOR_DEFAULT, cells, csbi.dwCursorPosition, &written);
         }
     };
 

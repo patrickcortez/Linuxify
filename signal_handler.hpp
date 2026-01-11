@@ -16,39 +16,15 @@ namespace SignalHandler {
     inline std::atomic<bool> g_isShuttingDown(false);
     inline std::atomic<bool> g_signalsBlocked(false); 
     inline HANDLE g_mainThreadHandle = NULL;         
-    inline std::atomic<time_t> g_lastHeartbeat(0);
-    inline std::atomic<bool> g_watchdogRunning(false);
-    inline HANDLE g_watchdogThreadHandle = NULL;
     inline std::function<void()> g_cleanupCallback = nullptr;
     inline std::function<void()> g_interruptCallback = nullptr; 
+
     inline void blockSignals() { g_signalsBlocked.store(true); }
     inline void unblockSignals() { g_signalsBlocked.store(false); }
     inline void signalHeartbeat() {
-        g_lastHeartbeat.store(std::time(nullptr));
+        // No-op: Watchdog removed
     }
-    inline DWORD WINAPI WatchdogThreadRoutine(LPVOID lpParam) {
-        Sleep(2000); 
-        while (g_watchdogRunning.load()) {
-            time_t now = std::time(nullptr);
-            time_t last = g_lastHeartbeat.load();
-            if (last > 0 && (now - last) > 10) {
-                if (g_mainThreadHandle) SuspendThread(g_mainThreadHandle);
-                HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-                std::cerr << "\n\n*** SYSTEM WATCHDOG TRIGGERED ***\n";
-                std::cerr << "Verification Failed: Main thread unresponsive for 10s.\n";
-                if (g_mainThreadHandle) {
-                    std::cerr << "[WATCHDOG] Generating forensic hang report...\n";
-                    Interrupt::DumpHungThread(g_mainThreadHandle);
-                }
-                std::cerr << "[WATCHDOG] Terminating hung process...\n";
-                SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                TerminateProcess(GetCurrentProcess(), 0xC000042B); 
-            }
-            Sleep(1000); 
-        }
-        return 0;
-    }
+
     struct KeyCombo {
         WORD vk;
         bool ctrl;
@@ -61,6 +37,7 @@ namespace SignalHandler {
             return shift < other.shift;
         }
     };
+
     class InputDispatcher {
     private:
         std::map<KeyCombo, std::function<void()>> keyHandlers;
@@ -120,6 +97,7 @@ namespace SignalHandler {
             return true;
         }
     };
+
     inline void registerCleanupHandler(std::function<void()> callback) {
         g_cleanupCallback = callback;
     }
@@ -135,33 +113,21 @@ namespace SignalHandler {
         if (g_interruptCallback) g_interruptCallback();
         else std::cout << "^C\n";
     }
+
     inline void handleTermination(const char* eventName) {
-        if (g_signalsBlocked.load()) {
-            std::cerr << "[SIGNAL] " << eventName << " blocked. Waiting for critical section...\n";
-            int retries = 50; 
-            while (retries-- > 0 && g_signalsBlocked.load()) Sleep(100);
-            if (g_signalsBlocked.load()) {
-                std::cerr << "[SIGNAL] TIMEOUT! Active intervention.\n";
-                g_signalsBlocked.store(false);
-                if (g_mainThreadHandle) CancelSynchronousIo(g_mainThreadHandle);
-            } else {
-                std::cerr << "[SIGNAL] Block released. Proceeding.\n";
-            }
-        } else {
-            std::cerr << "[SIGNAL] " << eventName << " received.\n";
+        if (g_isShuttingDown.exchange(true)) return;
+        
+        // Simple, clean shutdown. Don't fight for locks.
+        if (g_cleanupCallback) {
+            try {
+                g_cleanupCallback(); 
+            } catch (...) {}
         }
-        if (!g_isShuttingDown.exchange(true)) {
-            g_watchdogRunning.store(false);
-            if (g_cleanupCallback) {
-                try {
-                    g_cleanupCallback(); 
-                    std::cerr << "[SIGNAL] Cleanup success.\n";
-                } catch (...) {
-                    std::cerr << "[SIGNAL] Cleanup failed.\n";
-                }
-            }
-        }
+        
+        InputDispatcher::getInstance().restore();
+        ExitProcess(0);
     }
+
     inline BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
         switch (ctrlType) {
             case CTRL_C_EVENT:
@@ -169,26 +135,29 @@ namespace SignalHandler {
                 handleInterrupt();
                 return TRUE;
             case CTRL_CLOSE_EVENT:
+                // Handle close immediately and return TRUE so Windows doesn't show "Terminate Batch Job?"
                 handleTermination("CTRL_CLOSE_EVENT");
-                return FALSE; 
+                return TRUE; 
             case CTRL_LOGOFF_EVENT:
                 handleTermination("CTRL_LOGOFF_EVENT");
-                return FALSE;
+                return TRUE;
             case CTRL_SHUTDOWN_EVENT:
                 handleTermination("CTRL_SHUTDOWN_EVENT");
-                return FALSE;
+                return TRUE;
             default:
                 return FALSE;
         }
     }
+
     inline void StandardSignalHandler(int signal) {
         if (g_signalsBlocked.load()) return;
         switch (signal) {
             case SIGINT: handleInterrupt(); break;
-            case SIGTERM: handleTermination("SIGTERM"); exit(0); break;
-            case SIGABRT: std::cerr << "\n[SIGABRT] Abort.\n"; exit(3); break;
+            case SIGTERM: handleTermination("SIGTERM"); break;
+            case SIGABRT: std::cerr << "\n[SIGABRT] Abort.\n"; ExitProcess(3); break;
         }
     }
+
     inline void init() {
         HANDLE hPseudo = GetCurrentThread();
         DuplicateHandle(GetCurrentProcess(), hPseudo, GetCurrentProcess(), &g_mainThreadHandle, 0, FALSE, DUPLICATE_SAME_ACCESS);
@@ -198,12 +167,8 @@ namespace SignalHandler {
         signal(SIGINT, StandardSignalHandler);
         signal(SIGTERM, StandardSignalHandler);
         signal(SIGABRT, StandardSignalHandler);
-        g_lastHeartbeat.store(std::time(nullptr));
-        g_watchdogRunning.store(true);
-        g_watchdogThreadHandle = CreateThread(NULL, 0, WatchdogThreadRoutine, NULL, 0, NULL);
-        if (g_watchdogThreadHandle) {
-            SetThreadPriority(g_watchdogThreadHandle, THREAD_PRIORITY_LOWEST);
-        }
+        
+        // No Watchdog Init
         InputDispatcher::getInstance().init();
     }
     inline void poll() {

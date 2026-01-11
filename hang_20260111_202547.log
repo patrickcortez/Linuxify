@@ -1,0 +1,196 @@
+LINUXIFY HANG/WATCHDOG REPORT
+=============================
+Thread Handle: 0x00000000000001d4
+
+CPU REGISTERS:
+RAX: 0x0000000000000004  R8 : 0x0000000000000000
+RBX: 0x00000000000001f0  R9 : 0x0000000000000023
+RCX: 0x00000000000001f0  R10: 0x00000000000001f0
+RDX: 0x0000000000000000  R11: 0x00000000000001f0
+RSI: 0x00000000ffffffff  R12: 0x0000000000000000
+RDI: 0x0000000000000000  R13: 0x0000000000000000
+RBP: 0x00000087171fc1d0  R14: 0x0000000000000000
+RSP: 0x00000087171fc0a8  R15: 0x0000000000000000
+RIP: 0x00007ffa25281c44  EFL: 0x00000246
+
+DISASSEMBLY (at 0x00007ffa25281c44):
+0x00007ffa25281c44: RET   
+0x00007ffa25281c45: DB    0xcd
+0x00007ffa25281c46: DB    0x2e
+0x00007ffa25281c47: RET   
+0x00007ffa25281c48: DB    0x0f
+0x00007ffa25281c49: DB    0x1f
+Program Counter: 0x00007ffa25281c44 NtWaitForSingleObject + 0x0014
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa25281c44 NtWaitForSingleObject + 0x0014 (Current)
+#10 0x00007ffa226276af WaitForSingleObjectEx + 0x00af (Stack: 0x00000087171fc0b0)
+#20 0x00007ff61620b8c4 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171fc150)
+#30 0x00007ff61620c643 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171fe4a0)
+#40 0x00007ff61620c732 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171feb30)
+#50 0x00007ff61620bb04 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff1c0)
+#60 0x00007ff616201936 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff240)
+#70 0x00007ff616210827 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff3c0)
+#80 0x00007ff6161c1a0a C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff3f0)
+#90 0x00007ff6161c1366 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff7b0)
+#10 0x00007ff6161c1067 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff850)
+#11 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x00000087171ff890)
+#12 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x00000087171ff8c0)
+
+LOADED MODULES (LDR Walk):
+Base Address00000000Size00000000Name
+------------------------------------------------------------
+0x00007ff6161c0000 0x00275000   C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe
+0x00007ffa25120000 0x00267000   C:\WINDOWS\SYSTEM32\ntdll.dll
+0x00007ffa23b60000 0x000c9000   C:\WINDOWS\System32\KERNEL32.DLL
+0x00007ffa225f0000 0x003ef000   C:\WINDOWS\System32\KERNELBASE.dll
+0x00007ffa24760000 0x000b4000   C:\WINDOWS\System32\ADVAPI32.dll
+0x00007ffa22ec0000 0x000a9000   C:\WINDOWS\System32\msvcrt.dll
+0x00007ffa230d0000 0x000a6000   C:\WINDOWS\System32\sechost.dll
+0x00007ffa23c30000 0x00118000   C:\WINDOWS\System32\RPCRT4.dll
+0x00007ffa22320000 0x0014b000   C:\WINDOWS\System32\ucrtbase.dll
+0x00007ffa23f00000 0x00753000   C:\WINDOWS\System32\SHELL32.dll
+0x00007ffa22c50000 0x000a3000   C:\WINDOWS\System32\msvcp_win.dll
+0x00007ffa24db0000 0x001c5000   C:\WINDOWS\System32\USER32.dll
+0x00007ffa20ac0000 0x00034000   C:\WINDOWS\SYSTEM32\IPHLPAPI.DLL
+0x00007ffa22ab0000 0x00027000   C:\WINDOWS\System32\win32u.dll
+0x00007ffa23b30000 0x0002b000   C:\WINDOWS\System32\GDI32.dll
+0x00007ffa22d00000 0x0012c000   C:\WINDOWS\System32\gdi32full.dll
+0x00007ffa22ae0000 0x0016a000   C:\WINDOWS\System32\wintypes.dll
+0x00007ffa24a20000 0x00385000   C:\WINDOWS\System32\combase.dll
+0x00007ffa23050000 0x00074000   C:\WINDOWS\System32\WS2_32.dll
+0x00007ffa175d0000 0x0008d000   C:\WINDOWS\SYSTEM32\wlanapi.dll
+0x00007ffa05f20000 0x00288000   C:\WINDOWS\SYSTEM32\WININET.dll
+0x00007ffa22f70000 0x00031000   C:\WINDOWS\System32\IMM32.DLL
+0x00007ffa17750000 0x00022000   C:\WINDOWS\SYSTEM32\MobileNetworking.dll
+0x00007ffa21020000 0x0001b000   C:\WINDOWS\SYSTEM32\kernel.appcore.dll
+
+MEMORY DUMP (0x00007ffa25281c44 +/- 64 bytes):
+0x00007ffa25281c04: c3 cd 2e c3 f0 1f 84 00 00 00 00 00 4c 8b d1 b8   ............L...
+0x00007ffa25281c14: 30 00 00 00 f6 40 25 80 30 fe 7f 10 75 30 f0 50   ......%.....u...
+0x00007ffa25281c24: c3 cd 2e c3 f0 1f 84 00 00 00 00 00 4c 8b d1 b8   ............L...
+0x00007ffa25281c34: 40 00 00 00 f6 40 25 80 30 fe 7f 10 75 30 f0 50   ......%.....u...
+0x00007ffa25281c44: c3 cd 2e c3 f0 1f 84 00 00 00 00 00 4c 8b d1 b8   ............L...
+0x00007ffa25281c54: 50 00 00 00 f6 40 25 80 30 fe 7f 10 75 30 f0 50   ......%.....u...
+0x00007ffa25281c64: c3 cd 2e c3 f0 1f 84 00 00 00 00 00 4c 8b d1 b8   ............L...
+0x00007ffa25281c74: 60 00 00 00 f6 40 25 80 30 fe 7f 10 75 30 f0 50   ......%.....u...
+
+THREAD LIST:
+THREAD ID: 5f10
+State: Suspended
+RIP:   0x00007ffa25281c44 NtWaitForSingleObject + 0x0014
+
+CPU REGISTERS:
+RAX: 0x0000000000000004  R8 : 0x0000000000000000
+RBX: 0x00000000000001f0  R9 : 0x0000000000000023
+RCX: 0x00000000000001f0  R10: 0x00000000000001f0
+RDX: 0x0000000000000000  R11: 0x00000000000001f0
+RSI: 0x00000000ffffffff  R12: 0x0000000000000000
+RDI: 0x0000000000000000  R13: 0x0000000000000000
+RBP: 0x00000087171fc1d0  R14: 0x0000000000000000
+RSP: 0x00000087171fc0a8  R15: 0x0000000000000000
+RIP: 0x00007ffa25281c44  EFL: 0x00000246
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa25281c44 NtWaitForSingleObject + 0x0014 (Current)
+#10 0x00007ffa226276af WaitForSingleObjectEx + 0x00af (Stack: 0x00000087171fc0b0)
+#20 0x00007ff61620b8c4 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171fc150)
+#30 0x00007ff61620c643 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171fe4a0)
+#40 0x00007ff61620c732 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171feb30)
+#50 0x00007ff61620bb04 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff1c0)
+#60 0x00007ff616201936 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff240)
+#70 0x00007ff616210827 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff3c0)
+#80 0x00007ff6161c1a0a C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff3f0)
+#90 0x00007ff6161c1366 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff7b0)
+#a0 0x00007ff6161c1067 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x00000087171ff850)
+#b0 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x00000087171ff890)
+#c0 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x00000087171ff8c0)
+THREAD ID: 6078
+State: Suspended
+RIP:   0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014
+
+CPU REGISTERS:
+RAX: 0x00000000000001e6  R8 : 0x0000000000000010
+RBX: 0x000002866cfad740  R9 : 0x00000087173ff5a8
+RCX: 0x0000000000000098  R10: 0x0000000000000098
+RDX: 0x000002866cfad3c0  R11: 0x0000000000000098
+RSI: 0x00007ffa25194ea0  R12: 0x00007ffa251f8280
+RDI: 0x000002866cfaa120  R13: 0x0000000000000000
+RBP: 0x0000000000000000  R14: 0x000000000000ffff
+RSP: 0x00000087173ff548  R15: 0x00007ffa25192c10
+RIP: 0x00007ffa25285874  EFL: 0x00000246
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014 (Current)
+#10 0x00007ffa25195f3e RtlSetThreadSubProcessTag + 0x1aee (Stack: 0x00000087173ff550)
+#20 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x00000087173ff8b0)
+#30 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x00000087173ff8e0)
+THREAD ID: 7440
+State: Suspended
+RIP:   0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014
+
+CPU REGISTERS:
+RAX: 0x00000000000001e6  R8 : 0x0000000000000010
+RBX: 0x000002866cfb2330  R9 : 0x00000087175ff8a8
+RCX: 0x0000000000000098  R10: 0x0000000000000098
+RDX: 0x000002866cfb1fb0  R11: 0x0000000000000098
+RSI: 0x00007ffa25194ea0  R12: 0x00007ffa251f8280
+RDI: 0x000002866cfaa120  R13: 0x0000000000000000
+RBP: 0x0000000000000000  R14: 0x000000000000ffff
+RSP: 0x00000087175ff848  R15: 0x00007ffa25192c10
+RIP: 0x00007ffa25285874  EFL: 0x00000246
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014 (Current)
+#10 0x00007ffa25195f3e RtlSetThreadSubProcessTag + 0x1aee (Stack: 0x00000087175ff850)
+#20 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x00000087175ffbb0)
+#30 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x00000087175ffbe0)
+THREAD ID: 6748
+State: Suspended
+RIP:   0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014
+
+CPU REGISTERS:
+RAX: 0x00000000000001e6  R8 : 0x0000000000000010
+RBX: 0x000002866cfbd310  R9 : 0x00000087177ff4f8
+RCX: 0x0000000000000098  R10: 0x0000000000000098
+RDX: 0x000002866cfbcf90  R11: 0x0000000000000098
+RSI: 0x00007ffa25194ea0  R12: 0x00007ffa251f8280
+RDI: 0x000002866cfaa120  R13: 0x0000000000000000
+RBP: 0x0000000000000000  R14: 0x000000000000ffff
+RSP: 0x00000087177ff498  R15: 0x00007ffa25192c10
+RIP: 0x00007ffa25285874  EFL: 0x00000246
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa25285874 NtWaitForWorkViaWorkerFactory + 0x0014 (Current)
+#10 0x00007ffa25195f3e RtlSetThreadSubProcessTag + 0x1aee (Stack: 0x00000087177ff4a0)
+#20 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x00000087177ff800)
+#30 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x00000087177ff830)
+THREAD ID: 3738
+State: Suspended
+RIP:   0x00007ffa252822e4 NtFsControlFile + 0x0014
+
+CPU REGISTERS:
+RAX: 0x0000000000000039  R8 : 0x0000000000000000
+RBX: 0x0000000000000000  R9 : 0x0000000000000000
+RCX: 0x00000000000001e4  R10: 0x00000000000001e4
+RDX: 0x0000000000000000  R11: 0x00000000000001e4
+RSI: 0x0000000000000000  R12: 0x0000000000000000
+RDI: 0x00000000000001e4  R13: 0x0000000000000000
+RBP: 0x0000008717bff740  R14: 0x0000000000000000
+RSP: 0x0000008717bff678  R15: 0x0000000000000000
+RIP: 0x00007ffa252822e4  EFL: 0x00000246
+
+RAW STACK TRACE (Manual Walk):
+#00 0x00007ffa252822e4 NtFsControlFile + 0x0014 (Current)
+#10 0x00007ffa226e368a ConnectNamedPipe + 0x006a (Stack: 0x0000008717bff680)
+#20 0x00007ff61624c7fb C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff6f0)
+#30 0x00007ff61637652d C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff760)
+#40 0x00007ff6163877b3 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff7a0)
+#50 0x00007ff616325b98 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff7e0)
+#60 0x00007ff616325bf8 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff820)
+#70 0x00007ff61632567c C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff850)
+#80 0x00007ff61639df8f C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff880)
+#90 0x00007ff6161e63ca C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe (No Exports) (Stack: 0x0000008717bff8c0)
+#a0 0x00007ffa223237b0 wcsrchr + 0x0150 (Stack: 0x0000008717bff910)
+#b0 0x00007ffa23b8e8d7 BaseThreadInitThunk + 0x0017 (Stack: 0x0000008717bff940)
+#c0 0x00007ffa251ac53c RtlUserThreadStart + 0x002c (Stack: 0x0000008717bff970)

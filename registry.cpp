@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <windows.h>
 #include <algorithm>
-#include <iostream>
+#include "shell_streams.hpp"
 
 namespace fs = std::filesystem;
 
@@ -333,14 +333,14 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
         
         // Shebang is required
         if (!hasShebang) {
-            std::cerr << "Script missing shebang line: " << exePath << std::endl;
-            std::cerr << "Add a shebang: #!<interpreter> (registry name or absolute path)" << std::endl;
-            std::cerr << "Example: #!lish  or  #!C:\\path\\to\\interpreter.exe" << std::endl;
+            ShellIO::serr << "Script missing shebang line: " << exePath << ShellIO::endl;
+            ShellIO::serr << "Add a shebang: #!<interpreter> (registry name or absolute path)" << ShellIO::endl;
+            ShellIO::serr << "Example: #!lish  or  #!C:\\path\\to\\interpreter.exe" << ShellIO::endl;
             return false;
         }
         
         if (interpreterSpec.empty()) {
-            std::cerr << "Invalid shebang - no interpreter specified" << std::endl;
+            ShellIO::serr << "Invalid shebang - no interpreter specified" << ShellIO::endl;
             return false;
         }
         
@@ -382,9 +382,9 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
                     // Relative path that exists
                     interpreterPath = fs::absolute(interpreterSpec).string();
                 } else {
-                    std::cerr << "Interpreter not found: " << interpreterSpec << std::endl;
-                    std::cerr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << std::endl;
-                    std::cerr << "Or use an absolute path in the shebang" << std::endl;
+                    ShellIO::serr << "Interpreter not found: " << interpreterSpec << ShellIO::endl;
+                    ShellIO::serr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << ShellIO::endl;
+                    ShellIO::serr << "Or use an absolute path in the shebang" << ShellIO::endl;
                     return false;
                 }
             }
@@ -423,7 +423,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
-            std::cerr << "Failed to execute script (error " << err << ")" << std::endl;
+            ShellIO::serr << "Failed to execute script (error " << err << ")" << ShellIO::endl;
             return false;
         }
     } else {
@@ -463,7 +463,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
-            std::cerr << "Failed to execute command (error " << err << ")" << std::endl;
+            ShellIO::serr << "Failed to execute command (error " << err << ")" << ShellIO::endl;
             return false;
         }
     }

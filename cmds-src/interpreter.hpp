@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <iostream>
+#include "../shell_streams.hpp"
 #include <string>
 #include <vector>
 #include <map>
@@ -1369,14 +1369,14 @@ private:
             }
             
             if (!prompt.empty()) {
-                std::cout << prompt;
-                std::cout.flush();
+                ShellIO::sout << prompt;
+                ShellIO::sout.flush();
             }
             
             std::string line;
-            if (std::getline(std::cin, line)) {
+            if (ShellIO::sin.getline(line)) {
                 variables[varName] = line;
-                if (!silent && prompt.empty()) std::cout << "\n";
+                if (!silent && prompt.empty()) ShellIO::sout << "\n";
                 return 0;
             }
             return 1;
@@ -1395,7 +1395,7 @@ private:
             }
             
             std::strftime(buffer, sizeof(buffer), format.c_str(), local);
-            std::cout << buffer << "\n";
+            ShellIO::sout << buffer << "\n";
             return 0;
         };
         

@@ -1,9 +1,8 @@
 
-#include <iostream>
+#include "../shell_streams.hpp"
 #include <string>
 #include <vector>
 #include <deque>
-#include <fstream>
 #include <algorithm>
 #include <regex>
 #include <windows.h>
@@ -31,19 +30,8 @@ struct GrepOptions {
 
 GrepOptions opts;
 
-void setTextColor(WORD attributes) {
-    static HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTextAttribute(hConsole, attributes);
-}
-
-void resetTextColor() {
-    setTextColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE); 
-}
-
 void printError(const std::string& msg) {
-    setTextColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
-    std::cerr << "grep: " << msg << std::endl;
-    resetTextColor();
+    ShellIO::serr << ShellIO::Color::LightRed << "grep: " << msg << ShellIO::Color::Reset << ShellIO::endl;
 }
 
 bool isBinaryData(const std::string& s) {
@@ -126,23 +114,15 @@ bool isMatch(const std::string& line, const std::regex& re, const std::string& p
 void printLine(const std::string& filename, int lineNum, const std::string& line, 
                const std::vector<std::pair<size_t, size_t>>& matches, bool isContext, char separator) {
     if (!opts.noFilename && opts.showFilename) {
-        setTextColor(FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << filename;
-        setTextColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << separator;
+        ShellIO::sout << ShellIO::Color::Magenta << filename << ShellIO::Color::Blue << separator << ShellIO::Color::Reset;
     }
     
     if (opts.lineNumbers) {
-        setTextColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << lineNum;
-        setTextColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << separator;
+        ShellIO::sout << ShellIO::Color::Green << lineNum << ShellIO::Color::Blue << separator << ShellIO::Color::Reset;
     }
     
-    resetTextColor();
-    
     if (matches.empty() || isContext || opts.invertMatch || !opts.color) {
-        std::cout << line << std::endl;
+        ShellIO::sout << line << ShellIO::endl;
         return;
     }
     
@@ -152,22 +132,20 @@ void printLine(const std::string& filename, int lineNum, const std::string& line
         size_t len = mr.second;
         
         if (start > lastPos) {
-            std::cout << line.substr(lastPos, start - lastPos);
+            ShellIO::sout << line.substr(lastPos, start - lastPos);
         }
         
-        setTextColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::cout << line.substr(start, len);
-        resetTextColor();
+        ShellIO::sout << ShellIO::Color::LightRed << line.substr(start, len) << ShellIO::Color::Reset;
         
         lastPos = start + len;
     }
     if (lastPos < line.length()) {
-        std::cout << line.substr(lastPos);
+        ShellIO::sout << line.substr(lastPos);
     }
-    std::cout << std::endl;
+    ShellIO::sout << ShellIO::endl;
 }
 
-int processFile(std::istream& is, const std::string& filename, const std::string& pattern, const std::regex& re) {
+int processFile(ShellIO::ShellInStream& is, const std::string& filename, const std::string& pattern, const std::regex& re) {
     std::string line;
     int lineNum = 0;
     int matchCount = 0;
@@ -175,12 +153,12 @@ int processFile(std::istream& is, const std::string& filename, const std::string
     std::deque<std::pair<int, std::string>> beforeBuffer;
     std::vector<std::pair<size_t, size_t>> matches;
     
-    while (std::getline(is, line)) {
+    while (is.getline(line)) {
         lineNum++;
         
         if (lineNum == 1 && isBinaryData(line)) {
             if (!opts.countOnly) {
-                std::cout << "Binary file " << filename << " matches" << std::endl;
+                ShellIO::sout << "Binary file " << filename << " matches" << ShellIO::endl;
             }
             return 1;
         }
@@ -194,7 +172,7 @@ int processFile(std::istream& is, const std::string& filename, const std::string
             
             if (!beforeBuffer.empty()) {
                 if (afterContextCounter == 0 && beforeBuffer.front().first > 1 && opts.beforeContext > 0) {
-                     std::cout << "--" << std::endl;
+                     ShellIO::sout << "--" << ShellIO::endl;
                 }
                 while (!beforeBuffer.empty()) {
                      printLine(filename, beforeBuffer.front().first, beforeBuffer.front().second, {}, true, '-');
@@ -203,7 +181,7 @@ int processFile(std::istream& is, const std::string& filename, const std::string
             }
             
             if (afterContextCounter == 0 && opts.afterContext > 0 && matchCount > 1) {
-                 std::cout << "--" << std::endl;
+                 ShellIO::sout << "--" << ShellIO::endl;
             }
 
             printLine(filename, lineNum, line, matches, false, ':');
@@ -223,13 +201,9 @@ int processFile(std::istream& is, const std::string& filename, const std::string
     
     if (opts.countOnly) {
         if (!opts.noFilename && opts.showFilename) {
-            setTextColor(FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-            std::cout << filename;
-            setTextColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-            std::cout << ":";
-            resetTextColor();
+            ShellIO::sout << ShellIO::Color::Magenta << filename << ShellIO::Color::Blue << ":" << ShellIO::Color::Reset;
         }
-        std::cout << matchCount << std::endl;
+        ShellIO::sout << matchCount << ShellIO::endl;
     }
     
     return (matchCount > 0);
@@ -262,11 +236,13 @@ void processPath(const std::string& path, const std::string& pattern, const std:
             printError(path + ": Is a directory");
         }
     } else {
-        std::ifstream ifs(path, std::ios::binary);
-        if (!ifs) {
-             if (!opts.noFilename) printError(path + ": Permission denied");
+        HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+             if (!opts.noFilename) printError(path + ": Permission denied (or not found)");
         } else {
-             totalMatches += processFile(ifs, path, pattern, re);
+             ShellIO::ShellInStream fis(hFile);
+             totalMatches += processFile(fis, path, pattern, re);
+             CloseHandle(hFile);
         }
     }
 }
@@ -305,7 +281,7 @@ int main(int argc, char* argv[]) {
                 else if (arg == "--no-filename") opts.noFilename = true;
                 else if (arg == "--text" || arg == "-a") opts.binaryFilesText = true;
                 else if (arg == "--help") {
-                    std::cout << "Usage: grep [OPTIONS] PATTERN [FILE...]" << std::endl;
+                    ShellIO::sout << "Usage: grep [OPTIONS] PATTERN [FILE...]" << ShellIO::endl;
                     return 0;
                 }
                 else if (arg.find("--context=") == 0) { size_t eq=arg.find('='); opts.afterContext = opts.beforeContext = std::stoi(arg.substr(eq+1)); }
@@ -390,7 +366,7 @@ int main(int argc, char* argv[]) {
     int totalMatches = 0;
     
     if (files.empty()) {
-        totalMatches += processFile(std::cin, "(standard input)", pattern, re);
+        totalMatches += processFile(ShellIO::sin, "(standard input)", pattern, re);
     } else {
         for (const auto& f : files) {
             processPath(f, pattern, re, totalMatches);

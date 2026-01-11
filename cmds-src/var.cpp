@@ -1,7 +1,7 @@
 // Compile: g++ -std=c++17 -static -o var.exe var.cpp
 // Run: var <command> [args...]
 
-#include <iostream>
+#include "../shell_streams.hpp"
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -72,7 +72,7 @@ struct VarStore {
     void save(const std::string& path) {
         std::ofstream file(path);
         if (!file) {
-            std::cerr << "var: error: cannot write to " << path << std::endl;
+            ShellIO::serr << "var: error: cannot write to " << path << ShellIO::endl;
             return;
         }
         
@@ -95,14 +95,14 @@ struct VarStore {
 };
 
 void printUsage() {
-    std::cout << "Usage: var <command> [args...]\n\n";
-    std::cout << "Commands:\n";
-    std::cout << "  var list                         List all variables\n";
-    std::cout << "  var mod <name> <value>           Modify scalar variable\n";
-    std::cout << "  var mod <name[N]> <value>        Modify array element at index N\n";
-    std::cout << "  var insert <arrayname> <value>   Append value to array\n";
-    std::cout << "  var purge <arrayname> <N>        Delete element at index N from array\n";
-    std::cout << "  var del <name>                   Delete variable or entire array\n";
+    ShellIO::sout << "Usage: var <command> [args...]\n" << ShellIO::endl;
+    ShellIO::sout << "Commands:\n" << ShellIO::endl;
+    ShellIO::sout << "  var list                         List all variables\n" << ShellIO::endl;
+    ShellIO::sout << "  var mod <name> <value>           Modify scalar variable\n" << ShellIO::endl;
+    ShellIO::sout << "  var mod <name[N]> <value>        Modify array element at index N\n" << ShellIO::endl;
+    ShellIO::sout << "  var insert <arrayname> <value>   Append value to array\n" << ShellIO::endl;
+    ShellIO::sout << "  var purge <arrayname> <N>        Delete element at index N from array\n" << ShellIO::endl;
+    ShellIO::sout << "  var del <name>                   Delete variable or entire array\n" << ShellIO::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -118,26 +118,26 @@ int main(int argc, char* argv[]) {
     std::string cmd = argv[1];
     
     if (cmd == "list") {
-        std::cout << "Scalar Variables:\n";
+        ShellIO::sout << "Scalar Variables:\n" << ShellIO::endl;
         if (store.scalars.empty()) {
-            std::cout << "  (none)\n";
+            ShellIO::sout << "  (none)\n" << ShellIO::endl;
         } else {
             for (const auto& pair : store.scalars) {
-                std::cout << "  " << pair.first << "=" << pair.second << "\n";
+                ShellIO::sout << "  " << pair.first << "=" << pair.second << ShellIO::endl;
             }
         }
         
-        std::cout << "\nArray Variables:\n";
+        ShellIO::sout << "\nArray Variables:\n" << ShellIO::endl;
         if (store.arrays.empty()) {
-            std::cout << "  (none)\n";
+            ShellIO::sout << "  (none)\n" << ShellIO::endl;
         } else {
             for (const auto& pair : store.arrays) {
-                std::cout << "  " << pair.first << "[]={";
+                ShellIO::sout << "  " << pair.first << "[]={";
                 for (size_t i = 0; i < pair.second.size(); ++i) {
-                    if (i > 0) std::cout << ",";
-                    std::cout << pair.second[i];
+                    if (i > 0) ShellIO::sout << ",";
+                    ShellIO::sout << pair.second[i];
                 }
-                std::cout << "} (" << pair.second.size() << " elements)\n";
+                ShellIO::sout << "} (" << pair.second.size() << " elements)\n" << ShellIO::endl;
             }
         }
         return 0;
@@ -159,21 +159,21 @@ int main(int argc, char* argv[]) {
             
             auto it = store.arrays.find(arrName);
             if (it == store.arrays.end()) {
-                std::cerr << "var: mod: array '" << arrName << "' does not exist\n";
+                ShellIO::serr << "var: mod: array '" << arrName << "' does not exist\n" << ShellIO::endl;
                 return 1;
             }
             
             try {
                 size_t idx = std::stoul(idxStr);
                 if (idx >= it->second.size()) {
-                    std::cerr << "var: mod: index " << idx << " out of bounds (array has " << it->second.size() << " elements)\n";
+                    ShellIO::serr << "var: mod: index " << idx << " out of bounds (array has " << it->second.size() << " elements)\n" << ShellIO::endl;
                     return 1;
                 }
                 it->second[idx] = newValue;
                 store.save(varPath);
-                std::cout << "Modified: " << arrName << "[" << idx << "]=" << newValue << "\n";
+                ShellIO::sout << "Modified: " << arrName << "[" << idx << "]=" << newValue << ShellIO::endl;
             } catch (...) {
-                std::cerr << "var: mod: invalid index '" << idxStr << "'\n";
+                ShellIO::serr << "var: mod: invalid index '" << idxStr << "'\n" << ShellIO::endl;
                 return 1;
             }
         } else {
@@ -185,13 +185,13 @@ int main(int argc, char* argv[]) {
             
             auto scalarIt = store.scalars.find(target);
             if (scalarIt == store.scalars.end()) {
-                std::cerr << "var: mod: variable '" << target << "' does not exist\n";
+                ShellIO::serr << "var: mod: variable '" << target << "' does not exist\n" << ShellIO::endl;
                 return 1;
             }
             
             store.scalars[target] = newValue;
             store.save(varPath);
-            std::cout << "Modified: " << target << "=" << newValue << "\n";
+            ShellIO::sout << "Modified: " << target << "=" << newValue << ShellIO::endl;
         }
         return 0;
         
@@ -207,14 +207,14 @@ int main(int argc, char* argv[]) {
         
         auto it = store.arrays.find(arrName);
         if (it == store.arrays.end()) {
-            std::cerr << "var: insert: array '" << arrName << "' does not exist\n";
-            std::cerr << "Hint: Create it first with: export -p -arr " << arrName << "={}\n";
+            ShellIO::serr << "var: insert: array '" << arrName << "' does not exist\n" << ShellIO::endl;
+            ShellIO::serr << "Hint: Create it first with: export -p -arr " << arrName << "={}\n" << ShellIO::endl;
             return 1;
         }
         
         it->second.push_back(value);
         store.save(varPath);
-        std::cout << "Inserted: " << arrName << "[" << (it->second.size() - 1) << "]=" << value << "\n";
+        ShellIO::sout << "Inserted: " << arrName << "[" << (it->second.size() - 1) << "]=" << value << ShellIO::endl;
         return 0;
         
     } else if (cmd == "purge") {
@@ -229,22 +229,22 @@ int main(int argc, char* argv[]) {
         
         auto it = store.arrays.find(arrName);
         if (it == store.arrays.end()) {
-            std::cerr << "var: purge: array '" << arrName << "' does not exist\n";
+            ShellIO::serr << "var: purge: array '" << arrName << "' does not exist\n" << ShellIO::endl;
             return 1;
         }
         
         try {
             size_t idx = std::stoul(idxStr);
             if (idx >= it->second.size()) {
-                std::cerr << "var: purge: index " << idx << " out of bounds (array has " << it->second.size() << " elements)\n";
+                ShellIO::serr << "var: purge: index " << idx << " out of bounds (array has " << it->second.size() << " elements)\n" << ShellIO::endl;
                 return 1;
             }
             std::string removed = it->second[idx];
             it->second.erase(it->second.begin() + idx);
             store.save(varPath);
-            std::cout << "Purged: " << arrName << "[" << idx << "] (was '" << removed << "')\n";
+            ShellIO::sout << "Purged: " << arrName << "[" << idx << "] (was '" << removed << "')\n" << ShellIO::endl;
         } catch (...) {
-            std::cerr << "var: purge: invalid index '" << idxStr << "'\n";
+            ShellIO::serr << "var: purge: invalid index '" << idxStr << "'\n" << ShellIO::endl;
             return 1;
         }
         return 0;
@@ -262,7 +262,7 @@ int main(int argc, char* argv[]) {
         if (scalarIt != store.scalars.end()) {
             store.scalars.erase(scalarIt);
             store.save(varPath);
-            std::cout << "Deleted variable: " << name << "\n";
+            ShellIO::sout << "Deleted variable: " << name << ShellIO::endl;
             return 0;
         }
         
@@ -270,11 +270,11 @@ int main(int argc, char* argv[]) {
         if (arrIt != store.arrays.end()) {
             store.arrays.erase(arrIt);
             store.save(varPath);
-            std::cout << "Deleted array: " << name << "\n";
+            ShellIO::sout << "Deleted array: " << name << ShellIO::endl;
             return 0;
         }
         
-        std::cerr << "var: del: '" << name << "' does not exist\n";
+        ShellIO::serr << "var: del: '" << name << "' does not exist\n" << ShellIO::endl;
         return 1;
         
     } else if (cmd == "--help" || cmd == "-h") {
