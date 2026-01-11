@@ -2500,3 +2500,393 @@ loneshooter
 loneshooter
 loneshooter
 loneshooter-exp
+bitpainter
+bitpainter
+bitpainter
+where g++
+where c++
+where cpp
+where cc
+where c
+where g
+cd Onedrive
+cd Documents
+cd Projects
+ls
+cd LoneShooter
+g++ -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+c++ -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+setup
+setup comment-on
+./OneDrive/
+./Do
+./Documents/Projects/LoneShooter/
+g++ -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+g++ -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+g++ -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+x86_64-w64-mingw32
+x86_64-w64-mingw32
+./x86_64-w64-mingw32-c++.exe
+C:\mingw64\mingw64\bin\x86_64-w64-mingw32-c++.exe  -o LoneShooter.exe src/loneshooter.cpp -m32 -O2 -static -static-libgcc -static-libstdc++ -lgdi32 -lwinmm -mwindows -lole32 -loleaut32 -luuid -msse2
+git clone https://github.com/patrickcortez/LoneShooter.git
+ls
+./DiSCLAIMER
+cat DiSCLAIMER
+where g++
+where g++
+registry add LoneShooter64 "C:\Users\patri\OneDrive\Documents\Projects\LoneShooter\cmds\LoneShooter64.exe"
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter2
+LoneShooter64
+LoneShooter
+LoneShooter-exp
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+where g++
+where g++
+./test
+ls
+lino main.cpp
+g++ main.cpp -o main.exe
+LoneShooter64
+LoneShooter64
+bitpainter
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+bitpainter
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+bitpainter
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+bitpainter
+bitpainter
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+LoneShooter64
+mysql
+sudo mysql
+mysql -u cortez -p
+mysql -u cortez -p
+mysql
+mysql -u cortez -p
+mysql -u root -p
+mysql -u root -p
+mysql -u root -p
+mysql -u root -p
+net stop MySQL80
+./test-repo/
+..
+./test-repo/
+ls
+l
+l
+ll
+la
+ls
+ls
+ls
+cd ...
+ls
+cd ....
+cd ...
+..
+..
+...
+ls
+cd ...
+ls
+cd ..
+./..
+./patri/
+./...
+./..
+./..
+./..
+./..
+lds
+ls
+~
+..
+~
+echo '~'
+echo ~
+echo $XDG_CONFIG_HOME
+env
+echo $AppData
+cls
+clear
+help
+system
+lvc
+help
+ls
+ls
+./mount auto
+ls
+./mount.exe auto
+var list
+cd $(dirs[0])
+;s
+ls
+./build-installer.ps1
+.\build-installer.ps1
+ls
+help
+LoneShooter-exp
+LoneMaker
+LoneShooter-exp
+registry refresh
+dotnet
+dotnet --version
+ping 100.105.142.35
+git status
+git add -A
+git commit -m "Added map editor"
+git push origin master
+whoami
+bitpainter
+adb devices
+registery refresh
+registry refresh
+adb
+adb
+./adb
+./adb
+./adb.exe
+registry add adb "C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\adb.exe"
+adb devices
+adb devices
+adb devices
+adb devices
+sudo adb devices
+adb devices
+sudo adb devices
+adb devices
+adb reboot bootloader
+fastboot devices
+./fastboot.exe devices
+./fastboot.exe flashing unlock
+adb reboot bootloader
+adb
+adb reboot bootloader
+./fastboot.exe flash boot magisk_patched-30600_WNwro.img
+./fastboot.exe reboot
+adb devices
+adb reboot bootloader
+./fastboot.exe --disable-verity --disable-verification flash vbmeta vbmeta.img
+adb reboot bootloader
+./fastboot.exe --disable-verity --disable-verification flash vbmeta vbmeta.img
+./fastboot.exe reboot
+ls
+ls
+wget
+registry add fastboot "C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\fastboot.exe"
+abd reboot bootloader
+adb reboot bootloader
+fastboot flash boot boot.img
+fastboot reboot
+adb reboot bootloader
+./fastboot.exe --disable-verity --disable-verification flash vbmeta vbmeta.img
+fastboot reboot
+adb reboot bootloader
+fastboot flash dtbo dtbo.img
+./fastboot.exe flash vbmeta vbmeta.img
+fastboot reboot
+cd
+ls
+adb reboot bootloader
+fastboot flash "D:\Nonoy x11V922\super.img"
+fastboot flash "D:\Nonoy x11V922\super.img"
+fastboot flash super.img
+fastboot flash super "D:\Nonoy x11V922\super.img"
+fastboot reboot
+adb reboot bootloader
+fastboot erase nvdata
+fastboot reboot fastboot
+fastboot reboot fastboot
+fastboot reboot fastboot
+adb reboot bootloader
+fastboot reboot fastboot
+adb
+adb devices
+adb reboot bootloader
+fastboot reboot fastboot
+fastboot devices
+fastboot flash super "D:\Nonoy x11V922\super.img"
+adb reboot bootloader
+fastboot reboot fastboot
+fastboot erase userdata
+fastboot reboot
+adb devices
+fastboot devices
+adb reboot bootloader
+fastboot reboot fastboot
+fastboot flash dtbo dtbo.img
+cd OneDrive/Downloads
+cd OneDrive/Download
+cd OneDrive/
+ls
+cd ..
+./Downloads
+ls
+./platform-tools-latest-windows/platform-tools/
+fastboot flash dtbo dtbo.img
+ls
+./fastboot.exe flash dtbo dtbo.img
+./fastboot.exe flash dtbo dtbo.img
+fastboot --disable-verity --disable-verification flash vbmeta vbmeta.img
+fastboot reboot
+adb reboot bootloader
+fastboot erase nvdata
+fastboot erase nvdata
+fastboot reboot
+fastboot
+adb devices
+adb reboot bootloader
+adb reboot bootloader
+adb reboot bootloader
+fastboot reboot
+adb reboot bootloader
+fastboot flash boot magisk_patched-30600_bvPCR.img
+where fastboot
+where fastboot | cd
+where fastboot | head -n 1 | cd
+C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools
+fastboot flash boot magisk_patched-30600_bvPCR.img
+fastboot reboot
+adb devices
+adb reboot bootloader
+adb devices
+adb reboot bootloader
+adb devices
+adb reboot bootloader
+fastbootcd
+cd
+ls
+cd .ssh
+ls
+cat id_ed25519.pub
+cd
+lino new.txt
+ssh cortez@192.168.254.109
+ssh cortez@192.168.254.109
+ping 192.168.254.109
+ssh cortez@192.168.254.109
+ssh cortez@192.168.254.109
+ssh cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+export -p cmd="ssh -p 8022 cortez@192.168.254.109"
+$(cmd)
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+cd .ssh
+ls
+lino authorized_keys
+ip addr
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+python main.py
+python main.py
+cls
+python main.py
+traceroute 192.168.254.107
+sudo traceroute 192.168.254.107
+ls
+ssh
+cat authorized_keys
+sshd
+python main.py showpass
+python main.py
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ssh cortez@192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+ping 192.168.254.109
+ssh -p 8022 cortez@192.168.254.109
+adb devices
+adb devices
+clear
+adb devices
+adb reboot bootloader
+fastboot devices
+fastboot oem unlock
+fastboot devices
+adb devices
+adb devices
+adb devices
+fastboot devices
+fastboot devices
+ls
+git clone https://github.com/FluxFlu/ash.git
+sudo git
+exit
+help
+helo
+help
+clera
+clear
+help
+help

@@ -1,5 +1,5 @@
 // Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
-// Alternate compile: g++ -std=c++17 -static -o linuxify main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet
+// Alternate compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
 #include <iostream>
 #include <string>
@@ -38,6 +38,10 @@
 #include "cmds-src/arith.hpp"
 #include "cmds-src/wsl_proxy/lxss_kernel.hpp"
 #include "shell_api.hpp"
+#include "interrupt.hpp"
+#include "signal_handler.hpp"
+#include "io_handler.hpp"
+#include "input_handler.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -91,34 +95,16 @@ private:
         return tokens;
     }
 
-    void printPrompt() {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "linuxify";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << ":";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << currentDir;
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "$ ";
-    }
-
     void printError(const std::string& message) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+        IO::get().setColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
         std::cerr << "Error: " << message << std::endl;
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        IO::get().resetColor();
     }
 
     void printSuccess(const std::string& message) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        IO::get().setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
         std::cout << message << std::endl;
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        IO::get().resetColor();
     }
 
     // Execute a command - handles built-in commands internally or uses CreateProcessA for external
@@ -202,7 +188,13 @@ private:
         
         int exitCode = 0;
         if (wait) {
+            // Signal Propagation: Tell ProcessManager this is the foreground job
+            g_procMgr.setForegroundPid(pi.dwProcessId);
+            
             WaitForSingleObject(pi.hProcess, INFINITE);
+            
+            g_procMgr.clearForegroundPid();
+            
             DWORD code;
             GetExitCodeProcess(pi.hProcess, &code);
             exitCode = (int)code;
@@ -352,428 +344,7 @@ private:
         return exitCode;
     }
     
-    // Clear console screen (faster than system("cls"))
-    void clearScreen() {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        GetConsoleScreenBufferInfo(hConsole, &csbi);
-        DWORD count;
-        DWORD cellCount = csbi.dwSize.X * csbi.dwSize.Y;
-        COORD homeCoords = {0, 0};
-        FillConsoleOutputCharacterA(hConsole, ' ', cellCount, homeCoords, &count);
-        FillConsoleOutputAttribute(hConsole, csbi.wAttributes, cellCount, homeCoords, &count);
-        SetConsoleCursorPosition(hConsole, homeCoords);
-    }
 
-    // Syntax highlighting colors
-    static const WORD COLOR_COMMAND = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;  // Bright Yellow
-    static const WORD COLOR_ARG = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;  // Cyan (arguments)
-    static const WORD COLOR_STRING = FOREGROUND_RED | FOREGROUND_INTENSITY;  // Red (strings in quotes)
-    static const WORD COLOR_FLAG = FOREGROUND_INTENSITY;  // Dark grey (flags like -la)
-    static const WORD COLOR_DEFAULT = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;  // White
-
-    // Re-render input line with syntax highlighting
-    // promptStartRow: the console row where the prompt started (tracked by caller, updated if scroll occurs)
-    void renderInputWithHighlight(const std::string& input, int cursorPos, int& promptStartRow) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        GetConsoleScreenBufferInfo(hConsole, &csbi);
-        
-        int consoleWidth = csbi.dwSize.X;
-        int consoleHeight = csbi.dwSize.Y;
-        int promptLen = 9 + (int)currentDir.length() + 2;  // "linuxify:" + currentDir + "$ "
-        
-        // Calculate how many lines the current content spans
-        int totalLen = promptLen + (int)input.length();
-        int numLines = (totalLen + consoleWidth - 1) / consoleWidth;
-        if (numLines < 1) numLines = 1;
-        
-        // Check if content would extend beyond buffer and adjust for scroll
-        int startRow = promptStartRow;
-        if (startRow < 0) startRow = 0;
-        
-        // If rendering would exceed console height, console will scroll
-        // Adjust startRow to account for the scroll
-        int linesNeeded = startRow + numLines;
-        if (linesNeeded > consoleHeight) {
-            int scrollAmount = linesNeeded - consoleHeight;
-            startRow = std::max(0, startRow - scrollAmount);
-            promptStartRow = startRow;  // Update caller's reference
-        }
-        
-        // Clear all lines that could contain our input (clear a few extra to be safe)
-        COORD clearPos;
-        DWORD written;
-        for (int i = 0; i < numLines + 2; i++) {
-            clearPos.X = 0;
-            clearPos.Y = (SHORT)(startRow + i);
-            if (clearPos.Y < consoleHeight) {  // Don't clear beyond buffer
-                FillConsoleOutputCharacterA(hConsole, ' ', consoleWidth, clearPos, &written);
-            }
-        }
-        
-        // Move cursor to start of first line
-        COORD startPos;
-        startPos.X = 0;
-        startPos.Y = (SHORT)startRow;
-
-        SetConsoleCursorPosition(hConsole, startPos);
-        
-        // Reprint prompt
-        printPrompt();
-        
-        if (input.empty()) {
-            return;
-        }
-        
-        // Parse and colorize
-        bool inQuotes = false;
-        char quoteChar = '\0';
-        bool isFirstToken = true;
-        size_t tokenStart = 0;
-        
-        for (size_t i = 0; i < input.length(); i++) {
-            char c = input[i];
-            
-            // Handle quotes
-            if ((c == '"' || c == '\'') && !inQuotes) {
-                inQuotes = true;
-                quoteChar = c;
-                SetConsoleTextAttribute(hConsole, COLOR_STRING);
-                std::cout << c;
-                continue;
-            }
-            if (c == quoteChar && inQuotes) {
-                std::cout << c;
-                inQuotes = false;
-                quoteChar = '\0';
-                SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
-                continue;
-            }
-            
-            if (inQuotes) {
-                std::cout << c;
-                continue;
-            }
-            
-            // Handle spaces (token separator)
-            if (c == ' ') {
-                SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
-                std::cout << c;
-                isFirstToken = false;
-                tokenStart = i + 1;
-                continue;
-            }
-            
-            // Determine color based on context
-            if (isFirstToken) {
-                // Command (first token)
-                SetConsoleTextAttribute(hConsole, COLOR_COMMAND);
-            } else if (c == '-' && (i == tokenStart || (i > 0 && input[i-1] == ' '))) {
-                // Flag starting with -
-                SetConsoleTextAttribute(hConsole, COLOR_FLAG);
-            } else if (i > 0 && input[i-1] == '-') {
-                // Continue flag
-                SetConsoleTextAttribute(hConsole, COLOR_FLAG);
-            } else {
-                // Check if we're in a flag token
-                bool isInFlag = false;
-                for (size_t j = tokenStart; j < i; j++) {
-                    if (input[j] == '-') {
-                        isInFlag = true;
-                        break;
-                    }
-                }
-                if (isInFlag) {
-                    SetConsoleTextAttribute(hConsole, COLOR_FLAG);
-                } else {
-                    SetConsoleTextAttribute(hConsole, COLOR_ARG);
-                }
-            }
-            
-            std::cout << c;
-        }
-        
-        SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
-        std::cout.flush();
-        
-        // Show inline auto-suggestion (faint text)
-        auto result = AutoSuggest::getSuggestions(input, (int)input.length(), currentDir);
-        std::string suggestionSuffix;
-        
-        if (!result.suggestions.empty()) {
-            std::string bestMatch = result.suggestions[0];
-            
-            if (result.isPath) {
-                // For paths, show the completion part
-                std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
-                if (bestMatch.length() > 0) {
-                    // Get just the filename portion that matches
-                    fs::path tokenPath(currentToken);
-                    std::string prefix = tokenPath.filename().string();
-                    if (bestMatch.length() > prefix.length() && 
-                        AutoSuggest::findCommonPrefix({bestMatch.substr(0, prefix.length()), prefix}).length() == prefix.length()) {
-                        suggestionSuffix = bestMatch.substr(prefix.length());
-                    }
-                }
-            } else {
-                // For commands, show remaining characters
-                if (bestMatch.length() > input.length() && 
-                    bestMatch.substr(0, input.length()) == input) {
-                    suggestionSuffix = bestMatch.substr(input.length());
-                }
-            }
-        }
-        
-        if (!suggestionSuffix.empty()) {
-            // Display suggestion in dark gray (faint)
-            SetConsoleTextAttribute(hConsole, FOREGROUND_INTENSITY);
-            std::cout << suggestionSuffix;
-            SetConsoleTextAttribute(hConsole, COLOR_DEFAULT);
-            std::cout.flush();
-        }
-        
-        // Position cursor at the correct location (accounting for wrapping)
-        int totalCursorPos = promptLen + cursorPos;
-        COORD cursorCoord;
-        cursorCoord.Y = (SHORT)(startRow + totalCursorPos / consoleWidth);
-        cursorCoord.X = (SHORT)(totalCursorPos % consoleWidth);
-        SetConsoleCursorPosition(hConsole, cursorCoord);
-    }
-
-    // Read input with syntax highlighting
-    std::string readInputWithHighlight() {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-        
-        std::string input;
-        int cursorPos = 0;
-        int historyIndex = -1;
-        
-        // Track the row where the prompt started (for consistent rendering)
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        GetConsoleScreenBufferInfo(hConsole, &csbi);
-        int promptStartRow = csbi.dwCursorPosition.Y;
-        
-        // Save original console mode
-        DWORD originalMode;
-        GetConsoleMode(hInput, &originalMode);
-        
-        // Enable raw input mode
-        SetConsoleMode(hInput, ENABLE_PROCESSED_INPUT);
-        
-        while (true) {
-            INPUT_RECORD ir;
-            DWORD read;
-            
-            if (!ReadConsoleInputA(hInput, &ir, 1, &read) || read == 0) continue;
-            
-            if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
-            
-            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
-            char ch = ir.Event.KeyEvent.uChar.AsciiChar;
-            
-            if (vk == VK_RETURN) {
-                // Enter - submit
-                std::cout << std::endl;
-                break;
-            } else if (vk == VK_BACK) {
-                // Backspace
-                if (cursorPos > 0) {
-                    input.erase(cursorPos - 1, 1);
-                    cursorPos--;
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                }
-            } else if (vk == VK_DELETE) {
-                // Delete
-                if (cursorPos < (int)input.length()) {
-                    input.erase(cursorPos, 1);
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                }
-            } else if (vk == VK_LEFT) {
-                // Left arrow
-                if (cursorPos > 0) {
-                    cursorPos--;
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                }
-            } else if (vk == VK_RIGHT) {
-                // Right arrow
-                if (cursorPos < (int)input.length()) {
-                    cursorPos++;
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                } else {
-                    // At end of input - accept inline suggestion if available
-                    auto result = AutoSuggest::getSuggestions(input, cursorPos, currentDir);
-                    if (!result.suggestions.empty()) {
-                        std::string bestMatch = result.suggestions[0];
-                        std::string suggestionSuffix;
-                        
-                        if (result.isPath) {
-                            // For paths, get the completion part
-                            std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
-                            fs::path tokenPath(currentToken);
-                            std::string prefix = tokenPath.filename().string();
-                            std::string lowerPrefix = prefix;
-                            std::string lowerBest = bestMatch;
-                            std::transform(lowerPrefix.begin(), lowerPrefix.end(), lowerPrefix.begin(), ::tolower);
-                            std::transform(lowerBest.begin(), lowerBest.end(), lowerBest.begin(), ::tolower);
-                            
-                            if (bestMatch.length() > prefix.length() && 
-                                lowerBest.substr(0, prefix.length()) == lowerPrefix) {
-                                suggestionSuffix = bestMatch.substr(prefix.length());
-                            }
-                        } else {
-                            // For commands
-                            std::string lowerInput = input;
-                            std::string lowerBest = bestMatch;
-                            std::transform(lowerInput.begin(), lowerInput.end(), lowerInput.begin(), ::tolower);
-                            std::transform(lowerBest.begin(), lowerBest.end(), lowerBest.begin(), ::tolower);
-                            
-                            if (bestMatch.length() > input.length() && 
-                                lowerBest.substr(0, input.length()) == lowerInput) {
-                                suggestionSuffix = bestMatch.substr(input.length());
-                            }
-                        }
-                        
-                        if (!suggestionSuffix.empty()) {
-                            input += suggestionSuffix;
-                            cursorPos = (int)input.length();
-                            renderInputWithHighlight(input, cursorPos, promptStartRow);
-                        }
-                    }
-                }
-            } else if (vk == VK_UP) {
-                // History up
-                if (!commandHistory.empty() && historyIndex < (int)commandHistory.size() - 1) {
-                    historyIndex++;
-                    input = commandHistory[commandHistory.size() - 1 - historyIndex];
-                    cursorPos = (int)input.length();
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                }
-            } else if (vk == VK_DOWN) {
-                // History down
-                if (historyIndex > 0) {
-                    historyIndex--;
-                    input = commandHistory[commandHistory.size() - 1 - historyIndex];
-                    cursorPos = (int)input.length();
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                } else if (historyIndex == 0) {
-                    historyIndex = -1;
-                    input.clear();
-                    cursorPos = 0;
-                    renderInputWithHighlight(input, cursorPos, promptStartRow);
-                }
-            } else if (vk == VK_HOME) {
-                cursorPos = 0;
-                renderInputWithHighlight(input, cursorPos, promptStartRow);
-            } else if (vk == VK_END) {
-                cursorPos = (int)input.length();
-                renderInputWithHighlight(input, cursorPos, promptStartRow);
-            } else if (vk == 'C' && (ir.Event.KeyEvent.dwControlKeyState & LEFT_CTRL_PRESSED)) {
-                // Ctrl+C
-                std::cout << "^C" << std::endl;
-                input.clear();
-                cursorPos = 0;
-                break;
-            } else if (vk == VK_TAB) {
-                // Tab - auto-complete
-                auto result = AutoSuggest::getSuggestions(input, cursorPos, currentDir);
-                
-                if (!result.suggestions.empty()) {
-                    if (result.suggestions.size() == 1) {
-                        // Single match - complete it
-                        std::string completion = result.suggestions[0];
-                        if (result.isPath) {
-                            // Replace from replaceStart to cursorPos
-                            std::string before = input.substr(0, result.replaceStart);
-                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
-                            
-                            // Get parent path if any
-                            std::string currentToken = input.substr(result.replaceStart, result.replaceLength);
-                            fs::path tokenPath(currentToken);
-                            std::string parentPart;
-                            if (!currentToken.empty() && currentToken.back() != '/' && currentToken.back() != '\\') {
-                                fs::path parent = tokenPath.parent_path();
-                                if (!parent.empty()) {
-                                    parentPart = parent.string();
-                                    if (parentPart.back() != '/' && parentPart.back() != '\\') {
-                                        parentPart += "/";
-                                    }
-                                }
-                            } else {
-                                parentPart = currentToken;
-                            }
-                            
-                            input = before + parentPart + completion + after;
-                            cursorPos = (int)(before.length() + parentPart.length() + completion.length());
-                        } else {
-                            // Command completion
-                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
-                            input = completion + " " + after;
-                            cursorPos = (int)completion.length() + 1;
-                        }
-                        renderInputWithHighlight(input, cursorPos, promptStartRow);
-                    } else {
-                        // Multiple matches - show them and complete to common prefix
-                        std::cout << std::endl;
-                        
-                        // Display suggestions in columns
-                        CONSOLE_SCREEN_BUFFER_INFO csbiTab;
-                        GetConsoleScreenBufferInfo(hConsole, &csbiTab);
-                        int termWidth = csbiTab.dwSize.X;
-                        
-                        size_t maxLen = 0;
-                        for (const auto& s : result.suggestions) {
-                            if (s.length() > maxLen) maxLen = s.length();
-                        }
-                        int colWidth = (int)maxLen + 2;
-                        int numCols = std::max(1, termWidth / colWidth);
-                        
-                        int col = 0;
-                        for (const auto& s : result.suggestions) {
-                            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-                            std::cout << s;
-                            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                            
-                            col++;
-                            if (col >= numCols) {
-                                std::cout << std::endl;
-                                col = 0;
-                            } else {
-                                int padding = colWidth - (int)s.length();
-                                for (int p = 0; p < padding; p++) std::cout << ' ';
-                            }
-                        }
-                        if (col != 0) std::cout << std::endl;
-                        
-                        // Complete to common prefix
-                        if (!result.completionText.empty() && result.completionText.length() > result.replaceLength) {
-                            std::string before = input.substr(0, result.replaceStart);
-                            std::string after = (cursorPos < (int)input.length()) ? input.substr(cursorPos) : "";
-                            input = before + result.completionText + after;
-                            cursorPos = (int)(before.length() + result.completionText.length());
-                        }
-                        
-                        // Get new start row and re-render
-                        GetConsoleScreenBufferInfo(hConsole, &csbiTab);
-                        promptStartRow = csbiTab.dwCursorPosition.Y;
-                        printPrompt();
-                        renderInputWithHighlight(input, cursorPos, promptStartRow);
-                    }
-                }
-            } else if (ch >= 32 && ch < 127) {
-                // Printable character
-                input.insert(cursorPos, 1, ch);
-                cursorPos++;
-                renderInputWithHighlight(input, cursorPos, promptStartRow);
-            }
-        }
-        
-        // Restore console mode
-        SetConsoleMode(hInput, originalMode);
-        
-        return input;
-    }
 
     std::string resolvePath(const std::string& path) {
         if (path.empty()) {
@@ -1419,7 +990,7 @@ private:
     }
 
     void cmdClear(const std::vector<std::string>& args) {
-        clearScreen();
+        IO::get().clearScreen();
     }
 
     // touch - create files or update timestamps
@@ -6351,6 +5922,7 @@ private:
             std::cout << "  setup windux       Add 'Open in Windux' to Explorer right-click menu\n";
             std::cout << "  setup integrate    Install WSL kernel proxy for extended features\n";
             std::cout << "  setup defaultshell Make Linuxify the default system shell\n";
+            std::cout << "  setup comment-on   Revert MinGW to original (undo no-comments)\n";
             return;
         }
         
@@ -6575,6 +6147,56 @@ private:
                 std::cout << "  Settings > System > For Developers > Enable sudo\n";
             }
             
+            
+        } else if (action == "comment-on") {
+            std::cout << "Restoring original MinGW DLLs (Reverting No-Comment Policy)...\n";
+            
+            fs::path cmdsSrcPath = fs::path(exePath).parent_path() / "cmds-src";
+            fs::path zlibSource = cmdsSrcPath / "zlib_proxy" / "zlib1.dll";
+            fs::path iconvSource = cmdsSrcPath / "zlib_proxy" / "libiconv-2.dll";
+            
+            std::string mingwBinPath = "C:\\mingw64\\mingw64\\bin";
+            fs::path zlibTarget = fs::path(mingwBinPath) / "zlib1.dll";
+            fs::path iconvTarget = fs::path(mingwBinPath) / "libiconv-2.dll";
+            
+            if (!fs::exists(mingwBinPath)) {
+                printError("MinGW bin directory not found at: " + mingwBinPath);
+                return;
+            }
+            
+            bool success = true;
+            
+            // Restore zlib1.dll
+            if (fs::exists(zlibSource)) {
+                try {
+                    fs::copy_file(zlibSource, zlibTarget, fs::copy_options::overwrite_existing);
+                    std::cout << "Restored zlib1.dll\n";
+                } catch (const std::exception& e) {
+                    printError("Failed to restore zlib1.dll: " + std::string(e.what()));
+                    success = false;
+                }
+            } else {
+                printError("Original zlib1.dll not found at: " + zlibSource.string());
+                success = false;
+            }
+            
+            // Restore libiconv-2.dll
+            if (fs::exists(iconvSource)) {
+                try {
+                    fs::copy_file(iconvSource, iconvTarget, fs::copy_options::overwrite_existing);
+                    std::cout << "Restored libiconv-2.dll\n";
+                } catch (const std::exception& e) {
+                    printError("Failed to restore libiconv-2.dll: " + std::string(e.what()));
+                    success = false;
+                }
+            } else {
+                printError("Original libiconv-2.dll not found at: " + iconvSource.string());
+                success = false;
+            }
+            
+            if (success) {
+                printSuccess("MinGW reverted to original state. Comments are now allowed.");
+            }
             
         } else if (action == "cron") {
             // Setup/verify cron daemon
@@ -8891,10 +8513,9 @@ public:
         
         SetConsoleTitleA("Linuxify Shell");
         
-        // Load command history
         loadHistory();
         
-        clearScreen();
+        IO::get().clearScreen();
         
         // Print Tux penguin with colors (yellow body, white eyes)
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
@@ -9019,10 +8640,9 @@ public:
         std::string input;
         
         while (running) {
-            printPrompt();
             
             // Use syntax-highlighted input
-            input = readInputWithHighlight();
+            input = InputHandler::read(currentDir, commandHistory);
 
             input.erase(0, input.find_first_not_of(" \t"));
             if (!input.empty()) {
@@ -9220,24 +8840,30 @@ public:
     
 };
 
-// Ctrl+C handler - prevents shell from exiting
-BOOL WINAPI CtrlHandler(DWORD ctrlType) {
-    switch (ctrlType) {
-        case CTRL_C_EVENT:
-            // Just print a new line and return TRUE to indicate we handled it
-            // This prevents the shell from exiting
-            std::cout << "^C" << std::endl;
-            return TRUE;
-        case CTRL_BREAK_EVENT:
-            return TRUE;
-        default:
-            return FALSE;
-    }
-}
+
 
 int main(int argc, char* argv[]) {
-    // Set up Ctrl+C handler to prevent shell from exiting
-    SetConsoleCtrlHandler(CtrlHandler, TRUE);
+    // Enterprise System Initialization
+    Interrupt::init();
+    SignalHandler::init();
+    
+    // Register Resource Cleanup (Safe Termination)
+    SignalHandler::registerCleanupHandler([]() {
+        g_procMgr.killAll();
+    });
+    
+    // Manual Job Control: Signal Propagation
+    SignalHandler::registerInterruptHandler([]() {
+        // Try to kill foreground process first
+        if (g_procMgr.killForeground()) {
+            std::cout << "\n[SIGINT] Terminated foreground process.\n";
+            return; 
+        }
+        
+        // If no foreground process, interrupt the shell
+        std::cout << "^C\n";
+        // Optional: Clear input buffer logic if we had access to shell instance
+    });
     
     Linuxify shell;
     

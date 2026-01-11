@@ -3,6 +3,7 @@
 
 HOME=C:\Users\patri
 MASTER=LINOS_TORVARDS
+cmd=ssh -p 8022 cortez@192.168.254.109
 comds[]={mount C:\Users\patri\test\main.img}
 dirs[]={C:\Users\patri\OneDrive\Documents\Projects\Linuxify\,C:\Users\patri\OneDrive\Documents\Projects,C:\Users}
 words[]={status,connect,mysql,git,lino}

@@ -2,41 +2,36 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
-C++=C:\mingw64\mingw64\bin\C++.exe
-c++=C:\mingw64\mingw64\bin\c++.exe
+adb=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\adb.exe
 cargo=C:\Users\patri\.cargo\bin\cargo.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
-cmd=C:\WINDOWS\system32\cmd.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
 convert=C:\WINDOWS\system32\convert.exe
 curl=C:\WINDOWS\system32\curl.exe
-explorer=C:\WINDOWS\explorer.exe
+fastboot=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\fastboot.exe
 find=C:\WINDOWS\system32\find.exe
 g++=C:\mingw64\mingw64\bin\g++.exe
 gcc=C:\mingw64\mingw64\bin\gcc.exe
 git=C:\Program Files\Git\cmd\git.exe
 java=C:\Program Files (x86)\Common Files\Oracle\Java\javapath\java.exe
 javac=C:\Users\patri\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\javac.exe
-mysql=C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe
+mysql=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe
 nslookup=C:\WINDOWS\system32\nslookup.exe
 nvim=C:\Program Files\Neovim\bin\nvim.exe
-pacman=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\pacman.exe
 ping=C:\WINDOWS\system32\ping.exe
 pip=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip.exe
 pip3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\pip3.exe
-powershell=C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
 python=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python.exe
 python3=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\python3.exe
 rustc=C:\Users\patri\.cargo\bin\rustc.exe
+rustup=C:\Users\patri\.cargo\bin\rustup.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
 tar=C:\WINDOWS\system32\tar.exe
-taskkill=C:\WINDOWS\system32\taskkill.exe
-testg=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\scripts\git.sh
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
+where=C:\WINDOWS\system32\where.exe
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
-wsl=C:\WINDOWS\system32\wsl.exe

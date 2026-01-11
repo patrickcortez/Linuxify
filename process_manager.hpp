@@ -15,6 +15,7 @@
 #include <psapi.h>
 #include <algorithm>
 #include <conio.h>
+#include <atomic>
 
 struct BackgroundJob {
     int jobId;
@@ -30,6 +31,7 @@ class ProcessManager {
 private:
     std::vector<BackgroundJob> jobs;
     int nextJobId = 1;
+    std::atomic<DWORD> foregroundPid{0};
 
 public:
     int addJob(HANDLE hProcess, DWORD pid, const std::string& cmd) {
@@ -141,6 +143,18 @@ public:
         return false;
     }
 
+    void killAll() {
+        for (auto& job : jobs) {
+            if (job.running && job.hProcess) {
+                TerminateProcess(job.hProcess, 1);
+                CloseHandle(job.hProcess);
+                job.hProcess = NULL;
+                job.running = false;
+            }
+        }
+        std::cout << "[ProcessManager] All background jobs terminated." << std::endl;
+    }
+
     void cleanupCompletedJobs() {
         updateJobStatus();
         jobs.erase(
@@ -148,6 +162,31 @@ public:
                 [](const BackgroundJob& j) { return !j.running; }),
             jobs.end()
         );
+    }
+    
+    // --- MANUAL JOB CONTROL (Signal Propagation) ---
+    
+    void setForegroundPid(DWORD pid) {
+        foregroundPid.store(pid);
+    }
+
+    void clearForegroundPid() {
+        foregroundPid.store(0);
+    }
+
+    // Returns true if a foreground process was killed, false otherwise
+    bool killForeground() {
+        DWORD pid = foregroundPid.load();
+        if (pid != 0) {
+            HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+            if (hProc) {
+                TerminateProcess(hProc, 1);
+                CloseHandle(hProc);
+                // We don't clear pid here immediately; main loop will clear it after wait
+                return true;
+            }
+        }
+        return false;
     }
 
     static bool setProcessPriority(DWORD pid, int niceValue) {
