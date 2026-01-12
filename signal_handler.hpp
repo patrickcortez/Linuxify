@@ -45,20 +45,32 @@ namespace SignalHandler {
         std::mutex bufferMutex;
         HANDLE hStdin;
         DWORD originalMode;
+        bool initialized = false;
     public:
         static InputDispatcher& getInstance() {
             static InputDispatcher instance;
             return instance;
         }
         void init() {
-            hStdin = GetStdHandle(STD_INPUT_HANDLE);
-            GetConsoleMode(hStdin, &originalMode);
+            if (!initialized) {
+                hStdin = GetStdHandle(STD_INPUT_HANDLE);
+                GetConsoleMode(hStdin, &originalMode);
+                initialized = true;
+            }
+            enableRawMode();
+        }
+        void enableRawMode() {
+            if (!initialized) return;
             DWORD newMode = originalMode & ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
             newMode |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
             SetConsoleMode(hStdin, newMode);
         }
         void restore() {
-            SetConsoleMode(hStdin, originalMode);
+            if (initialized) {
+                // Force cooked mode flags to ensure child processes work
+                DWORD cookedMode = originalMode | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+                SetConsoleMode(hStdin, cookedMode);
+            }
         }
         void registerKeyHandler(WORD vk, bool ctrl, bool alt, bool shift, std::function<void()> callback) {
             keyHandlers[{vk, ctrl, alt, shift}] = callback;

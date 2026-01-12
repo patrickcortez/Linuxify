@@ -42,7 +42,10 @@
 #include "io_handler.hpp"
 #include "input_handler.hpp"
 #include "shell_streams.hpp"
+#include "input_handler.hpp"
+#include "shell_streams.hpp"
 #include "crash_handler.hpp"
+#include "cmds-src/child_handler.hpp" // Integrated ChildHandler
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -159,55 +162,9 @@ public:
             return ctx.lastExitCode;
         }
         
-        // External command - use CreateProcessA
-        STARTUPINFOA si;
-        PROCESS_INFORMATION pi;
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        ZeroMemory(&pi, sizeof(pi));
-        
-        char cmdBuffer[8192];
-        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
-        
-        const char* dir = workDir.empty() ? ctx.currentDir.c_str() : workDir.c_str();
-        
-        if (!CreateProcessA(
-            NULL,
-            cmdBuffer,
-            NULL,
-            NULL,
-            TRUE,   // Inherit handles for stdin/stdout
-            0,
-            NULL,
-            dir,
-            &si,
-            &pi
-        )) {
-            return -1;
-        }
-        
-        int exitCode = 0;
-        if (wait) {
-            // Signal Propagation: Tell ProcessManager this is the foreground job
-            g_procMgr.setForegroundPid(pi.dwProcessId);
-            
-            WaitForSingleObject(pi.hProcess, INFINITE);
-            
-            g_procMgr.clearForegroundPid();
-            
-            DWORD code;
-            GetExitCodeProcess(pi.hProcess, &code);
-            exitCode = (int)code;
-        }
-        
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        
-        return exitCode;
+        // External command - use ChildHandler for robust spawning
+        const std::string dir = workDir.empty() ? ctx.currentDir : workDir;
+        return ChildHandler::spawn(cmdLine, dir, wait);
     }
     
     // Execute a pipeline of commands using real Windows pipes
@@ -222,6 +179,9 @@ public:
         std::vector<HANDLE> processes;
         std::vector<HANDLE> threads;
         HANDLE hPrevReadPipe = NULL;
+
+        // Restore console mode for the pipeline
+        SignalHandler::InputDispatcher::getInstance().restore();
         
         for (size_t i = 0; i < commands.size(); i++) {
             SECURITY_ATTRIBUTES saAttr;
@@ -234,6 +194,7 @@ public:
             // Create pipe for output (except for last command)
             if (i < commands.size() - 1) {
                 if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0)) {
+                    SignalHandler::InputDispatcher::getInstance().init();
                     return -1;
                 }
                 SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
@@ -344,6 +305,9 @@ public:
             CloseHandle(processes[i]);
             CloseHandle(threads[i]);
         }
+
+        // Restore raw mode
+        SignalHandler::InputDispatcher::getInstance().init();
         
         return exitCode;
     }
