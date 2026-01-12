@@ -11,6 +11,8 @@
 #include "signal_handler.hpp"
 #include "cmds-src/auto-suggest.hpp"
 #include "shell_streams.hpp"
+#include <map>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -31,6 +33,79 @@ private:
     char lastCharInput;
     std::chrono::time_point<std::chrono::steady_clock> lastTimeInput;
     bool initialized;
+
+    // Auto-Suggestion State
+    struct SuggestionEntry {
+        std::string cmd;
+        int frequency;
+        int lastIndex; // Recency tie-breaker
+        
+        // For binary search comparison
+        bool operator<(const SuggestionEntry& other) const {
+            return cmd < other.cmd;
+        }
+        bool operator<(const std::string& otherCmd) const {
+            return cmd < otherCmd;
+        }
+    };
+    std::vector<SuggestionEntry> frequencyIndex;
+    std::string currentSuggestion;
+
+    void rebuildSuggestions() {
+        if (history.empty()) return;
+
+        std::unordered_map<std::string, std::pair<int, int>> stats; // cmd -> {freq, lastIndex}
+        for (int i = 0; i < (int)history.size(); ++i) {
+            const std::string& cmd = history[i];
+            if (cmd.empty()) continue;
+            stats[cmd].first++;
+            stats[cmd].second = i;
+        }
+
+        frequencyIndex.clear();
+        frequencyIndex.reserve(stats.size());
+        for (const auto& kv : stats) {
+            frequencyIndex.push_back({kv.first, kv.second.first, kv.second.second});
+        }
+        
+        // Sort alphabetically to allow binary search by prefix
+        std::sort(frequencyIndex.begin(), frequencyIndex.end());
+    }
+
+    void updateSuggestion() {
+        currentSuggestion.clear();
+        if (inputBuffer.empty()) return;
+
+        // Binary search for first command starting with inputBuffer
+        auto it = std::lower_bound(frequencyIndex.begin(), frequencyIndex.end(), inputBuffer);
+        
+        int bestFreq = -1;
+        int bestRecency = -1;
+        const SuggestionEntry* bestMatch = nullptr;
+
+        // Iterate while the command still starts with inputBuffer
+        while (it != frequencyIndex.end()) {
+            // Check prefix
+            if (it->cmd.length() < inputBuffer.length() || 
+                it->cmd.compare(0, inputBuffer.length(), inputBuffer) != 0) {
+                break;
+            }
+
+            // Candidate found. Check if it's "better" (higher freq, or same freq & more recent)
+            if (it->cmd != inputBuffer) { // Don't suggest what is already fully typed
+                if (it->frequency > bestFreq || (it->frequency == bestFreq && it->lastIndex > bestRecency)) {
+                    bestFreq = it->frequency;
+                    bestRecency = it->lastIndex;
+                    bestMatch = &(*it);
+                }
+            }
+            ++it;
+        }
+
+        if (bestMatch) {
+            currentSuggestion = bestMatch->cmd;
+        }
+    }
 
 public:
     enum class PollResult {
@@ -175,34 +250,15 @@ private:
 
         io.resetColor();
 
-        // Autosuggest Faint Text
-        if (!inputBuffer.empty()) {
-            auto result = AutoSuggest::getSuggestions(inputBuffer, (int)inputBuffer.length(), currentDir);
-            if (!result.suggestions.empty()) {
-                std::string best = result.suggestions[0];
-                std::string suffix;
-                
-                if (result.isPath) {
-                    std::string currentToken = inputBuffer.substr(result.replaceStart, result.replaceLength);
-                    fs::path tokenPath(currentToken);
-                    std::string prefix = tokenPath.filename().string();
-                     if (best.length() > prefix.length() && 
-                            best.substr(0, prefix.length()) == prefix) { 
-                            suffix = best.substr(prefix.length());
-                    }
-                } else {
-                     if (best.length() > inputBuffer.length() && 
-                        best.substr(0, inputBuffer.length()) == inputBuffer) {
-                        suffix = best.substr(inputBuffer.length());
-                    }
-                }
-                
-                if (!suffix.empty()) {
-                    io.setColor(IO::Console::COLOR_FAINT);
-                    io.write(suffix);
-                    io.resetColor();
-                }
-            }
+        // Autosuggest Ghost Text (Frequency Based)
+        if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
+             // Only display if it matches the prefix (sanity check)
+             if (currentSuggestion.substr(0, inputBuffer.length()) == inputBuffer) {
+                 std::string suffix = currentSuggestion.substr(inputBuffer.length());
+                 io.setColor(IO::Console::COLOR_FAINT); // Dark Gray
+                 io.write(suffix);
+                 io.resetColor();
+             }
         }
         
         // 4. Clear Remainder of Line
@@ -227,6 +283,7 @@ public:
           lastCharInput(0), initialized(false) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
+        rebuildSuggestions(); // Build the frequency index logic
     }
 
     std::string getInputBuffer() const { return inputBuffer; }
@@ -282,7 +339,6 @@ public:
             return PollResult::LineReady;
         } 
             else if (vk == 'A' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
-                // Select All
                 selectionAnchor = 0;
                 cursorPos = (int)inputBuffer.length();
                 render();
@@ -291,10 +347,12 @@ public:
                 lastCharInput = 0; 
                 if (selectionAnchor != -1) {
                     deleteSelection();
+                    updateSuggestion();
                     render();
                 } else if (cursorPos > 0) {
                     inputBuffer.erase(cursorPos - 1, 1);
                     cursorPos--;
+                    updateSuggestion();
                     render();
                 }
             }
@@ -302,9 +360,11 @@ public:
                 lastCharInput = 0; 
                 if (selectionAnchor != -1) {
                     deleteSelection();
+                    updateSuggestion();
                     render();
                 } else if (cursorPos < (int)inputBuffer.length()) {
                     inputBuffer.erase(cursorPos, 1);
+                    updateSuggestion();
                     render();
                 }
             }
@@ -321,7 +381,14 @@ public:
             }
             else if (vk == VK_RIGHT) {
                 lastCharInput = 0; 
-                if (selectionAnchor != -1) {
+                // Accept Ghost Suggestion if at end of line and suggestion exists
+                if (cursorPos == inputBuffer.length() && !currentSuggestion.empty()) {
+                    inputBuffer = currentSuggestion;
+                    cursorPos = (int)inputBuffer.length();
+                    updateSuggestion(); // Likely clears it or finds next
+                    render();
+                }
+                else if (selectionAnchor != -1) {
                     // Normalize cursor to end of selection
                     cursorPos = std::max(selectionAnchor, cursorPos);
                     selectionAnchor = -1;
@@ -376,6 +443,7 @@ public:
                     historyIndex++;
                     inputBuffer = history[history.size() - 1 - historyIndex];
                     cursorPos = (int)inputBuffer.length();
+                    updateSuggestion();
                     render();
                 }
             }
@@ -385,10 +453,13 @@ public:
                     historyIndex--;
                     inputBuffer = history[history.size() - 1 - historyIndex];
                     cursorPos = (int)inputBuffer.length();
+                    updateSuggestion();
                     render();
                 } else if (historyIndex == 0) {
                     historyIndex = -1;
-                    inputBuffer.clear(); cursorPos = 0; render();
+                    inputBuffer.clear(); cursorPos = 0; 
+                    updateSuggestion();
+                    render();
                 }
             }
             else if (vk == VK_TAB) {
@@ -522,6 +593,7 @@ public:
                 } else {
                     inputBuffer.insert(cursorPos, 1, ch);
                     cursorPos++;
+                    updateSuggestion();
                     render();
                     lastCharInput = ch;
                 }
