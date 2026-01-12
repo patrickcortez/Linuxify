@@ -26,6 +26,20 @@ private:
     int promptStartRow;
     int lastNumLines; // Track previous height to clear garbage only when shrinking
     int selectionAnchor; // -1 if no selection, otherwise index where selection started
+    
+    // Key Handling State
+    char lastCharInput;
+    std::chrono::time_point<std::chrono::steady_clock> lastTimeInput;
+    bool initialized;
+
+public:
+    enum class PollResult {
+        Continue,
+        LineReady,
+        Cancelled
+    };
+
+private:
 
     void copyToClipboard(const std::string& text) {
         if (OpenClipboard(NULL)) {
@@ -209,64 +223,64 @@ private:
 
 public:
     InputHandler(const std::string& cwd, const std::vector<std::string>& hist) 
-        : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1) {
+        : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1),
+          lastCharInput(0), initialized(false) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
     }
 
-    std::string readLine() {
-        // Initial Render
-        render();
+    std::string getInputBuffer() const { return inputBuffer; }
 
-        // Register callback for prompt stomping protection
-        ShellIO::sout.registerPromptCallback([this](){ 
-            // Save cursor is handled by render logic mostly, but we might need to ensure connection
-            this->render(); 
-        });
-        ShellIO::sout.setPromptActive(true);
-
-        HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
-        DWORD originalMode;
-        GetConsoleMode(hIn, &originalMode);
-        // REMOVED: SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT); 
-        // We want RAW input to avoid Windows handling dead keys (waiting for second press)
-
-        // Double-tap state
-        char lastCharInput = 0;
-        auto lastTimeInput = std::chrono::steady_clock::now();
-
-        while (true) {
-            SignalHandler::signalHeartbeat();
-            SignalHandler::poll();
-
-            INPUT_RECORD ir;
-            if (!SignalHandler::InputDispatcher::getInstance().getNextBufferedEvent(ir)) {
-                Sleep(10);
-                continue;
-            }
-
-            if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
-
-            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
-            char ch = ir.Event.KeyEvent.uChar.AsciiChar;
-            DWORD ctrl = ir.Event.KeyEvent.dwControlKeyState;
+    PollResult poll() {
+        if (!initialized) {
+             // Initial Render
+            render();
+            ShellIO::sout.registerPromptCallback([this](){ 
+                this->render(); 
+            });
+            ShellIO::sout.setPromptActive(true);
             
-            // Handle "Dead Keys" manually if AsciiChar is 0 but it's a quote key
-            if (ch == 0) {
-                 if (vk == VK_OEM_7) { // Single/Double Quote key
-                     bool shift = (ctrl & SHIFT_PRESSED);
-                     ch = shift ? '"' : '\'';
-                 } else if (vk == VK_OEM_3) { // Tilde/Backtick key
-                     bool shift = (ctrl & SHIFT_PRESSED);
-                     ch = shift ? '~' : '`';
-                 }
-            }
+             // REMOVE ENABLE_PROCESSED_INPUT manually just in case
+            HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+            DWORD mode;
+            GetConsoleMode(hIn, &mode);
+            // We assume InputDispatcher has already set raw mode or equivalent
+            
+            lastTimeInput = std::chrono::steady_clock::now();
+            initialized = true;
+        }
 
-            if (vk == VK_RETURN) {
-                ShellIO::sout.setPromptActive(false);
-                ShellIO::sout << ShellIO::endl; 
-                break;
-            } 
+        SignalHandler::signalHeartbeat();
+        SignalHandler::poll();
+
+        INPUT_RECORD ir;
+        if (!SignalHandler::InputDispatcher::getInstance().getNextBufferedEvent(ir)) {
+            Sleep(10); // Yield CPU
+            return PollResult::Continue;
+        }
+
+        if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) return PollResult::Continue;
+
+        WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
+        char ch = ir.Event.KeyEvent.uChar.AsciiChar;
+        DWORD ctrl = ir.Event.KeyEvent.dwControlKeyState;
+        
+        // Handle "Dead Keys" manually if AsciiChar is 0 but it's a quote key
+        if (ch == 0) {
+             if (vk == VK_OEM_7) { // Single/Double Quote key
+                 bool shift = (ctrl & SHIFT_PRESSED);
+                 ch = shift ? '"' : '\'';
+             } else if (vk == VK_OEM_3) { // Tilde/Backtick key
+                 bool shift = (ctrl & SHIFT_PRESSED);
+                 ch = shift ? '~' : '`';
+             }
+        }
+
+        if (vk == VK_RETURN) {
+            ShellIO::sout.setPromptActive(false);
+            ShellIO::sout << ShellIO::endl; 
+            return PollResult::LineReady;
+        } 
             else if (vk == 'A' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
                 // Select All
                 selectionAnchor = 0;
@@ -472,9 +486,7 @@ public:
                 } else {
                     std::cout << "^C\n";
                     inputBuffer.clear();
-                    ShellIO::sout.setPromptActive(false);
-                    SetConsoleMode(hIn, originalMode);
-                    return ""; // Cancelled
+                    return PollResult::Cancelled;
                 }
             }
             else if (vk == 'X' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
@@ -515,18 +527,11 @@ public:
                 }
                 lastTimeInput = now;
             }
-        }
-
-        ShellIO::sout.setPromptActive(false);
-        SetConsoleMode(hIn, originalMode);
-        return inputBuffer;
+        return PollResult::Continue;
     }
     
     // Static helper to just read a line
-    static std::string read(const std::string& cwd, const std::vector<std::string>& hist) {
-        InputHandler handler(cwd, hist);
-        return handler.readLine();
-    }
+
 
     // Static helper for simple input (prompts, password input) using the unified event loop
     static std::string readSimpleLine(const std::string& prompt = "", bool isPassword = false) {

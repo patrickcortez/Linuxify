@@ -21,9 +21,13 @@ public:
 };
 
 // --- State: Read Input ---
-// Responsible for blocking until user enters a line
+// Responsible for polling input (non-blocking)
 class StateReadInput : public Continuation {
+    std::unique_ptr<InputHandler> handler;
 public:
+    StateReadInput(std::unique_ptr<InputHandler> existingHandler = nullptr) 
+        : handler(std::move(existingHandler)) {}
+
     std::string getName() const override { return "ReadInput"; }
 
     std::unique_ptr<Continuation> run(ShellContext& ctx) override;
@@ -56,28 +60,48 @@ inline std::unique_ptr<Continuation> StatePrompt::run(ShellContext& ctx) {
     
     // Reset for the next cycle
     ctx.previousCommandWasEmpty = false; 
+    
+    // Transition to ReadInput with a fresh handler (nullptr)
     return std::make_unique<StateReadInput>();
 }
 
 inline std::unique_ptr<Continuation> StateReadInput::run(ShellContext& ctx) {
-    // This call manages the prompt printing + input reading + history
-    std::string input = InputHandler::read(ctx.currentDir, ctx.commandHistory);
+    // Lazy Initialization of Handler
+    if (!handler) {
+        handler = std::make_unique<InputHandler>(ctx.currentDir, ctx.commandHistory);
+    }
 
-    // Trim whitespace
-    size_t first = input.find_first_not_of(" \t");
-    if (first == std::string::npos) {
-        // Empty command
-        ctx.previousCommandWasEmpty = true;
+    // POLL (Non-Blocking)
+    InputHandler::PollResult result = handler->poll();
+
+    if (result == InputHandler::PollResult::LineReady) {
+        // Input Complete
+        std::string input = handler->getInputBuffer();
+        
+        // Trim whitespace
+        size_t first = input.find_first_not_of(" \t");
+        if (first == std::string::npos) {
+            // Empty command
+            ctx.previousCommandWasEmpty = true;
+            return std::make_unique<StatePrompt>();
+        }
+        
+        size_t last = input.find_last_not_of(" \t");
+        input = input.substr(first, (last - first + 1));
+        
+        // Separation: Print newline immediately after input is done
+        // (Handled by InputHandler::poll in LineReady case usually, but ensures consistency)
+        
+        return std::make_unique<StateExecute>(input);
+    } 
+    else if (result == InputHandler::PollResult::Cancelled) {
+        // Ctrl+C pressed
+        ctx.previousCommandWasEmpty = true; // Avoid double newline
         return std::make_unique<StatePrompt>();
     }
     
-    size_t last = input.find_last_not_of(" \t");
-    input = input.substr(first, (last - first + 1));
-
-    // Separation: Print newline immediately after input (before output)
-    ShellIO::sout << ShellIO::endl;
-
-    return std::make_unique<StateExecute>(input);
+    // CONTINUE LOOPING (Recursion via trampoline)
+    return std::make_unique<StateReadInput>(std::move(handler));
 }
 
 inline std::unique_ptr<Continuation> StateExecute::run(ShellContext& ctx) {
