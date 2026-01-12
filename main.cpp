@@ -7149,36 +7149,14 @@ public:
                         cmdLine += " \"" + expandedTokens[i] + "\"";
                     }
                     
-                    STARTUPINFOA si;
-                    PROCESS_INFORMATION pi;
-                    ZeroMemory(&si, sizeof(si));
-                    si.cb = sizeof(si);
-                    ZeroMemory(&pi, sizeof(pi));
-                    
-                    char cmdBuffer[4096];
-                    strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
-                    
-                    if (CreateProcessA(
-                        NULL,
-                        cmdBuffer,
-                        NULL,
-                        NULL,
-                        TRUE,
-                        0,
-                        NULL,
-                        ctx.currentDir.c_str(),
-                        &si,
-                        &pi
-                    )) {
-                        WaitForSingleObject(pi.hProcess, INFINITE);
-                        CloseHandle(pi.hProcess);
-                        CloseHandle(pi.hThread);
-                    }
-                    
                     foundInCmds = true;
+                    // Use ChildHandler for consistent console behavior
+                    ctx.lastExitCode = ChildHandler::spawn(cmdLine, ctx.currentDir, true);
                     break;
                 }
             }
+                    
+
             
             if (!foundInCmds) {
                 if (!g_registry.executeRegisteredCommand(cmd, expandedTokens, ctx.currentDir)) {
@@ -7339,40 +7317,7 @@ public:
             }
         }
         
-        STARTUPINFOA si;
-        PROCESS_INFORMATION pi;
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        ZeroMemory(&pi, sizeof(pi));
-        
-        char cmdBuffer[4096];
-        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
-        
-        if (CreateProcessA(
-            NULL,
-            cmdBuffer,
-            NULL,
-            NULL,
-            TRUE,
-            0,
-            NULL,
-            ctx.currentDir.c_str(),
-            &si,
-            &pi
-        )) {
-            WaitForSingleObject(pi.hProcess, INFINITE);
-            
-            DWORD exitCode;
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-            ctx.lastExitCode = (int)exitCode;
-            
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-        } else {
-            DWORD err = GetLastError();
-            printError("Failed to execute (error " + std::to_string(err) + ")");
-            ctx.lastExitCode = 1;
-        }
+        ctx.lastExitCode = ChildHandler::spawn(cmdLine, ctx.currentDir, true);
     }
 
     void init() {

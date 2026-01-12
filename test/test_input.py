@@ -1,15 +1,16 @@
 import sys
 import time
 
-print("Starting input test...")
-print("Try typing something and pressing Enter.")
-print("Or try pressing Ctrl+C to exit.")
+print(f"Stdin isatty: {sys.stdin.isatty()}")
+print(f"Stdout isatty: {sys.stdout.isatty()}")
+sys.stdout.flush()
+
+print("Starting input test...", flush=True)
+print("Try typing something and pressing Enter.", flush=True)
+print("Or try pressing Ctrl+C to exit.", flush=True)
 
 try:
-    if sys.version_info.major < 3:
-        i = raw_input("Input: ")
-    else:
-        i = input("Input: ")
+    i = input("Input: ")
     print(f"You entered: {i}")
 except KeyboardInterrupt:
     print("\nCaught KeyboardInterrupt (Ctrl+C)!")

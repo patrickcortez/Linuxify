@@ -2,14 +2,11 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
-./a.exe=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\./a.exe
-adb=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\adb.exe
 cargo=C:\Users\patri\.cargo\bin\cargo.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
 code=C:\Users\patri\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd
 convert=C:\WINDOWS\system32\convert.exe
 curl=C:\WINDOWS\system32\curl.exe
-fastboot=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\fastboot.exe
 find=C:\WINDOWS\system32\find.exe
 g++=C:\mingw64\mingw64\bin\g++.exe
 gcc=C:\mingw64\mingw64\bin\gcc.exe
@@ -20,6 +17,9 @@ lino=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\lino.exe
 mysql=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe
 netstat=C:\WINDOWS\system32\netstat.exe
 ninja=C:\mingw64\mingw64\bin\ninja.exe
+node=C:\Program Files\nodejs\node.exe
+npm=C:\Program Files\nodejs\npm.cmd
+npx=C:\Program Files\nodejs\npx.cmd
 nslookup=C:\WINDOWS\system32\nslookup.exe
 nvim=C:\Program Files\Neovim\bin\nvim.exe
 ping=C:\WINDOWS\system32\ping.exe
@@ -31,11 +31,8 @@ rustc=C:\Users\patri\.cargo\bin\rustc.exe
 rustup=C:\Users\patri\.cargo\bin\rustup.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
-shutdown=C:\WINDOWS\system32\shutdown.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
-sudo=C:\WINDOWS\system32\sudo.exe
 tar=C:\WINDOWS\system32\tar.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com
-where=C:\WINDOWS\system32\where.exe
 winget=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\winget.exe
