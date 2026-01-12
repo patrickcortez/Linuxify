@@ -3026,3 +3026,49 @@ ls
 ls
 git status
 git add -A
+git commit -m "Fixed Auto nav and variables not being init"
+git push turtle master
+ls
+ls -la
+clear
+ai "Why tf do i need to learn engineering management?"
+ai "anyways can i make you do stuff in my terminal? or are api keys purely text based"
+ai "ik but can you say manage stuff for my at your end?"
+ai "like handling my fs or running commands, or checking my repos or folders"
+ai "like handling my fs or running commands, or checking my repos or folders"
+ai "like handling my fs or running commands, or checking my repos or folders"
+ai "like handling my fs or running commands, or checking my repos or folders"
+history
+ls
+ai "Whats the current status of the ram shortage"
+ai "how much is the price increase of ram now compare 4 years ago"
+"damnnn thats like Php 5000 to Php 6000"
+ai "damnnn thats like Php 5000 to Php 6000"
+shutdown /s /t 0
+ai ./test-repo/
+ai "can i add different programming languages on my c++ project?"
+help
+ai "can i add different programming languages on my c++ project?"
+ping 8.8.8.8
+abd
+adb
+ai "whats the best hugging face ai for automation below 1gb?"
+ai "whats the best hugging face ai for automation below 1gb?"
+ai "Why is c++ so good in 2026?"
+./OneDrive/Documents
+./Projects
+ls
+./Networking/
+python main.py
+ping 192.168.249.163
+traceroute 192.168.249.163
+traceroute wha.wtf
+traceroute wha.wtf
+ping wha.wtf
+ping wha.tf
+ping 192.168.249.163
+ping google.com
+ai "Best languages other than C++, that i can integrate in my proj?"
+cls
+ai "Hello from terminal"
+clear

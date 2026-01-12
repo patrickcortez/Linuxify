@@ -30,6 +30,7 @@ rustc=C:\Users\patri\.cargo\bin\rustc.exe
 rustup=C:\Users\patri\.cargo\bin\rustup.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
+shutdown=C:\WINDOWS\system32\shutdown.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
 sudo=C:\WINDOWS\system32\sudo.exe
 tar=C:\WINDOWS\system32\tar.exe
