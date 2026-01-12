@@ -2,6 +2,7 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
+./a.exe=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\./a.exe
 adb=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\adb.exe
 cargo=C:\Users\patri\.cargo\bin\cargo.exe
 cmake=C:\Program Files\CMake\bin\cmake.exe
@@ -30,6 +31,7 @@ rustup=C:\Users\patri\.cargo\bin\rustup.exe
 scoop=C:\Users\patri\scoop\shims\scoop.cmd
 scp=C:\WINDOWS\System32\OpenSSH\scp.exe
 ssh=C:\WINDOWS\System32\OpenSSH\ssh.exe
+sudo=C:\WINDOWS\system32\sudo.exe
 tar=C:\WINDOWS\system32\tar.exe
 tracert=C:\WINDOWS\system32\tracert.exe
 tree=C:\WINDOWS\system32\tree.com

@@ -25,6 +25,31 @@ private:
     int cursorPos;
     int promptStartRow;
     int lastNumLines; // Track previous height to clear garbage only when shrinking
+    int selectionAnchor; // -1 if no selection, otherwise index where selection started
+
+    void copyToClipboard(const std::string& text) {
+        if (OpenClipboard(NULL)) {
+            EmptyClipboard();
+            HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+            if (hg) {
+                memcpy(GlobalLock(hg), text.c_str(), text.size() + 1);
+                GlobalUnlock(hg);
+                SetClipboardData(CF_TEXT, hg);
+            }
+            CloseClipboard();
+        }
+    }
+
+    void deleteSelection() {
+        if (selectionAnchor == -1) return;
+        int start = std::min(selectionAnchor, cursorPos);
+        int end = std::max(selectionAnchor, cursorPos);
+        if (start != end) {
+            inputBuffer.erase(start, end - start);
+            cursorPos = start;
+        }
+        selectionAnchor = -1;
+    }
 
     void printPrompt() {
         IO::get().setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
@@ -75,9 +100,22 @@ private:
         bool isFirstToken = true;
         size_t tokenStart = 0;
 
+        int selStart = -1, selEnd = -1;
+        if (selectionAnchor != -1) {
+            selStart = std::min(selectionAnchor, cursorPos);
+            selEnd = std::max(selectionAnchor, cursorPos);
+        }
+
         for (size_t i = 0; i < inputBuffer.length(); i++) {
             char c = inputBuffer[i];
             
+            // Selection Highlight Override
+            if (selStart != -1 && (int)i >= selStart && (int)i < selEnd) {
+                io.setColor(BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+                std::string s(1, c); io.write(s);
+                continue; // Skip syntax highlighting for selected text
+            }
+
             if ((c == '"' || c == '\'') && !inQuotes) {
                 inQuotes = true;
                 quoteChar = c;
@@ -111,8 +149,6 @@ private:
             } else if (c == '-') {
                  io.setColor(IO::Console::COLOR_FLAG);
             } else {
-                 // Simple heuristic: if previous char was flag color, keep flag color? 
-                 // Sticking to robust logic from main.cpp: check if we are in a token starting with -
                  bool isInFlag = false;
                  for (size_t j = tokenStart; j < i; j++) {
                      if (inputBuffer[j] == '-') { isInFlag = true; break; }
@@ -173,7 +209,7 @@ private:
 
 public:
     InputHandler(const std::string& cwd, const std::vector<std::string>& hist) 
-        : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1) {
+        : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
     }
@@ -192,7 +228,8 @@ public:
         HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
         DWORD originalMode;
         GetConsoleMode(hIn, &originalMode);
-        SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT); // Raw-ish mode
+        // REMOVED: SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT); 
+        // We want RAW input to avoid Windows handling dead keys (waiting for second press)
 
         // Double-tap state
         char lastCharInput = 0;
@@ -213,34 +250,69 @@ public:
             WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
             char ch = ir.Event.KeyEvent.uChar.AsciiChar;
             DWORD ctrl = ir.Event.KeyEvent.dwControlKeyState;
+            
+            // Handle "Dead Keys" manually if AsciiChar is 0 but it's a quote key
+            if (ch == 0) {
+                 if (vk == VK_OEM_7) { // Single/Double Quote key
+                     bool shift = (ctrl & SHIFT_PRESSED);
+                     ch = shift ? '"' : '\'';
+                 } else if (vk == VK_OEM_3) { // Tilde/Backtick key
+                     bool shift = (ctrl & SHIFT_PRESSED);
+                     ch = shift ? '~' : '`';
+                 }
+            }
 
             if (vk == VK_RETURN) {
                 ShellIO::sout.setPromptActive(false);
                 ShellIO::sout << ShellIO::endl; 
                 break;
             } 
+            else if (vk == 'A' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
+                // Select All
+                selectionAnchor = 0;
+                cursorPos = (int)inputBuffer.length();
+                render();
+            }
             else if (vk == VK_BACK) {
-                lastCharInput = 0; // Reset double tap
-                if (cursorPos > 0) {
+                lastCharInput = 0; 
+                if (selectionAnchor != -1) {
+                    deleteSelection();
+                    render();
+                } else if (cursorPos > 0) {
                     inputBuffer.erase(cursorPos - 1, 1);
                     cursorPos--;
                     render();
                 }
             }
             else if (vk == VK_DELETE) {
-                lastCharInput = 0; // Reset double tap
-                if (cursorPos < (int)inputBuffer.length()) {
+                lastCharInput = 0; 
+                if (selectionAnchor != -1) {
+                    deleteSelection();
+                    render();
+                } else if (cursorPos < (int)inputBuffer.length()) {
                     inputBuffer.erase(cursorPos, 1);
                     render();
                 }
             }
             else if (vk == VK_LEFT) {
-                lastCharInput = 0; // Reset double tap
-                if (cursorPos > 0) { cursorPos--; render(); }
+                lastCharInput = 0; 
+                if (selectionAnchor != -1) {
+                    // Normalize cursor to start of selection
+                    cursorPos = std::min(selectionAnchor, cursorPos);
+                    selectionAnchor = -1;
+                    render();
+                } else if (cursorPos > 0) { 
+                    cursorPos--; render(); 
+                }
             }
             else if (vk == VK_RIGHT) {
-                lastCharInput = 0; // Reset double tap
-                if (cursorPos < (int)inputBuffer.length()) {
+                lastCharInput = 0; 
+                if (selectionAnchor != -1) {
+                    // Normalize cursor to end of selection
+                    cursorPos = std::max(selectionAnchor, cursorPos);
+                    selectionAnchor = -1;
+                    render();
+                } else if (cursorPos < (int)inputBuffer.length()) {
                      cursorPos++; render(); 
                 } else {
                     // Accept Autosuggest
@@ -392,43 +464,56 @@ public:
                 }
             }
             else if (vk == 'C' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
-                std::cout << "^C\n";
-                inputBuffer.clear();
-                ShellIO::sout.setPromptActive(false);
-                SetConsoleMode(hIn, originalMode);
-                return ""; // Cancelled
+                if (selectionAnchor != -1 && selectionAnchor != cursorPos) {
+                    // Copy
+                    int start = std::min(selectionAnchor, cursorPos);
+                    int end = std::max(selectionAnchor, cursorPos);
+                    copyToClipboard(inputBuffer.substr(start, end - start));
+                } else {
+                    std::cout << "^C\n";
+                    inputBuffer.clear();
+                    ShellIO::sout.setPromptActive(false);
+                    SetConsoleMode(hIn, originalMode);
+                    return ""; // Cancelled
+                }
+            }
+            else if (vk == 'X' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
+                // Cut
+                 if (selectionAnchor != -1 && selectionAnchor != cursorPos) {
+                    int start = std::min(selectionAnchor, cursorPos);
+                    int end = std::max(selectionAnchor, cursorPos);
+                    copyToClipboard(inputBuffer.substr(start, end - start));
+                    deleteSelection();
+                    render();
+                }
             }
             else if (ch >= 32 && ch < 127) {
-                // Double tap detection
                 auto now = std::chrono::steady_clock::now();
-                auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTimeInput).count();
                 
-                bool handled = false;
-                if (ch == lastCharInput && diff < 500) { // 500ms window
-                    char closing = 0;
-                    if (ch == '"') closing = '"';
-                    else if (ch == '\'') closing = '\'';
-                    else if (ch == '(') closing = ')';
-                    else if (ch == '[') closing = ']';
-                    else if (ch == '{') closing = '}';
-                    
-                    if (closing != 0) {
-                        // Insert closing char at cursor (cursor is essentially between the pair now)
-                        inputBuffer.insert(cursorPos, 1, closing);
-                        // Do NOT advance cursor, so it stays inside
-                        render();
-                        lastCharInput = 0; // Prevent triple-tap issues
-                        handled = true;
-                    }
+                // If text selected, delete it first
+                if (selectionAnchor != -1) {
+                    deleteSelection();
                 }
-                
-                if (!handled) {
+
+                // Auto-Pairing Logic
+                char closing = 0;
+                if (ch == '(') closing = ')';
+                else if (ch == '[') closing = ']';
+                else if (ch == '{') closing = '}';
+                if (closing != 0) {
+                    // Insert Pair: "()"
+                    inputBuffer.insert(cursorPos, 1, ch);
+                    inputBuffer.insert(cursorPos + 1, 1, closing);
+                    cursorPos++; // Position cursor between them
+                    render();
+                    lastCharInput = 0; 
+                } else {
                     inputBuffer.insert(cursorPos, 1, ch);
                     cursorPos++;
                     render();
                     lastCharInput = ch;
-                    lastTimeInput = now;
                 }
+                lastTimeInput = now;
             }
         }
 

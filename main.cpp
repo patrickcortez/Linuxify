@@ -60,6 +60,19 @@ class ShellLogic {
 private:
     ShellContext& ctx; 
 
+    // Internal commands set
+    const std::set<std::string> internalCmds = {
+        "echo", "pwd", "cd", "ls", "dir", "cat", "type", "mkdir", "rm", "rmdir",
+        "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
+        "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
+        "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
+        "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
+        "tree", "du", "lin", "top", "jobs", "fg", "less", "more", "uninstall",
+        "setup", "alias", "unalias", "source", "read", "test", "true", "false",
+        "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
+        "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes"
+    }; 
+
 
 public:
     ShellLogic(ShellContext& context) : ctx(context) {}
@@ -137,17 +150,7 @@ public:
         std::string cmd = tokens[0];
         
         // Check if it's an internal command - if so, route to internal handler
-        static std::set<std::string> internalCmds = {
-            "echo", "pwd", "cd", "ls", "dir", "cat", "type", "mkdir", "rm", "rmdir",
-            "mv", "cp", "touch", "chmod", "chown", "clear", "cls", "env", "export",
-            "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
-            "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
-            "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
-            "tree", "du", "lin", "top", "jobs", "fg", "less", "more", "uninstall",
-            "setup", "alias", "unalias", "source", "read", "test", "true", "false",
-            "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
-            "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes"
-        };
+
         
         if (internalCmds.count(cmd)) {
             // Execute as internal command via executeAndCapture or directly
@@ -394,6 +397,9 @@ public:
                 printError("Could not find home directory");
                 return;
             }
+        } else if (args[1] == "...") {
+            printError("cd: ...: No such file or directory");
+            return;
         } else {
             targetDir = resolvePath(args[1]);
         }
@@ -1296,6 +1302,7 @@ public:
 
     // Load history from file
     void loadHistory() {
+        ctx.commandHistory.clear();
         std::ifstream file(getHistoryFilePath());
         if (file) {
             std::string line;
@@ -1311,7 +1318,19 @@ public:
     void saveToHistory(const std::string& cmd) {
         ctx.commandHistory.push_back(cmd);
         
-        std::ofstream file(getHistoryFilePath(), std::ios::app);
+        std::string path = getHistoryFilePath();
+        std::ofstream file(path, std::ios::app);
+        
+        if (!file) {
+            // Robustness: If open failed, try re-creating the directory
+            // This handles cases where the user deleted the linuxdb folder while shell was running
+            fs::path p(path);
+            try {
+                fs::create_directories(p.parent_path());
+                file.open(path, std::ios::app);
+            } catch (...) {}
+        }
+
         if (file) {
             file << cmd << "\n";
         }
@@ -8411,10 +8430,23 @@ public:
     }
 
     int executeCommandLine(const std::string& cmdLine) {
-        std::string trimmed = cmdLine;
+        // Expand variables first
+        std::string expanded = expandVariables(cmdLine);
+        
+        std::string trimmed = expanded;
         trimmed.erase(0, trimmed.find_first_not_of(" \t"));
         if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
-        if (trimmed.empty()) return 0;
+        
+        // Explicit AutoNav: if inputs start with markers (./, /, ~, ..)
+        if (AutoNav::isNavigablePath(trimmed, ctx.currentDir)) {
+            std::string targetDir = AutoNav::getResolvedDirectory(trimmed, ctx.currentDir);
+            try {
+                if (fs::exists(targetDir) && fs::is_directory(targetDir)) {
+                    ctx.currentDir = fs::canonical(targetDir).string();
+                    return 0;
+                }
+            } catch (...) {}
+        }
 
         if (handleRedirection(trimmed)) {
             return ctx.lastExitCode;
@@ -8422,8 +8454,36 @@ public:
 
         std::vector<std::string> tokens = tokenize(trimmed);
         if (tokens.empty()) return 0;
+        
+        std::string cmd = tokens[0];
+        
+        // Implicit AutoNav logic: Check if command exists
+        bool isCommand = false;
+        if (internalCmds.count(cmd)) isCommand = true;
+        else if (!g_registry.getExecutablePath(cmd).empty()) isCommand = true;
+        // Note via PATH search is hard to check perfectly without attempting execution, 
+        // but we prioritize local dir if not internal/registry.
+        
+        if (!isCommand) {
+            // Check if it is a directory
+            if (fs::exists(trimmed) && fs::is_directory(trimmed)) {
+                try {
+                    ctx.currentDir = fs::canonical(trimmed).string();
+                    return 0;
+                } catch(...) {}
+            }
+            // Check if it is a file
+            else if (fs::exists(trimmed) && !fs::is_directory(trimmed)) {
+                printError(trimmed + ": Is a file");
+                return 1;
+            }
+        }
 
-        std::string& cmd = tokens[0];
+        // Re-tokenize after potential AutoNav handling if it wasn't a directory change
+        tokens = tokenize(trimmed);
+        if (tokens.empty()) return 0;
+
+        cmd = tokens[0];
 
         if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\" ||
             cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos ||
@@ -8744,7 +8804,7 @@ public:
                 continue;  // Redirection handled the command
             }
 
-            // Fish-like auto-cd: if input is a path to a directory, auto-navigate
+            
             if (AutoNav::isNavigablePath(input, ctx.currentDir)) {
                 std::string targetDir = AutoNav::getResolvedDirectory(input, ctx.currentDir);
                 try {
@@ -8866,7 +8926,14 @@ public:
 
 // --- Glue Logic ---
 void execute_command_logic(ShellContext& ctx, const std::string& input) {
+    std::string trimmed = input;
+    trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+    if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+
     ShellLogic logic(ctx);
+    if (!trimmed.empty()) {
+        logic.saveToHistory(trimmed);
+    }
     logic.executeCommandLine(input);
 }
 
