@@ -104,6 +104,41 @@ private:
 
         if (bestMatch) {
             currentSuggestion = bestMatch->cmd;
+        } else {
+             // Fallback: AutoSuggest (Filesystem)
+             auto result = AutoSuggest::getSuggestions(inputBuffer, (int)inputBuffer.length(), currentDir);
+             if (!result.suggestions.empty()) {
+                 std::string best = result.suggestions[0];
+                 
+                 // Reconstruct full command line from suggestion
+                 std::string prefix = inputBuffer.substr(0, result.replaceStart);
+                 std::string token = inputBuffer.substr(result.replaceStart);
+                 
+                 if (result.isPath) {
+                     // Token might be partial path, best is filename
+                     // We need to keep the folder part of the token
+                     fs::path p(token);
+                     std::string parent = p.parent_path().string();
+                     
+                     // Add separator if parent exists and lacks it
+                     if (!parent.empty()) {
+                         // Windows/Linux separator check
+                         char last = parent.back();
+                         if (last != '/' && last != '\\') parent += "/";
+                     } else if (token == "/" || token == "\\") {
+                         // Root handling
+                         parent = token;
+                     } else if (token.find('/') != std::string::npos || token.find('\\') != std::string::npos) {
+                          // Handle cases like "./" where parent_path returns "."
+                          if (token.back() == '/' || token.back() == '\\') parent = token;
+                     }
+                     
+                     currentSuggestion = prefix + parent + best;
+                 } else {
+                     // Command 
+                     currentSuggestion = prefix + best;
+                 }
+             }
         }
     }
 
@@ -250,10 +285,15 @@ private:
 
         io.resetColor();
 
-        // Autosuggest Ghost Text (Frequency Based)
+        // Autosuggest Ghost Text (Frequency Based + Filesystem Fallback)
         if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
-             // Only display if it matches the prefix (sanity check)
-             if (currentSuggestion.substr(0, inputBuffer.length()) == inputBuffer) {
+             // Case-insensitive check for prefix match
+             std::string bufLower = inputBuffer;
+             std::string sugLower = currentSuggestion.substr(0, inputBuffer.length());
+             std::transform(bufLower.begin(), bufLower.end(), bufLower.begin(), ::tolower);
+             std::transform(sugLower.begin(), sugLower.end(), sugLower.begin(), ::tolower);
+
+             if (bufLower == sugLower) {
                  std::string suffix = currentSuggestion.substr(inputBuffer.length());
                  io.setColor(IO::Console::COLOR_FAINT); // Dark Gray
                  io.write(suffix);
