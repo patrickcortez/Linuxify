@@ -196,7 +196,20 @@ private:
         
         // Calculate dimensions
         int promptLen = 9 + (int)currentDir.length() + 2; 
-        int totalLen = promptLen + (int)inputBuffer.length();
+        
+        int contentLen = (int)inputBuffer.length();
+        if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
+             std::string bufLower = inputBuffer;
+             std::string sugLower = currentSuggestion.substr(0, inputBuffer.length());
+             std::transform(bufLower.begin(), bufLower.end(), bufLower.begin(), ::tolower);
+             std::transform(sugLower.begin(), sugLower.end(), sugLower.begin(), ::tolower);
+
+             if (bufLower == sugLower) {
+                 contentLen = (int)currentSuggestion.length();
+             }
+        }
+
+        int totalLen = promptLen + contentLen;
         int numLines = (totalLen + width - 1) / width;
         if (numLines < 1) numLines = 1;
 

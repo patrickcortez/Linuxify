@@ -1,6 +1,7 @@
 # Linuxify Persistent Variables
 # Format: VAR=value or ARR[]={val1,val2,val3}
 
+GEMINI_API_KEY=AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8
 HOME=C:\Users\patri
 MASTER=LINOS_TORVARDS
 cmd=ssh -p 8022 cortez@192.168.254.109

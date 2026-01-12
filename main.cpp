@@ -1860,6 +1860,13 @@ public:
             }
             
             std::string name = arg.substr(0, eqPos);
+            
+            // Trim whitespace from name
+            size_t first = name.find_first_not_of(" \t");
+            if (first == std::string::npos) continue; // All spaces
+            size_t last = name.find_last_not_of(" \t");
+            name = name.substr(first, (last - first + 1));
+
             std::string value = arg.substr(eqPos + 1);
             
             if (value.length() >= 2 && 
@@ -6636,7 +6643,7 @@ public:
             cmdChmod(expandedTokens);
         } else if (cmd == "chown") {
             cmdChown(expandedTokens);
-        } else if (cmd == "clear" || cmd == "cls") {
+        } else if (cmd == "clear") {
             cmdClear(expandedTokens);
         } else if (cmd == "help") {
             cmdHelp(expandedTokens);
@@ -7248,7 +7255,7 @@ public:
             ctx.lastExitCode = 1;
         }
 
-        if (cmd != "clear" && cmd != "cls" && ctx.running) {
+        if (cmd != "clear" && ctx.running) {
             ShellIO::sout << ShellIO::endl;
         }
     }
@@ -7429,7 +7436,7 @@ public:
     bool isBuiltinCommand(const std::string& cmd) {
         static std::vector<std::string> builtins = {
             "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy", 
-            "cat", "type", "touch", "chmod", "chown", "clear", "cls", "help", 
+            "cat", "type", "touch", "chmod", "chown", "clear", "help", 
             "lino", "lin", "registry", "history", "whoami", "echo", "env", 
             "printenv", "export", "which", "ps", "kill", "top", "htop", "jobs", "fg",
             "grep", "head", "tail", "wc", "sort", "uniq", "find",
@@ -8326,7 +8333,7 @@ public:
             // Check if all commands are external (use real pipes) or mixed (hybrid approach)
             static std::set<std::string> internalPipeCmds = {
                 "echo", "pwd", "cd", "ls", "dir", "cat", "type", "mkdir", "rm", "rmdir",
-                "mv", "cp", "touch", "chmod", "chown", "clear", "cls", "env", "export",
+                "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
                 "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
                 "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
                 "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
@@ -8659,6 +8666,7 @@ public:
         
         // Load History (was in run() before)
         logic.loadHistory(); 
+        logic.loadPersistentVars(); 
         
         // Print Tux (was in run() before)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);

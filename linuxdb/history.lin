@@ -2950,3 +2950,79 @@ ls
 ./..
 ./OneDrive/Downloads
 ./OneDrive/Download
+./...
+ls
+clear
+./....
+./........
+./........................
+./..............................................
+./...
+./.....
+./.........
+./..............................................
+cls
+cls
+clear
+g++ -std=c++17 -static -o ai.exe ai.cpp -lwininet
+export GEMINI_API_KEY="AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8"
+ai "Hello"
+$(GEMINI_API_KEY)
+echo $(GEMINI_API_KEY)
+echo $(USERNAME)
+env
+var
+var list
+echo $MASTER
+echo $()MASTER)
+echo $(MASTER)
+echo $MASTER
+echo $MASTER
+echo $MASTER
+export GEMINI_API_KEY="AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8"
+echo $GEMINI_API_KEY
+ai hello
+ai
+ai "Hello"
+export -p GEMINI_API_KEY="AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8AIzaSyCl_rJX2iIjj1WnkCp5DNfFxEdMh0UhIH8"
+clear
+cls
+ai "Hello"
+ai hello
+var list
+ai hello
+./Documents/Projects/Nonoy
+./Documents/Projects/
+ls
+./Documents/Projects
+ls
+cd Documents
+ls
+cd .
+cd ..
+ls
+ai hello
+exit
+ping 8.8.8.8
+ping 8.8.8.8
+ping google.com
+ai hello
+ai hello
+ai hello
+ai hello
+ai hello
+ai best way to implement error handling in shell
+ai best way to implement error handling in shell
+ai "Hello there"
+ai "Who am i talking to"
+ai "Write a python code that scans for any file type"
+ai "Write a python code that scans for any file type"
+ai
+ai "Why do i easily get bored?"
+./test
+ls
+./test.sh
+./OneDrive/Documents/Projects/Linuxify/
+ls
+git status
+git add -A

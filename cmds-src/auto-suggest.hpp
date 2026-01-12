@@ -18,7 +18,7 @@ public:
     static const std::vector<std::string>& getBuiltinCommands() {
         static std::vector<std::string> commands = {
             "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy",
-            "cat", "type", "touch", "chmod", "chown", "clear", "cls", "help",
+            "cat", "type", "touch", "chmod", "chown", "clear", "help",
             "lino", "lin", "registry", "history", "whoami", "echo", "env",
             "printenv", "export", "which", "where", "ps", "kill", "top", "htop", "jobs", "fg",
             "grep", "head", "tail", "wc", "sort", "uniq", "find",

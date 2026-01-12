@@ -43,6 +43,27 @@ public:
         
         if (!looksLikePath) return false;
         
+        // Strict Dot Validation: Reject components like "...", "...."
+        size_t start = 0;
+        for (size_t i = 0; i <= trimmed.length(); ++i) {
+            if (i == trimmed.length() || trimmed[i] == '/' || trimmed[i] == '\\') {
+                if (i > start) {
+                    std::string component = trimmed.substr(start, i - start);
+                    bool allDots = true;
+                    for (char c : component) {
+                        if (c != '.') {
+                            allDots = false;
+                            break;
+                        }
+                    }
+                    if (allDots && component.length() > 2) {
+                        return false; 
+                    }
+                }
+                start = i + 1;
+            }
+        }
+        
         // Resolve and check if it's a directory
         std::string resolvedPath = resolvePath(trimmed, currentDir);
         
