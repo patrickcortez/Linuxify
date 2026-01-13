@@ -20,6 +20,7 @@ struct ShellContext {
     // Process State
     bool running = true;
     int lastExitCode = 0;
+    bool isAdmin = false;
     
     // Environment
     std::string currentDir;

@@ -3605,3 +3605,10 @@ declare var="";read -p "what you want?" var; echo "said $var";
 declare var="";read -p "what you want?" var; echo "My master said $var";
 simple() { echo "Compact function"; }
 simple
+is-admin
+hello
+hello
+funux
+funux
+lino
+where funux

@@ -33,6 +33,7 @@ private:
     char lastCharInput;
     std::chrono::time_point<std::chrono::steady_clock> lastTimeInput;
     bool initialized;
+    bool isAdmin;
 
     // Auto-Suggestion State
     struct SuggestionEntry {
@@ -186,7 +187,11 @@ private:
         IO::get().write(currentDir);
         
         IO::get().setColor(IO::Console::COLOR_DEFAULT);
-        IO::get().write("$ ");
+        if (isAdmin) {
+            IO::get().write("# ");
+        } else {
+            IO::get().write("$ ");
+        }
     }
 
     void render() {
@@ -331,9 +336,9 @@ private:
     }
 
 public:
-    InputHandler(const std::string& cwd, const std::vector<std::string>& hist) 
+    InputHandler(const std::string& cwd, const std::vector<std::string>& hist, bool admin = false) 
         : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1),
-          lastCharInput(0), initialized(false) {
+          lastCharInput(0), initialized(false), isAdmin(admin) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
         rebuildSuggestions(); // Build the frequency index logic

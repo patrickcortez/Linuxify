@@ -85,6 +85,20 @@ class ShellLogic {
 
 public:
     ShellLogic(ShellContext& context) : ctx(context) {
+        // Check Admin Status
+        {
+            BOOL isAdmin = FALSE;
+            PSID adminGroup = NULL;
+            SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+            if (AllocateAndInitializeSid(&ntAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+                CheckTokenMembership(NULL, adminGroup, &isAdmin);
+                FreeSid(adminGroup);
+            }
+            ctx.isAdmin = (isAdmin == TRUE);
+            ctx.sessionEnv["IS_ADMIN"] = ctx.isAdmin ? "1" : "0";
+        }
+
         // Bind interpreter to shell context variables for shared state
         ctx.interpreter.bindVariables(ctx.sessionEnv);
         ctx.interpreter.bindArrays(&ctx.sessionArrayEnv);
