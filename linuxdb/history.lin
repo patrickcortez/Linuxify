@@ -3577,3 +3577,31 @@ cler
 clear
 ls
 help
+declare Var="Hello";echo $Var
+declare Var="Hello";echo $Var
+declare Var="Hello";echo $Var;
+ls
+clear
+ls | grep -n ".txt" | grep -n "n"
+git status
+git
+clear
+declare Var="Hello World";echo $Var;
+declare Var=23;echo 2 - $Var;
+declare Var=23;echo $(2 - $Var);
+declare Var=23;echo $(2 - $Var);
+function
+declare var="";read -p "what you want?" var; echo $var;
+declare var="";read -p "what you want?" var; echo $var;
+declare var="";read -p "what you want?" var; echo "said $var";
+declare var="";read -p "what you want?" var; echo "said $(var)";
+echo $MASTER
+echo "master is $MASTER"
+var list
+echo "master is $words[0]"
+echo "master is $words[1]"
+echo "Dir: $words[1]"
+declare var="";read -p "what you want?" var; echo "said $var";
+declare var="";read -p "what you want?" var; echo "My master said $var";
+simple() { echo "Compact function"; }
+simple

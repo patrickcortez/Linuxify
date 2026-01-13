@@ -1,6 +1,8 @@
 // Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
 // Alternate compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
+#include <io.h>
+#include <stdio.h>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -83,6 +85,23 @@ class ShellLogic {
 
 public:
     ShellLogic(ShellContext& context) : ctx(context) {
+        // Bind interpreter to shell context variables for shared state
+        ctx.interpreter.bindVariables(ctx.sessionEnv);
+        ctx.interpreter.bindArrays(&ctx.sessionArrayEnv);
+        // Bind input handler for read command
+        ctx.interpreter.bindInputHandler([](std::string prompt, bool isPassword) -> std::string {
+            if (!_isatty(_fileno(stdin))) {
+                 if (!prompt.empty()) {
+                    std::cout << prompt;
+                    std::cout.flush();
+                 }
+                 std::string line;
+                 std::getline(std::cin, line);
+                 return line;
+            }
+            return InputHandler::readSimpleLine(prompt, isPassword);
+        });
+
         // Register fallback handler for internal commands
         ctx.interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) -> int {
             if (args.empty()) return -1;
@@ -94,6 +113,68 @@ public:
         });
     }
     
+    // Check if input contains shell syntax that requires the interpreter
+    bool isShellSyntax(const std::string& input) {
+        // Simple heuristic check first for performance
+        if (input.empty()) return false;
+        
+        // Keywords and operators that imply shell syntax
+        static const std::vector<std::string> syntaxKeywords = {
+            "if", "for", "while", "case", "function", "declare", "typeset", "local",
+            "read", "source", ".", "[[", "((", "select", "until", "elif", "fi", "done", "esac",
+            "do", "then", "else", "{", "}"
+        };
+        
+        // Check for variable assignment (VAR=VAL)
+        // Must start with alpha/underscore, contain =, and not be an argument to a command
+        size_t eqPos = input.find('=');
+        if (eqPos != std::string::npos && eqPos > 0) {
+            bool isAssignment = true;
+            for (size_t i = 0; i < eqPos; i++) {
+                if (!isalnum(input[i]) && input[i] != '_') {
+                    isAssignment = false;
+                    break;
+                }
+            }
+            if (isAssignment) return true;
+        }
+
+        // Use the interpreter's lexer for accurate detection
+        try {
+            Bash::Lexer lexer(input);
+            auto tokens = lexer.tokenize();
+            
+            for (const auto& token : tokens) {
+                switch (token.type) {
+                    case Bash::TokenType::KW_IF:
+                    case Bash::TokenType::KW_FOR:
+                    case Bash::TokenType::KW_WHILE:
+                    case Bash::TokenType::KW_CASE:
+                    case Bash::TokenType::KW_FUNCTION:
+                    case Bash::TokenType::LBRACE:  // Block start {
+                    case Bash::TokenType::LPAREN:  // Subshell (
+                    case Bash::TokenType::SEMICOLON: // Command separation
+                        return true;
+                    case Bash::TokenType::WORD:
+                        // Check for specific command words that we want interpreter to handle
+                        if (token.value == "declare" || token.value == "typeset" || 
+                            token.value == "local" || token.value == "read" || 
+                            token.value == "source" || token.value == ".") {
+                            return true;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        } catch (...) {
+            // If lexer fails, fallback to standard execution
+            return false;
+        }
+        
+        return false;
+    }
+
     // Check if a command is internal
     bool isInternalCommand(const std::string& cmd) {
         return internalCmds.count(cmd);
@@ -1524,6 +1605,30 @@ public:
                 while (end < text.length() && (isalnum(text[end]) || text[end] == '_')) {
                     end++;
                 }
+                
+                // Check if it's an array access $VAR[INDEX]
+                if (end < text.length() && text[end] == '[') {
+                    size_t closeBracket = text.find(']', end + 1);
+                    if (closeBracket != std::string::npos) {
+                        std::string varName = text.substr(pos + 1, end - (pos + 1));
+                        std::string idxStr = text.substr(end + 1, closeBracket - end - 1);
+                        std::string val;
+                        
+                        auto it = ctx.sessionArrayEnv.find(varName);
+                        if (it != ctx.sessionArrayEnv.end()) {
+                            try {
+                                size_t idx = std::stoul(idxStr);
+                                if (idx < it->second.size()) {
+                                    val = it->second[idx];
+                                }
+                            } catch (...) {}
+                        }
+                        
+                        text = text.substr(0, pos) + val + text.substr(closeBracket + 1);
+                        continue;
+                    }
+                }
+
                 std::string varName = text.substr(pos + 1, end - pos - 1);
                 std::string value;
                 auto it = ctx.sessionEnv.find(varName);
@@ -8549,6 +8654,23 @@ void execute_command_logic(ShellContext& ctx, const std::string& input) {
     }
     
     if (trimmed.empty()) return;
+
+    // Check for shell syntax first
+    if (logic.isShellSyntax(trimmed)) {
+        ctx.lastExitCode = ctx.interpreter.runCode(trimmed);
+        return;
+    }
+
+    // Check if it's a known shell function
+    // Simple extraction of first word to check against function list
+    std::string firstWord = trimmed;
+    size_t spacePos = trimmed.find_first_of(" \t\n;");
+    if (spacePos != std::string::npos) firstWord = trimmed.substr(0, spacePos);
+    
+    if (ctx.interpreter.hasFunction(firstWord)) {
+         ctx.lastExitCode = ctx.interpreter.runCode(trimmed);
+         return;
+    }
 
     // Handle chained commands (&&, ||)
     if (trimmed.find("&&") != std::string::npos || trimmed.find("||") != std::string::npos) {

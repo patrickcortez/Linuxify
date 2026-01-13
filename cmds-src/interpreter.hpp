@@ -276,16 +276,43 @@ private:
                current() != ';' && current() != '|' && current() != '&' &&
                current() != '>' && current() != '<' && current() != '(' &&
                current() != ')' && current() != '{' && current() != '}' &&
-               current() != '"' && current() != '\'' && current() != '#' &&
+               // Quotes handled inside loop
+               current() != '#' &&
                current() != '$') {
             
-            if (current() == '\\' && peek() != '\0') {
+            if (current() == '"' || current() == '\'') {
+                char quote = current();
+                advance(); // skip opening quote
+                
+                while (current() != '\0' && current() != quote) {
+                    if (current() == '\\' && peek() != '\0') {
+                        advance();
+                        switch (current()) {
+                            case 'n': value += '\n'; break;
+                            case 't': value += '\t'; break;
+                            case '\\': value += '\\'; break;
+                            case '"': value += '"'; break;
+                            case '\'': value += '\''; break;
+                            default: 
+                                value += '\\'; 
+                                value += current(); 
+                                break;
+                        }
+                    } else {
+                        value += current();
+                    }
+                    advance();
+                }
+                if (current() == quote) advance(); // skip closing quote
+            }
+            else if (current() == '\\' && peek() != '\0') {
                 advance();
                 value += current();
+                advance(); // advance past the escaped char
             } else {
                 value += current();
+                advance();
             }
-            advance();
         }
         
         // Check for assignment (VAR=value)
@@ -699,7 +726,8 @@ private:
                 cmd->background = true;
                 advance();
             } else if (check(TokenType::WORD) || check(TokenType::STRING) || 
-                       check(TokenType::NUMBER) || check(TokenType::VARIABLE)) {
+                       check(TokenType::NUMBER) || check(TokenType::VARIABLE) || 
+                       check(TokenType::ASSIGNMENT)) {
                 cmd->args.push_back(current().value);
                 advance();
             } else if (check(TokenType::LBRACKET)) {
@@ -1224,7 +1252,12 @@ public:
 // ============================================================================
 class Executor {
 private:
-    std::map<std::string, std::string> variables;
+    std::map<std::string, std::string> _localVariables;
+    std::map<std::string, std::string>* _variableMap = &_localVariables; // Default to local
+    std::map<std::string, std::vector<std::string>> _localArrays;
+    std::map<std::string, std::vector<std::string>>* _arrayMap = &_localArrays; // Default to local array map
+    std::function<std::string(std::string, bool)> _inputCallback;
+
     std::map<std::string, std::vector<std::shared_ptr<ASTNode>>> functions;
     std::vector<std::vector<std::string>> positionalArgsStack;  // Stack for function call args ($1-$9)
     int lastExitCode = 0;
@@ -1309,7 +1342,7 @@ private:
                 if (eq != std::string::npos) {
                     std::string name = args[i].substr(0, eq);
                     std::string value = args[i].substr(eq + 1);
-                    variables[name] = value;
+                    (*_variableMap)[name] = value;
                     SetEnvironmentVariableA(name.c_str(), value.c_str());
                 }
             }
@@ -1324,10 +1357,9 @@ private:
                  
                  size_t eq = args[i].find('=');
                  if (eq != std::string::npos) {
-                     std::string name = args[i].substr(0, eq);
-                     std::string value = args[i].substr(eq + 1);
-                     variables[name] = value;
-                     // Only export if it was explicitly 'export', but for now declare does effectively the same behavior for internal vars
+                      std::string name = args[i].substr(0, eq);
+                     std::string value = expandVariables(args[i].substr(eq + 1));
+                     setVariable(name, value);
                  }
              }
              return 0;
@@ -1363,7 +1395,7 @@ private:
                     else if (args[i] == "+x") debugMode = false;
                 }
             } else {
-                for (const auto& [name, value] : variables) {
+                for (const auto& [name, value] : *_variableMap) {
                     std::cout << name << "=" << value << "\n";
                 }
             }
@@ -1389,15 +1421,25 @@ private:
             }
             
             if (!prompt.empty()) {
-                ShellIO::sout << prompt;
-                ShellIO::sout.flush();
+                if (_inputCallback) {
+                     // Callback handles prompt
+                } else {
+                    ShellIO::sout << prompt;
+                    ShellIO::sout.flush();
+                }
             }
             
             std::string line;
-            if (ShellIO::sin.getline(line)) {
-                variables[varName] = line;
-                if (!silent && prompt.empty()) ShellIO::sout << "\n";
+            if (_inputCallback) {
+                line = _inputCallback(prompt, silent);
+                (*_variableMap)[varName] = line;
                 return 0;
+            } else {
+                if (ShellIO::sin.getline(line)) {
+                    (*_variableMap)[varName] = line;
+                    if (!silent && prompt.empty()) ShellIO::sout << "\n";
+                    return 0;
+                }
             }
             return 1;
         };
@@ -1470,19 +1512,7 @@ private:
             return 0;
         };
         
-        builtins["local"] = [this](const std::vector<std::string>& args) {
-            for (size_t i = 1; i < args.size(); i++) {
-                size_t eq = args[i].find('=');
-                if (eq != std::string::npos) {
-                    std::string name = args[i].substr(0, eq);
-                    std::string value = expandVariables(args[i].substr(eq + 1));
-                    variables[name] = value;
-                } else {
-                    variables[args[i]] = "";
-                }
-            }
-            return 0;
-        };
+
         
         builtins["help"] = [](const std::vector<std::string>&) {
             HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1671,8 +1701,8 @@ private:
                     varValue = positionalArgsStack.back()[idx];
                 }
             } else {
-                if (variables.count(varName)) {
-                    varValue = variables[varName];
+                if (_variableMap->count(varName)) {
+                    varValue = (*_variableMap)[varName];
                 } else {
                     char* envVal = getenv(varName.c_str());
                     if (envVal) varValue = envVal;
@@ -1691,6 +1721,37 @@ private:
             temp = defMatch.suffix();
         }
         
+        // Handle array variables ${VAR[INDEX]} and $VAR[INDEX]
+        std::regex arrayRegex("\\$(\\{)?([a-zA-Z_][a-zA-Z0-9_]*)\\[([0-9]+)\\](\\})?");
+        std::smatch arrayMatch;
+        temp = result;
+        while (std::regex_search(temp, arrayMatch, arrayRegex)) {
+            std::string varName = arrayMatch[2];
+            std::string idxStr = arrayMatch[3];
+            bool hasBraces = arrayMatch[1].matched && arrayMatch[4].matched;
+            bool noBraces = !arrayMatch[1].matched && !arrayMatch[4].matched;
+            
+            // Only accept valid forms ${VAR[N]} or $VAR[N]
+            if (hasBraces || noBraces) {
+                std::string varValue;
+                try {
+                    size_t idx = std::stoul(idxStr);
+                    if (_arrayMap->count(varName)) {
+                        const auto& arr = (*_arrayMap)[varName];
+                        if (idx < arr.size()) {
+                            varValue = arr[idx];
+                        }
+                    }
+                } catch (...) {}
+                
+                size_t pos = result.find(arrayMatch[0]);
+                if (pos != std::string::npos) {
+                    result.replace(pos, arrayMatch[0].length(), varValue);
+                }
+            }
+            temp = arrayMatch.suffix();
+        }
+        
         // Handle $VAR and ${VAR}
         std::regex varRegex("\\$\\{?([a-zA-Z_][a-zA-Z0-9_]*)\\}?");
         std::smatch match;
@@ -1700,8 +1761,8 @@ private:
             std::string varName = match[1];
             std::string varValue;
             
-            if (variables.count(varName)) {
-                varValue = variables[varName];
+            if (_variableMap->count(varName)) {
+                varValue = (*_variableMap)[varName];
             } else {
                 char* envVal = getenv(varName.c_str());
                 if (envVal) varValue = envVal;
@@ -1813,16 +1874,9 @@ private:
     int executeExternal(const std::vector<std::string>& args) {
         if (args.empty()) return 0;
         
-        // Try fallback handler first (allows host application to handle commands)
-        if (fallbackHandler) {
-            // We pass it to the handler. The handler might return -1 if it didn't handle it,
-            // or a valid exit code (0 or >0) if it did.
-            // Let's assume the handler handles everything if set, or returns specific code.
-            // But wait, if handler is "linuxify executeCommand", it handles everything known to linuxify.
-            // If linuxify doesn't know it, linuxify might try to run it via runProcess anyway.
-            // So we can just trust the handler.
-            return fallbackHandler(args);
-        }
+            if (fallbackHandler) {
+                return fallbackHandler(args);
+            }
         
         std::string cmdLine;
         for (const auto& arg : args) {
@@ -1982,12 +2036,54 @@ private:
         return (int)exitCode;
     }
 
+    // Callback for reading input (prompt, isPassword) -> input string
+    // Moved to top of class
+    
 public:
-    Executor() : startTime(std::chrono::steady_clock::now()) {
+    Executor() : startTime(std::chrono::steady_clock::now()), _variableMap(&_localVariables) {
         char buf[MAX_PATH];
         GetCurrentDirectoryA(MAX_PATH, buf);
         currentDir = buf;
         setupBuiltins();
+
+        // Default input callback (reads from stdin)
+        _inputCallback = [](std::string prompt, bool isPassword) -> std::string {
+            if (!prompt.empty()) {
+                std::cout << prompt;
+                std::cout.flush();
+            }
+            std::string line;
+            if (std::getline(std::cin, line)) {
+                return line;
+            }
+            return "";
+        };
+    }
+    
+    // Bind external variable map
+    void bindVariables(std::map<std::string, std::string>* vars) {
+        if (vars) {
+            _variableMap = vars;
+        } else {
+            _variableMap = &_localVariables;
+        }
+    }
+
+    // Bind external array map
+    void bindArrays(std::map<std::string, std::vector<std::string>>* arrays) {
+        if (arrays) {
+            _arrayMap = arrays;
+        } else {
+            _arrayMap = &_localArrays;
+        }
+    }
+
+    void bindInputHandler(std::function<std::string(std::string, bool)> callback) {
+        _inputCallback = callback;
+    }
+    
+    bool hasFunction(const std::string& name) const {
+        return functions.count(name) > 0;
     }
     
     void setDebug(bool debug) { debugMode = debug; }
@@ -1997,11 +2093,27 @@ public:
     }
     
     void setVariable(const std::string& name, const std::string& value) {
-        variables[name] = value;
+        // Check for array assignment var[idx]
+        size_t openBracket = name.find('[');
+        if (openBracket != std::string::npos && name.back() == ']') {
+            std::string arrName = name.substr(0, openBracket);
+            std::string idxStr = name.substr(openBracket + 1, name.size() - openBracket - 2);
+            try {
+                size_t idx = std::stoul(idxStr);
+                if ((*_arrayMap)[arrName].size() <= idx) {
+                    (*_arrayMap)[arrName].resize(idx + 1);
+                }
+                (*_arrayMap)[arrName][idx] = value;
+                return;
+            } catch (...) {
+                 // Invalid index parsing, fall through to scalar
+            }
+        }
+        (*_variableMap)[name] = value;
     }
     
     std::string getVariable(const std::string& name) {
-        return variables.count(name) ? variables[name] : "";
+        return _variableMap->count(name) ? (*_variableMap)[name] : "";
     }
     
     void setScriptArgs(const std::vector<std::string>& args) {
@@ -2026,7 +2138,7 @@ public:
         
         // Assignment
         if (auto assign = std::dynamic_pointer_cast<AssignmentNode>(node)) {
-            variables[assign->name] = expandVariables(assign->value);
+            setVariable(assign->name, expandVariables(assign->value));
             return 0;
         }
         
@@ -2193,17 +2305,9 @@ public:
                 
                 ZeroMemory(&pi, sizeof(pi));
                 
-                // We need to re-invoke ourselves or the target command
-                // For builtins, we really should recurse, but for now assuming external/registry utils in pipes
-                // A true enterprise shell would fork(), but here we spawn linuxify -c "cmd" or the cmd directly
-                // To avoid "simulation", we run the command directly if possible, or linuxify -c if internal
-                
                 std::string currentCmd = pipeCmds[i];
                 char cmdBuffer[8192];
                 
-                // Check if it's an internal builtin that needs the shell environment
-                // For simplicity in this native refactor, we use the shell itself to execute pipeline stages
-                // This ensures aliases, functions, and builtins work in pipes
                 char modulePath[MAX_PATH];
                 GetModuleFileNameA(NULL, modulePath, MAX_PATH);
                 std::string finalCmdLine = "\"" + std::string(modulePath) + "\" -c \"" + currentCmd + "\"";
@@ -2258,7 +2362,7 @@ public:
             bool breakLoop = false;
             for (const auto& value : forNode->values) {
                 if (breakLoop) break;
-                variables[forNode->variable] = expandVariables(value);
+                (*_variableMap)[forNode->variable] = expandVariables(value);
                 try {
                     for (auto& stmt : forNode->body) {
                         lastExitCode = execute(stmt);
@@ -2471,9 +2575,29 @@ public:
     void setScriptArgs(const std::vector<std::string>& args) {
         executor.setScriptArgs(args);
     }
-    
+
     void clearScriptArgs() {
         executor.clearScriptArgs();
+    }
+    
+    void setFallbackHandler(std::function<int(const std::vector<std::string>&)> handler) {
+        executor.setFallbackHandler(handler);
+    }
+    
+    void bindVariables(std::map<std::string, std::string>& vars) {
+        executor.bindVariables(&vars);
+    }
+    
+    void bindArrays(std::map<std::string, std::vector<std::string>>* arrays) {
+        executor.bindArrays(arrays);
+    }
+
+    void bindInputHandler(std::function<std::string(std::string, bool)> callback) {
+        executor.bindInputHandler(callback);
+    }
+    
+    bool hasFunction(const std::string& name) const {
+        return executor.hasFunction(name);
     }
 };
 
