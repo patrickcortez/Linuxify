@@ -365,7 +365,7 @@ public:
 
         INPUT_RECORD ir;
         if (!SignalHandler::InputDispatcher::getInstance().getNextBufferedEvent(ir)) {
-            Sleep(10); // Yield CPU
+            Sleep(1); // Yield CPU (Reduced latency)
             return PollResult::Continue;
         }
 
@@ -375,15 +375,22 @@ public:
         char ch = ir.Event.KeyEvent.uChar.AsciiChar;
         DWORD ctrl = ir.Event.KeyEvent.dwControlKeyState;
         
-        // Handle "Dead Keys" manually if AsciiChar is 0 but it's a quote key
-        if (ch == 0) {
-             if (vk == VK_OEM_7) { // Single/Double Quote key
-                 bool shift = (ctrl & SHIFT_PRESSED);
-                 ch = shift ? '"' : '\'';
-             } else if (vk == VK_OEM_3) { // Tilde/Backtick key
-                 bool shift = (ctrl & SHIFT_PRESSED);
-                 ch = shift ? '~' : '`';
-             }
+        // Unconditional Dead Key / Quote Fix
+        // Check if the key maps to a quote character physically
+        UINT mapped = MapVirtualKeyA(vk, 2) & 0xFF; // MAPVK_VK_TO_CHAR
+        
+        // Check for single quote (') or backtick (`)
+        // We force the character if the key *physically* maps to it, ignoring dead state.
+        if (mapped == '\'' || mapped == '"') { 
+            ch = (ctrl & SHIFT_PRESSED) ? '"' : '\'';
+        } 
+        else if (mapped == '`' || mapped == '~') {
+            ch = (ctrl & SHIFT_PRESSED) ? '~' : '`';
+        }
+        else if (mapped == 0 && (vk == VK_OEM_7 || vk == VK_OEM_3)) {
+             // Fallback for layouts where MapVirtualKey might fail on dead keys
+             if (vk == VK_OEM_7) ch = (ctrl & SHIFT_PRESSED) ? '"' : '\'';
+             else if (vk == VK_OEM_3) ch = (ctrl & SHIFT_PRESSED) ? '~' : '`';
         }
 
         if (vk == VK_RETURN) {
@@ -403,6 +410,25 @@ public:
                     updateSuggestion();
                     render();
                 } else if (cursorPos > 0) {
+                    // Smart Backspace: Delete matched empty pair
+                    if (cursorPos < (int)inputBuffer.length()) {
+                        char prev = inputBuffer[cursorPos - 1];
+                        char next = inputBuffer[cursorPos];
+                        bool isPair = (prev == '(' && next == ')') ||
+                                      (prev == '[' && next == ']') ||
+                                      (prev == '{' && next == '}') ||
+                                      (prev == '"' && next == '"') ||
+                                      (prev == '\'' && next == '\'') ||
+                                      (prev == '`' && next == '`');
+                        if (isPair) {
+                            inputBuffer.erase(cursorPos - 1, 2);
+                            cursorPos--;
+                            updateSuggestion();
+                            render();
+                            return PollResult::Continue; // Event handled
+                        }
+                    }
+
                     inputBuffer.erase(cursorPos - 1, 1);
                     cursorPos--;
                     updateSuggestion();
@@ -626,26 +652,92 @@ public:
             else if (ch >= 32 && ch < 127) {
                 auto now = std::chrono::steady_clock::now();
                 
-                // If text selected, delete it first
+                // If text selected, handle wrapping or deletion
                 if (selectionAnchor != -1) {
+                    char open = ch;
+                    char close = 0;
+                    if (open == '(') close = ')';
+                    else if (open == '[') close = ']';
+                    else if (open == '{') close = '}';
+                    else if (open == '<') close = '>';
+                    else if (open == '"') close = '"';
+                    else if (open == '\'') close = '\'';
+                    else if (open == '`') close = '`';
+                    
+                    if (close != 0) {
+                        // WRAP Selection
+                        int start = std::min(selectionAnchor, cursorPos);
+                        int end = std::max(selectionAnchor, cursorPos);
+                        int len = end - start;
+                        
+                        inputBuffer.insert(start, 1, open);
+                        inputBuffer.insert(start + len + 1, 1, close);
+                        
+                        // Move cursor to end of wrap
+                        cursorPos = start + len + 2; 
+                        selectionAnchor = -1;
+                        updateSuggestion();
+                        render();
+                        return PollResult::Continue;
+                    }
+
                     deleteSelection();
                 }
 
-                // Auto-Pairing Logic
-                char closing = 0;
-                if (ch == '(') closing = ')';
-                else if (ch == '[') closing = ']';
-                else if (ch == '{') closing = '}';
-                if (closing != 0) {
-                    // Insert Pair: "()"
-                    inputBuffer.insert(cursorPos, 1, ch);
-                    inputBuffer.insert(cursorPos + 1, 1, closing);
-                    cursorPos++; // Position cursor between them
-                    render();
-                    lastCharInput = 0; 
-                } else {
-                    inputBuffer.insert(cursorPos, 1, ch);
-                    cursorPos++;
+                bool handled = false;
+
+                // 1. Type-Over (Skip) Logic
+                // If typing a closer/quote that is already at cursor, just move past it.
+                if (cursorPos < (int)inputBuffer.length()) {
+                    char nextChar = inputBuffer[cursorPos];
+                    if (nextChar == ch && (ch == ')' || ch == ']' || ch == '}' || 
+                                           ch == '"' || ch == '\'' || ch == '`')) {
+                        cursorPos++;
+                        render();
+                        handled = true;
+                    }
+                }
+
+                if (!handled) {
+                    // 2. Auto-Pairing Logic
+                    char closing = 0;
+                    if (ch == '(') closing = ')';
+                    else if (ch == '[') closing = ']';
+                    else if (ch == '{') closing = '}';
+                    else if (ch == '"') closing = '"';
+                    else if (ch == '\'') closing = '\'';
+                    else if (ch == '`') closing = '`';
+
+                    bool shouldPair = false;
+                    if (closing != 0) {
+                        // Quote Heuristic: Pair unless we are seemingly inside a word (e.g. don't)
+                        bool isQuote = (ch == '"' || ch == '\'' || ch == '`');
+                        if (!isQuote) {
+                            shouldPair = true; // Brackets ALWAYS pair
+                        } else {
+                            // Default to pairing
+                            shouldPair = true;
+                            
+                            // Don't pair if immediately following an alphanumeric char (e.g. "don't")
+                            if (cursorPos > 0 && isalnum(inputBuffer[cursorPos-1])) {
+                                shouldPair = false;
+                            }
+                            // Don't pair if immediately before an alphanumeric char (e.g. insert quote in "text")
+                            if (cursorPos < (int)inputBuffer.length() && isalnum(inputBuffer[cursorPos])) {
+                                shouldPair = false;
+                            }
+                        }
+                    }
+
+                    if (shouldPair) {
+                        inputBuffer.insert(cursorPos, 1, ch);
+                        inputBuffer.insert(cursorPos + 1, 1, closing);
+                        cursorPos++; 
+                    } else {
+                        inputBuffer.insert(cursorPos, 1, ch);
+                        cursorPos++;
+                    }
+                    
                     updateSuggestion();
                     render();
                     lastCharInput = ch;

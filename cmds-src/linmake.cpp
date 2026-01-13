@@ -275,7 +275,35 @@ std::string buildLibraryFlags(const Config& config) {
 }
 
 int runCommand(const std::string& cmd) {
-    return system(cmd.c_str());
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    // Inherit standard handles so output goes to console
+    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    
+    ZeroMemory(&pi, sizeof(pi));
+    
+    
+    std::vector<char> cmdBuffer(cmd.length() + 1);
+    strcpy(cmdBuffer.data(), cmd.c_str());
+
+    if (!CreateProcessA(NULL, cmdBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        return -1;
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    
+    return (int)exitCode;
 }
 
 int cmdInit() {
@@ -472,7 +500,7 @@ int cmdRun(bool release, bool debug) {
     printStatus("Running " + exe + "...");
     std::cout << std::endl;
     
-    return system(exe.c_str());
+    return runCommand(exe);
 }
 
 void printUsage() {

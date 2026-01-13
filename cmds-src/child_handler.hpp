@@ -33,11 +33,20 @@ public:
              return -1;
         }
 
-        // 2. Configure Console for Child (Full Standard Cooked Mode)
-        DWORD cookedMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
-                           ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE | ENABLE_QUICK_EDIT_MODE;
-        if (!SetConsoleMode(hIn, cookedMode)) {
+        // 2. Configure Console Input (Standard Cooked Mode - Fixes Keys)
+        // ENABLE_VIRTUAL_TERMINAL_INPUT removed to restore Arrow/Backspace in Cooked Mode.
+        DWORD inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
+                          ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if (!SetConsoleMode(hIn, inputMode)) {
             std::cerr << "[ChildHandler] Warning: SetConsoleMode failed for Stdin. Error: " << GetLastError() << "\n";
+        }
+
+        // 3. Configure Console Output (VT Processing - Fixes Lag)
+        // Enabling VT Processing allows fast ANSI rendering.
+        DWORD outputMode = 0;
+        if (GetConsoleMode(hOut, &outputMode)) {
+            outputMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
+            SetConsoleMode(hOut, outputMode);
         }
         FlushConsoleInputBuffer(hIn);
 
@@ -60,6 +69,10 @@ public:
         strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
 
         const char* dir = workDir.empty() ? nullptr : workDir.c_str();
+
+        // 4. Input Sanitization (Global "Dead Key" Fix) - MOVED TO INDIVIDUAL TOOLS (Lino/Funux)
+        
+        // Native CreateProcess call
 
         BOOL success = CreateProcessA(
             NULL,

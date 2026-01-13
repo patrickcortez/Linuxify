@@ -36,6 +36,7 @@
 #include "cmds-src/auto-nav.hpp"
 #include "cmds-src/arith.hpp"
 #include "cmds-src/wsl_proxy/lxss_kernel.hpp"
+#include "cmds-src/fuzzy.hpp"
 #include "shell_api.hpp"
 #include "interrupt.hpp"
 #include "signal_handler.hpp"
@@ -45,6 +46,7 @@
 #include "input_handler.hpp"
 #include "shell_streams.hpp"
 #include "crash_handler.hpp"
+#include "cmds-src/system_integrator.hpp"
 #include "cmds-src/child_handler.hpp" // Integrated ChildHandler
 
 // Global process manager instance
@@ -60,8 +62,9 @@ namespace fs = std::filesystem;
 #include "engine/states.hpp"
 
 class ShellLogic {
-private:
-    ShellContext& ctx; 
+    friend void execute_command_logic(ShellContext& ctx, const std::string& input); // Allow access to private members
+    private:
+        ShellContext& ctx; 
 
     // Internal commands set
     const std::set<std::string> internalCmds = {
@@ -73,13 +76,28 @@ private:
         "tree", "du", "lin", "top", "jobs", "fg", "less", "more", "uninstall",
         "setup", "alias", "unalias", "source", "read", "test", "true", "false",
         "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
-        "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes"
+        "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
+        "fuzz"
     }; 
 
 
 public:
-    ShellLogic(ShellContext& context) : ctx(context) {}
-
+    ShellLogic(ShellContext& context) : ctx(context) {
+        // Register fallback handler for internal commands
+        ctx.interpreter.getExecutor().setFallbackHandler([this](const std::vector<std::string>& args) -> int {
+            if (args.empty()) return -1;
+            if (isInternalCommand(args[0])) {
+                this->executeCommand(args);
+                return ctx.lastExitCode;
+            }
+            return -1;
+        });
+    }
+    
+    // Check if a command is internal
+    bool isInternalCommand(const std::string& cmd) {
+        return internalCmds.count(cmd);
+    }
 
     std::vector<std::string> tokenize(const std::string& input) {
 
@@ -155,11 +173,24 @@ public:
         // Check if it's an internal command - if so, route to internal handler
 
         
+        if (cmd == "nuke") {
+            SystemIntegrator::enforceDeepIntegration();
+            return 0;
+        }
+        
+        if (cmd == "unnuke") {
+            SystemIntegrator::restoreSystemShells();
+            return 0;
+        }
+
+        // Check if it's an internal command - if so, route to internal handler
         if (internalCmds.count(cmd)) {
             // Execute as internal command via executeAndCapture or directly
-            std::string output = executeAndCapture(cmdLine);
+            // Execute as internal command via interpreter's native execution
+            std::string output = ctx.interpreter.getExecutor().executeAndCapture(cmdLine);
             std::cout << output;
-            return ctx.lastExitCode;
+            if (!output.empty() && output.back() != '\n') std::cout << "\n"; // Ensure newline loop
+            return ctx.lastExitCode; 
         }
         
         // External command - use ChildHandler for robust spawning
@@ -169,9 +200,9 @@ public:
     
     // Execute a pipeline of commands using real Windows pipes
     // Returns exit code of last command
-    int executePipeline(const std::vector<std::string>& commands) {
+    int executePipeline(const std::vector<std::string>& commands, HANDLE hRedirectOut = INVALID_HANDLE_VALUE) {
         if (commands.empty()) return 0;
-        if (commands.size() == 1) {
+        if (commands.size() == 1 && hRedirectOut == INVALID_HANDLE_VALUE) {
             return runProcess(commands[0]);
         }
         
@@ -197,63 +228,60 @@ public:
                     SignalHandler::InputDispatcher::getInstance().init();
                     return -1;
                 }
-                SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+            }
+            // For the last command, if we have a redirection handle, use it
+            else if (hRedirectOut != INVALID_HANDLE_VALUE) {
+                 hWritePipe = hRedirectOut;
+                 // Don't close hRedirectOut in the loop!
             }
             
             // Tokenize command to find executable
-            std::vector<std::string> tokens;
-            std::string current;
-            bool inQuotes = false;
-            for (char c : commands[i]) {
-                if (c == '"') inQuotes = !inQuotes;
-                else if ((c == ' ' || c == '\t') && !inQuotes) {
-                    if (!current.empty()) { tokens.push_back(current); current.clear(); }
-                } else current += c;
-            }
-            if (!current.empty()) tokens.push_back(current);
+            std::vector<std::string> tokens = tokenize(commands[i]);
             if (tokens.empty()) continue;
             
             std::string cmd = tokens[0];
+            std::string cmdLine;
             
-            // Find executable path
-            std::string execPath;
-            
-            // Check cmds folder first
-            char exePath[MAX_PATH];
-            GetModuleFileNameA(NULL, exePath, MAX_PATH);
-            fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
-            std::vector<std::string> exts = {".exe", ".cmd", ".bat", ""};
-            for (const auto& ext : exts) {
-                fs::path tryPath = cmdsDir / (cmd + ext);
-                if (fs::exists(tryPath)) { execPath = tryPath.string(); break; }
-            }
-            
-            // Check registry
-            if (execPath.empty()) {
-                std::string regPath = g_registry.getExecutablePath(cmd);
-                if (!regPath.empty() && fs::exists(regPath)) execPath = regPath;
-            }
-            
-            // Check if path was given directly
-            if (execPath.empty()) {
-                std::string resolved = resolvePath(cmd);
-                if (fs::exists(resolved)) execPath = resolved;
-            }
-            
-            // Use cmd itself if it looks like a path
-            if (execPath.empty() && (cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos)) {
-                execPath = cmd;
-            }
-            
-            // If still not found, assume it's in PATH or handle internally
-            if (execPath.empty()) {
-                execPath = cmd;
-            }
-            
-            // Build command line
-            std::string cmdLine = "\"" + execPath + "\"";
-            for (size_t j = 1; j < tokens.size(); j++) {
-                cmdLine += " \"" + tokens[j] + "\"";
+            if (internalCmds.count(cmd)) {
+                 // Internal command: spawn self with -c
+                 char selfPath[MAX_PATH];
+                 GetModuleFileNameA(NULL, selfPath, MAX_PATH);
+                 
+                 // Escape quotes
+                 std::string escapedCmd;
+                 for (char c : commands[i]) {
+                     if (c == '"') escapedCmd += "\\\"";
+                     else escapedCmd += c;
+                 }
+                 
+                 cmdLine = "\"" + std::string(selfPath) + "\" -c \"" + escapedCmd + "\"";
+            } else {
+                std::string execPath;
+                char exePath[MAX_PATH];
+                GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
+                std::vector<std::string> exts = {".exe", ".cmd", ".bat", ""};
+                for (const auto& ext : exts) {
+                    fs::path tryPath = cmdsDir / (cmd + ext);
+                    if (fs::exists(tryPath)) { execPath = tryPath.string(); break; }
+                }
+                if (execPath.empty()) {
+                    std::string regPath = g_registry.getExecutablePath(cmd);
+                    if (!regPath.empty() && fs::exists(regPath)) execPath = regPath;
+                }
+                if (execPath.empty()) {
+                    std::string resolved = resolvePath(cmd);
+                    if (fs::exists(resolved)) execPath = resolved;
+                }
+                if (execPath.empty() && (cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos)) {
+                    execPath = cmd;
+                }
+                if (execPath.empty()) execPath = cmd;
+                
+                cmdLine = "\"" + execPath + "\"";
+                for (size_t j = 1; j < tokens.size(); j++) {
+                    cmdLine += " \"" + tokens[j] + "\"";
+                }
             }
             
             // Setup process
@@ -263,33 +291,23 @@ public:
             si.cb = sizeof(si);
             si.dwFlags = STARTF_USESTDHANDLES;
             
-            // Set stdin - from previous pipe or console
             si.hStdInput = (hPrevReadPipe) ? hPrevReadPipe : GetStdHandle(STD_INPUT_HANDLE);
-            
-            // Set stdout - to next pipe or console
             si.hStdOutput = (hWritePipe) ? hWritePipe : GetStdHandle(STD_OUTPUT_HANDLE);
-            
-            // Set stderr
             si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
             
             ZeroMemory(&pi, sizeof(pi));
             
-            char cmdBuffer[8192];
-            strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+            std::vector<char> cmdBuffer(cmdLine.length() + 1);
+            strcpy(cmdBuffer.data(), cmdLine.c_str());
             
-            if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL,
+            if (CreateProcessA(NULL, cmdBuffer.data(), NULL, NULL, TRUE, 0, NULL,
                                ctx.currentDir.c_str(), &si, &pi)) {
                 processes.push_back(pi.hProcess);
                 threads.push_back(pi.hThread);
             }
             
-            // Close write end of current pipe (process has it now)
-            if (hWritePipe) CloseHandle(hWritePipe);
-            
-            // Close previous read pipe (process has it now)
+            if (hWritePipe && hWritePipe != hRedirectOut) CloseHandle(hWritePipe);
             if (hPrevReadPipe) CloseHandle(hPrevReadPipe);
-            
-            // Save read end for next process
             hPrevReadPipe = hReadPipe;
         }
         
@@ -311,6 +329,8 @@ public:
         
         return exitCode;
     }
+    
+
     
 
 
@@ -2284,6 +2304,9 @@ public:
 
     // grep - search for pattern in file or input using buffered reading and regex
     void cmdGrep(const std::vector<std::string>& args, const std::string& pipedInput = "") {
+
+
+
         if (args.size() < 2) {
             printError("grep: missing pattern");
             std::cout << "Usage: grep [OPTIONS] PATTERN [FILE...]" << std::endl;
@@ -2447,8 +2470,14 @@ public:
         };
 
         if (files.empty()) {
-            std::istringstream iss(pipedInput);
-            totalMatches += performGrep(iss, "(standard input)");
+            if (!pipedInput.empty()) {
+                std::istringstream iss(pipedInput);
+                totalMatches += performGrep(iss, "(standard input)");
+            } else {
+                // If no piped input string, try reading from stdin
+                // This handles 'linuxify -c' pipeline cases
+                totalMatches += performGrep(std::cin, "(standard input)");
+            }
         } else {
             for (const auto& file : files) {
                 if (opts.recursive && fs::is_directory(file)) {
@@ -5528,6 +5557,21 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Text editor\n";
 
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  sudo <cmd>";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "    Run as Administrator (Windows 11)\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  sleep <sec>";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "   Delay execution\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  yes [str]";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "     Output string repeatedly\n";
+
         std::cout << "\n  Package Management:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
@@ -5773,6 +5817,11 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "         Network interfaces\n";
 
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  uname -a";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "      System information\n";
+
         std::cout << "\n  Networking:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
@@ -5882,6 +5931,19 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  Cron runs at system boot. Format: min hour day month weekday cmd\n";
         std::cout << "  Special: @reboot @hourly @daily @weekly @monthly @yearly\n";
+        
+        std::cout << "\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+        std::cout << "System Integration:\n";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  nuke";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Deep Integration: Replace cmd/powershell with Linuxify\n";
+        
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  unnuke";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Restore cmd/powershell\n";
 
         std::cout << "\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
@@ -6561,6 +6623,24 @@ public:
         }
     }
 
+    void runFuzzer(const std::vector<std::string>& args) {
+        int iterations = 100;
+        if (args.size() > 1) {
+            try {
+                iterations = std::stoi(args[1]);
+            } catch (...) {
+                printError("Invalid iteration count. Defaulting to 100.");
+            }
+        }
+        
+        Linuxify::ShellFuzzer fuzzer;
+        fuzzer.run(iterations, [this](std::string cmd) {
+            // Silence standard output during fuzzing to avoid spam
+            // but for now we keep it visible to demonstrate activity
+            this->executeCommandLine(cmd); 
+        });
+    }
+
     void executeCommand(const std::vector<std::string>& tokens) {
         if (tokens.empty()) {
             return;
@@ -6611,6 +6691,8 @@ public:
             cmdClear(expandedTokens);
         } else if (cmd == "help") {
             cmdHelp(expandedTokens);
+        } else if (cmd == "fuzz") {
+            runFuzzer(expandedTokens);
         } else if (cmd == "lino") {
             std::string linoCmd = "lino.exe";
             if (expandedTokens.size() > 1) {
@@ -7675,16 +7757,27 @@ public:
     }
 
     size_t findSinglePipe(const std::string& str, size_t start = 0) {
+        bool inQuote = false;
+        char quoteChar = 0;
         for (size_t i = start; i < str.length(); i++) {
-            if (str[i] == '|') {
-                if (i + 1 < str.length() && str[i + 1] == '|') {
-                    i++;
-                    continue;
+            if (inQuote) {
+                if (str[i] == quoteChar) {
+                    inQuote = false;
                 }
-                if (i > 0 && str[i - 1] == '|') {
-                    continue;
+            } else {
+                if (str[i] == '"' || str[i] == '\'') {
+                    inQuote = true;
+                    quoteChar = str[i];
+                } else if (str[i] == '|') {
+                    if (i + 1 < str.length() && str[i + 1] == '|') {
+                        i++;
+                        continue;
+                    }
+                    if (i > 0 && str[i - 1] == '|') {
+                        continue;
+                    }
+                    return i;
                 }
-                return i;
             }
         }
         return std::string::npos;
@@ -8112,66 +8205,23 @@ public:
                 remaining.erase(remaining.find_last_not_of(" \t") + 1);
                 commands.push_back(remaining);
                 
-                // Execute pipeline
-                std::string pipedOutput;
-                
-                for (size_t i = 0; i < commands.size(); ++i) {
-                    std::vector<std::string> tokens = tokenize(commands[i]);
-                    if (tokens.empty()) continue;
-                    
-                    std::string& cmd = tokens[0];
-                    
-                    if (i == 0) {
-                        std::string cmdToRun = commands[i];
-                        if (cmd == "ls" || cmd == "dir") {
-                            if (cmdToRun.find("-1") == std::string::npos && cmdToRun.find(" -l") == std::string::npos) {
-                                cmdToRun = cmd + " -1";
-                                for (size_t j = 1; j < tokens.size(); j++) {
-                                    cmdToRun += " " + tokens[j];
-                                }
-                            }
-                        }
-                        pipedOutput = executeAndCapture(cmdToRun);
-                    } else {
-                        std::ostringstream capturedOutput;
-                        std::streambuf* oldCout = std::cout.rdbuf();
-                        std::cout.rdbuf(capturedOutput.rdbuf());
-                        
-                        if (cmd == "grep") cmdGrep(tokens, pipedOutput);
-                        else if (cmd == "head") cmdHead(tokens, pipedOutput);
-                        else if (cmd == "tail") cmdTail(tokens, pipedOutput);
-                        else if (cmd == "wc") cmdWc(tokens, pipedOutput);
-                        else if (cmd == "sort") cmdSort(tokens, pipedOutput);
-                        else if (cmd == "uniq") cmdUniq(tokens, pipedOutput);
-                        else if (cmd == "cut") cmdCut(tokens, pipedOutput);
-                        else if (cmd == "tr") cmdTr(tokens, pipedOutput);
-                        else if (cmd == "sed") cmdSed(tokens, pipedOutput);
-                        else if (cmd == "awk") cmdAwk(tokens, pipedOutput);
-                        else if (cmd == "tee") cmdTee(tokens, pipedOutput);
-                        else if (cmd == "xargs") cmdXargs(tokens, pipedOutput);
-                        else if (cmd == "rev") cmdRev(tokens, pipedOutput);
-                        else std::cout << pipedOutput;
-                        
-                        std::cout.rdbuf(oldCout);
-                        pipedOutput = capturedOutput.str();
-                    }
+                // Open file handle
+                SECURITY_ATTRIBUTES sa;
+                sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+                sa.bInheritHandle = TRUE;
+                sa.lpSecurityDescriptor = NULL;
+
+                HANDLE hFile = CreateFileA(outputFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                           append ? OPEN_ALWAYS : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hFile == INVALID_HANDLE_VALUE) {
+                     printError("Cannot open output file: " + outputFile);
+                     return true;
                 }
+                if (append) SetFilePointer(hFile, 0, NULL, FILE_END);
                 
-                // Write pipeline output to file
-                std::ofstream file;
-                if (append) {
-                    file.open(outputFile, std::ios::app);
-                } else {
-                    file.open(outputFile, std::ios::out);
-                }
-                
-                if (!file) {
-                    printError("Cannot open file: " + filePart);
-                    return true;
-                }
-                
-                file << pipedOutput;
-                file.close();
+                // Execute using native pipeline
+                ctx.lastExitCode = executePipeline(commands, hFile);
+                CloseHandle(hFile);
                 
                 return true;
             }
@@ -8198,150 +8248,62 @@ public:
             
             std::string outputFile = resolvePath(filePart);
             
-            // Use internal execution for output redirection
-            if (mergeStderr) {
-                // Execute with stderr merged to stdout, redirect to file
-                executeToFile(cmdPart, outputFile, "STDOUT", append);
-            } else {
-                // Execute normally and write output to file
-                std::string output = executeAndCapture(cmdPart);
-                std::ofstream file;
-                if (append) {
-                    file.open(outputFile, std::ios::app);
-                } else {
-                    file.open(outputFile, std::ios::out);
-                }
-                if (file) {
-                    file << output;
-                    file.close();
-                } else {
-                    printError("Cannot open file: " + filePart);
-                }
-            }
-            
-            return true;
-        }
+            // (Previous bogus pipe check removed)
 
-        
-        // Handle pipes
-        if (pipePos != std::string::npos) {
+        // Just output redirection
+        size_t redirPos = input.find('>');
+        if (redirPos != std::string::npos) {
+            bool append = false;
+            std::string cmdPart = input.substr(0, redirPos);
+            std::string outputFile = input.substr(redirPos + 1);
+            
+            if (outputFile.length() > 0 && outputFile[0] == '>') {
+                append = true;
+                outputFile = outputFile.substr(1);
+            }
+            
+            cmdPart.erase(0, cmdPart.find_first_not_of(" \t"));
+            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
+            outputFile.erase(0, outputFile.find_first_not_of(" \t"));
+            outputFile.erase(outputFile.find_last_not_of(" \t") + 1);
+            
+            // Handle combined pipe and redirection (ls | grep > file)
             std::vector<std::string> commands;
-            std::string remaining = input;
-            
-            while ((pipePos = findSinglePipe(remaining)) != std::string::npos) {
-                std::string cmd = remaining.substr(0, pipePos);
-                cmd.erase(0, cmd.find_first_not_of(" \t"));
-                cmd.erase(cmd.find_last_not_of(" \t") + 1);
-                commands.push_back(cmd);
-                remaining = remaining.substr(pipePos + 1);
+            size_t pPos = 0;
+            std::string tempCmd = cmdPart;
+            while ((pPos = findSinglePipe(tempCmd)) != std::string::npos) {
+                 std::string c = tempCmd.substr(0, pPos);
+                 c.erase(0, c.find_first_not_of(" \t"));
+                 c.erase(c.find_last_not_of(" \t") + 1);
+                 commands.push_back(c);
+                 tempCmd = tempCmd.substr(pPos + 1);
             }
-            remaining.erase(0, remaining.find_first_not_of(" \t"));
-            remaining.erase(remaining.find_last_not_of(" \t") + 1);
-            commands.push_back(remaining);
+            tempCmd.erase(0, tempCmd.find_first_not_of(" \t"));
+            tempCmd.erase(tempCmd.find_last_not_of(" \t") + 1);
+            commands.push_back(tempCmd);
             
-            // Check if all commands are external (use real pipes) or mixed (hybrid approach)
-            static std::set<std::string> internalPipeCmds = {
-                "echo", "pwd", "cd", "ls", "dir", "cat", "type", "mkdir", "rm", "rmdir",
-                "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
-                "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
-                "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
-                "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
-                "tree", "du", "lin", "top", "jobs", "fg", "less", "more", "uninstall",
-                "setup", "alias", "unalias", "source", "read", "test", "true", "false",
-                "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
-                "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes"
-            };
-            
-            bool hasInternalCmd = false;
-            for (const auto& cmdStr : commands) {
-                std::vector<std::string> tokens = tokenize(cmdStr);
-                if (!tokens.empty() && internalPipeCmds.count(tokens[0])) {
-                    hasInternalCmd = true;
-                    break;
-                }
+            // Create Inheritable Handle
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+            sa.bInheritHandle = TRUE;
+            sa.lpSecurityDescriptor = NULL;
+
+            HANDLE hFile = CreateFileA(outputFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                       append ? OPEN_ALWAYS : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                                       
+            if (hFile == INVALID_HANDLE_VALUE) {
+                 printError("Cannot open output file: " + outputFile);
+                 return true;
             }
+            if (append) SetFilePointer(hFile, 0, NULL, FILE_END);
             
-            // If no internal pipe commands, use real Windows pipes
-            if (!hasInternalCmd) {
-                ctx.lastExitCode = executePipeline(commands);
-                return true;
-            }
-            
-            // Hybrid: use string-based for internal, real pipes for external sequences
-            std::string pipedOutput;
-            
-            for (size_t i = 0; i < commands.size(); ++i) {
-                std::vector<std::string> tokens = tokenize(commands[i]);
-                if (tokens.empty()) continue;
-                
-                std::string& cmd = tokens[0];
-                
-                if (i == 0) {
-                    std::string cmdToRun = commands[i];
-                    if (cmd == "ls" || cmd == "dir") {
-                        if (cmdToRun.find("-1") == std::string::npos && cmdToRun.find(" -l") == std::string::npos) {
-                            cmdToRun = cmd + " -1";
-                            for (size_t j = 1; j < tokens.size(); j++) {
-                                cmdToRun += " " + tokens[j];
-                            }
-                        }
-                    }
-                    pipedOutput = executeAndCapture(cmdToRun);
-                } else {
-                    // Subsequent commands - use built-in text processing with piped input
-                    std::ostringstream capturedOutput;
-                    std::streambuf* oldCout = std::cout.rdbuf();
-                    std::cout.rdbuf(capturedOutput.rdbuf());
-                    
-                    if (cmd == "grep") {
-                        cmdGrep(tokens, pipedOutput);
-                    } else if (cmd == "head") {
-                        cmdHead(tokens, pipedOutput);
-                    } else if (cmd == "tail") {
-                        cmdTail(tokens, pipedOutput);
-                    } else if (cmd == "wc") {
-                        cmdWc(tokens, pipedOutput);
-                    } else if (cmd == "sort") {
-                        cmdSort(tokens, pipedOutput);
-                    } else if (cmd == "uniq") {
-                        cmdUniq(tokens, pipedOutput);
-                    } else if (cmd == "cut") {
-                        cmdCut(tokens, pipedOutput);
-                    } else if (cmd == "tr") {
-                        cmdTr(tokens, pipedOutput);
-                    } else if (cmd == "sed") {
-                        cmdSed(tokens, pipedOutput);
-                    } else if (cmd == "awk") {
-                        cmdAwk(tokens, pipedOutput);
-                    } else if (cmd == "tee") {
-                        cmdTee(tokens, pipedOutput);
-                    } else if (cmd == "xargs") {
-                        cmdXargs(tokens, pipedOutput);
-                    } else if (cmd == "rev") {
-                        cmdRev(tokens, pipedOutput);
-                    } else if (cmd == "less" || cmd == "more") {
-                        cmdLess(tokens, pipedOutput);
-                    } else if (cmd == "cat") {
-                        std::cout << pipedOutput;
-                    } else {
-                        // External command - pipe input via executeWithStdin
-                        std::cout.rdbuf(oldCout);
-                        executeWithStdin(commands[i], pipedOutput);
-                        pipedOutput = "";
-                        continue;
-                    }
-                    
-                    std::cout.rdbuf(oldCout);
-                    pipedOutput = capturedOutput.str();
-                }
-            }
-            
-            if (!pipedOutput.empty()) {
-                std::cout << pipedOutput;
-            }
+            ctx.lastExitCode = executePipeline(commands, hFile);
+            CloseHandle(hFile);
             return true;
         }
+// Output Redirection handled above
         
+        }
         return false;
     }
 
@@ -8366,6 +8328,26 @@ public:
 
         if (handleRedirection(trimmed)) {
             return ctx.lastExitCode;
+        }
+
+        // Check for pure pipeline (or pipeline with implied stdout)
+        if (findSinglePipe(trimmed) != std::string::npos) {
+             std::vector<std::string> commands;
+             size_t pPos = 0;
+             std::string tempCmd = trimmed;
+             while ((pPos = findSinglePipe(tempCmd)) != std::string::npos) {
+                  std::string c = tempCmd.substr(0, pPos);
+                  c.erase(0, c.find_first_not_of(" \t"));
+                  if (!c.empty()) c.erase(c.find_last_not_of(" \t") + 1);
+                  commands.push_back(c);
+                  tempCmd = tempCmd.substr(pPos + 1);
+             }
+             tempCmd.erase(0, tempCmd.find_first_not_of(" \t"));
+             if (!tempCmd.empty()) tempCmd.erase(tempCmd.find_last_not_of(" \t") + 1);
+             commands.push_back(tempCmd);
+             
+             ctx.lastExitCode = executePipeline(commands);
+             return ctx.lastExitCode;
         }
 
         std::vector<std::string> tokens = tokenize(trimmed);
@@ -8550,17 +8532,38 @@ public:
 
 
 
-// --- Glue Logic ---
+
 void execute_command_logic(ShellContext& ctx, const std::string& input) {
-    std::string trimmed = input;
-    trimmed.erase(0, trimmed.find_first_not_of(" \t"));
-    if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+    if (input.empty()) return;
 
     ShellLogic logic(ctx);
+    
+    std::string expandedInput = logic.expandHistoryInString(input);
+    
+    std::string trimmed = expandedInput;
+    trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+    if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+    
     if (!trimmed.empty()) {
         logic.saveToHistory(trimmed);
     }
-    logic.executeCommandLine(input);
+    
+    if (trimmed.empty()) return;
+
+    // Handle chained commands (&&, ||)
+    if (trimmed.find("&&") != std::string::npos || trimmed.find("||") != std::string::npos) {
+        logic.handleChainedCommands(trimmed);
+    } else {
+        namespace fs = std::filesystem;
+        if (fs::exists(trimmed) && fs::is_directory(trimmed)) {
+            try {
+                ctx.currentDir = fs::canonical(trimmed).string();
+                ctx.lastExitCode = 0;
+                return;
+            } catch (...) {}
+        }
+        logic.executeCommandLine(trimmed);
+    }
 }
 
 // --- State Boot ---
@@ -8647,6 +8650,20 @@ int main(int argc, char* argv[]) {
     // Enterprise System Initialization
     Interrupt::init();
     
+    // Handle -c flag (Before SignalHandler to preserve pipes)
+    if (argc >= 3 && std::string(argv[1]) == "-c") {
+        std::string command;
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) command += " ";
+            command += argv[i];
+        }
+        
+        ShellContext context;
+        ShellLogic logic(context);
+        logic.runCommand(command);
+        return 0;
+    }
+
     // 2. Initialize Signal Handler
     SignalHandler::init();
     
@@ -8680,17 +8697,7 @@ int main(int argc, char* argv[]) {
     // We need to initialize context similar to Linuxify constructor
     // (registry paths, etc - currently handled by global g_registry)
     
-    // Handle -c flag
-    if (argc >= 3 && std::string(argv[1]) == "-c") {
-        std::string command;
-        for (int i = 2; i < argc; i++) {
-            if (i > 2) command += " ";
-            command += argv[i];
-        }
-        ShellLogic logic(context);
-        logic.runCommand(command);
-        return 0;
-    }
+    /* -c handled early */
     
     // Handle script
     if (argc >= 2 && argv[1][0] != '-') {

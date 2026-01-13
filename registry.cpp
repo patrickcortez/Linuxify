@@ -49,7 +49,7 @@ LinuxifyRegistry::LinuxifyRegistry() {
         // Package managers
         "choco", "scoop", "winget",
         // Editors
-        "vim", "nvim", "code", "subl",
+        "vim", "nvim", "code", "subl", "nano",
         // Network
         "netstat", "ping", "tracert", "nslookup", "dig",
         // Misc
@@ -231,18 +231,60 @@ int LinuxifyRegistry::refreshRegistry() {
     commandRegistry.clear();
     int foundCount = 0;
     
-    for (const auto& cmd : commonCommands) {
-        // First try PATH
-        std::string path = findInPath(cmd);
+    // 1. Scan PATH environment variable dynamically
+    char* pathEnv = nullptr;
+    size_t pathLen = 0;
+    _dupenv_s(&pathEnv, &pathLen, "PATH");
+    
+    if (pathEnv) {
+        std::string pathStr(pathEnv);
+        free(pathEnv);
         
-        // If not found, try common directories
-        if (path.empty()) {
-            path = findInCommonDirs(cmd);
+        std::stringstream ss(pathStr);
+        std::string pathDir;
+        std::vector<std::string> pathDirs;
+        
+        while (std::getline(ss, pathDir, ';')) {
+            if (!pathDir.empty()) pathDirs.push_back(pathDir);
         }
         
-        if (!path.empty()) {
-            commandRegistry[cmd] = path;
-            foundCount++;
+        // Scan each directory
+        for (const auto& dir : pathDirs) {
+            try {
+                if (!fs::exists(dir) || !fs::is_directory(dir)) continue;
+                
+                for (const auto& entry : fs::directory_iterator(dir)) {
+                    if (entry.is_regular_file()) {
+                        std::string args = entry.path().extension().string();
+                        // Check for executable extensions
+                        std::string ext = args;
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        
+                        if (ext == ".exe" || ext == ".cmd" || ext == ".bat" || ext == ".com") {
+                            std::string stem = entry.path().stem().string();
+                            // Only add if not already present (PATH priority: first come first served)
+                            if (commandRegistry.find(stem) == commandRegistry.end()) {
+                                commandRegistry[stem] = entry.path().string();
+                                foundCount++;
+                            }
+                        }
+                    }
+                }
+            } catch (...) {
+                // Ignore permission errors or bad paths
+                continue;
+            }
+        }
+    }
+    
+    // 2. Fallback: Check common commands in common dirs (if not found in PATH)
+    for (const auto& cmd : commonCommands) {
+        if (commandRegistry.find(cmd) == commandRegistry.end()) {
+            std::string path = findInCommonDirs(cmd);
+            if (!path.empty()) {
+                commandRegistry[cmd] = path;
+                foundCount++;
+            }
         }
     }
     

@@ -1315,6 +1315,26 @@ private:
             }
             return 0;
         };
+
+        // Aliases for export/declare/typeset (functionally similar in this basic shell)
+        auto declareFunc = [this](const std::vector<std::string>& args) {
+             for (size_t i = 1; i < args.size(); i++) {
+                 // Ignore flags for now (e.g. -x, -r)
+                 if (args[i][0] == '-') continue;
+                 
+                 size_t eq = args[i].find('=');
+                 if (eq != std::string::npos) {
+                     std::string name = args[i].substr(0, eq);
+                     std::string value = args[i].substr(eq + 1);
+                     variables[name] = value;
+                     // Only export if it was explicitly 'export', but for now declare does effectively the same behavior for internal vars
+                 }
+             }
+             return 0;
+        };
+        builtins["declare"] = declareFunc;
+        builtins["typeset"] = declareFunc;
+        builtins["local"] = declareFunc; 
         
         builtins["cd"] = [this](const std::vector<std::string>& args) {
             std::string path = args.size() > 1 ? args[1] : std::string(getenv("USERPROFILE") ? getenv("USERPROFILE") : ".");
@@ -1527,52 +1547,72 @@ private:
         };
     }
     
-    // Execute a command and capture its output (for command substitution)
+    public:
+    // Execute a command and capture its output (for command substitution) using anonymous pipes
     std::string executeAndCapture(const std::string& command) {
-        // Create a temp file to capture output
-        char tempPath[MAX_PATH];
-        char tempFile[MAX_PATH];
-        GetTempPathA(MAX_PATH, tempPath);
-        GetTempFileNameA(tempPath, "lsh", 0, tempFile);
-        
-        // Build command that redirects to temp file
-        std::string cmdLine = "cmd.exe /c " + command + " > \"" + tempFile + "\" 2>&1";
-        
+        HANDLE hReadPipe, hWritePipe;
+        SECURITY_ATTRIBUTES saAttr;
+        saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+        saAttr.bInheritHandle = TRUE;
+        saAttr.lpSecurityDescriptor = NULL;
+
+        if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0)) {
+            return "";
+        }
+
+        // Ensure the read handle to the pipe for STDOUT is not inherited.
+        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
+        si.hStdError = hWritePipe; // Redirect stderr to same pipe
+        si.hStdOutput = hWritePipe;
+        si.dwFlags |= STARTF_USESTDHANDLES;
         ZeroMemory(&pi, sizeof(pi));
+
+        // Use shell interpreter instead of cmd.exe
+        // We re-execute the current executable to handle the command
+        char modulePath[MAX_PATH];
+        GetModuleFileNameA(NULL, modulePath, MAX_PATH);
         
+        // Use double quotes for safety
+        std::string cmdLine = "\"" + std::string(modulePath) + "\" -c \"" + command + "\"";
         char cmdBuffer[8192];
         strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
-        
-        if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, FALSE, 
-                          CREATE_NO_WINDOW, NULL, currentDir.c_str(), &si, &pi)) {
+
+        if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, currentDir.c_str(), &si, &pi)) {
+            CloseHandle(hWritePipe); // Close write end in parent
+
+            // Read output
+            std::string result;
+            DWORD dwRead;
+            CHAR chBuf[4096];
+            bool bSuccess = FALSE;
+
+            for (;;) {
+                bSuccess = ReadFile(hReadPipe, chBuf, sizeof(chBuf) - 1, &dwRead, NULL);
+                if (!bSuccess || dwRead == 0) break;
+                chBuf[dwRead] = 0;
+                result += chBuf;
+            }
+
             WaitForSingleObject(pi.hProcess, INFINITE);
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
+            CloseHandle(hReadPipe);
+
+            // Trim trailing newlines
+            while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+                result.pop_back();
+            }
+            return result;
         }
-        
-        // Read the output from temp file
-        std::string result;
-        std::ifstream file(tempFile);
-        if (file) {
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            result = buffer.str();
-            file.close();
-        }
-        
-        // Clean up temp file
-        DeleteFileA(tempFile);
-        
-        // Trim trailing newlines
-        while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
-            result.pop_back();
-        }
-        
-        return result;
+
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return "";
     }
     
     // Expand variables in a string
@@ -1848,51 +1888,83 @@ private:
                 cmdLine += expanded;
             }
         }
-        
-        for (const auto& redir : redirects) {
-            std::string target = redir.second;
-            if (target == "/dev/null") target = "NUL";
-            
-            if (redir.first == ">") {
-                cmdLine += " > \"" + target + "\"";
-            } else if (redir.first == ">>") {
-                cmdLine += " >> \"" + target + "\"";
-            } else if (redir.first == "2>") {
-                cmdLine += " 2> \"" + target + "\"";
-            } else if (redir.first == "2>>") {
-                cmdLine += " 2>> \"" + target + "\"";
-            } else if (redir.first == "2>&1") {
-                cmdLine += " 2>&1";
-            } else if (redir.first == "&>") {
-                cmdLine += " > \"" + target + "\" 2>&1";
-            }
-        }
-        
 
-        std::string winCmd = "cmd.exe /c " + cmdLine;
-        
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        // Default handles
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+        HANDLE hInputFile = NULL;
+        HANDLE hOutputFile = NULL;
+        HANDLE hErrorFile = NULL;
+
+        // Process redirects - this supports simple redirection natively
+        for (const auto& redir : redirects) {
+            std::string target = redir.second;
+            if (target == "/dev/null") target = "NUL";
+            
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+            sa.bInheritHandle = TRUE;
+            sa.lpSecurityDescriptor = NULL;
+
+            if (redir.first == "<") {
+                hInputFile = CreateFileA(target.c_str(), GENERIC_READ, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hInputFile != INVALID_HANDLE_VALUE) {
+                   si.hStdInput = hInputFile;
+                }
+            } else if (redir.first == ">" || redir.first == ">>") {
+                DWORD creationDisp = (redir.first == ">>") ? OPEN_ALWAYS : CREATE_ALWAYS;
+                hOutputFile = CreateFileA(target.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, &sa, creationDisp, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hOutputFile != INVALID_HANDLE_VALUE) {
+                    if (redir.first == ">>") SetFilePointer(hOutputFile, 0, NULL, FILE_END);
+                    si.hStdOutput = hOutputFile;
+                }
+            } else if (redir.first == "2>" || redir.first == "2>>") {
+                DWORD creationDisp = (redir.first == "2>>") ? OPEN_ALWAYS : CREATE_ALWAYS;
+                hErrorFile = CreateFileA(target.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, &sa, creationDisp, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hErrorFile != INVALID_HANDLE_VALUE) {
+                     if (redir.first == "2>>") SetFilePointer(hErrorFile, 0, NULL, FILE_END);
+                     si.hStdError = hErrorFile;
+                }
+            } else if (redir.first == "2>&1") {
+                si.hStdError = si.hStdOutput;
+            } else if (redir.first == "&>") {
+                DWORD creationDisp = CREATE_ALWAYS;
+                hOutputFile = CreateFileA(target.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, &sa, creationDisp, FILE_ATTRIBUTE_NORMAL, NULL);
+                 if (hOutputFile != INVALID_HANDLE_VALUE) {
+                    si.hStdOutput = hOutputFile;
+                    si.hStdError = hOutputFile;
+                }
+            }
+        }
+
         ZeroMemory(&pi, sizeof(pi));
         
         char cmdBuffer[8192];
-        strncpy_s(cmdBuffer, winCmd.c_str(), sizeof(cmdBuffer) - 1);
+        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
         
         if (!CreateProcessA(
             NULL,
             cmdBuffer,
             NULL,
             NULL,
-            FALSE,
+            TRUE,   // Inherit handles is CRITICAL here
             0,
             NULL,
             currentDir.c_str(),
             &si,
             &pi
         )) {
-            std::cerr << "lish: command not found: " << args[0] << "\n";
+            std::cerr << "\033[31mError: Command not found: " << args[0] << ". Type 'help' for available commands.\033[0m\n";
+            if (hInputFile) CloseHandle(hInputFile);
+            if (hOutputFile) CloseHandle(hOutputFile);
+            if (hErrorFile) CloseHandle(hErrorFile);
             return 127;
         }
         
@@ -1902,6 +1974,10 @@ private:
         
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
+        
+        if (hInputFile) CloseHandle(hInputFile);
+        if (hOutputFile) CloseHandle(hOutputFile);
+        if (hErrorFile) CloseHandle(hErrorFile);
         
         return (int)exitCode;
     }
@@ -2042,6 +2118,15 @@ public:
                 return lastExitCode;
             }
             
+            // Try fallback handler (e.g. for ShellLogic internal commands)
+            if (fallbackHandler) {
+                int result = fallbackHandler(expandedArgs);
+                if (result != -1) {
+                    lastExitCode = result;
+                    return lastExitCode;
+                }
+            }
+            
             // External command - apply redirections to command line
             lastExitCode = executeExternalWithRedirects(expandedArgs, cmd->redirects);
             return lastExitCode;
@@ -2053,15 +2138,103 @@ public:
                 return execute(pipeline->commands[0]);
             }
             
-            // For multi-command pipeline, build a command line with pipes
-            std::string fullCmd;
-            for (size_t i = 0; i < pipeline->commands.size(); i++) {
-                if (i > 0) fullCmd += " | ";
-                for (const auto& arg : pipeline->commands[i]->args) {
-                    fullCmd += expandVariables(arg) + " ";
+            // For multi-command pipeline, execute using native Windows pipes
+            std::vector<std::string> pipeCmds;
+            for (const auto& cmdNode : pipeline->commands) {
+                std::string fullCmd;
+                for (const auto& arg : cmdNode->args) {
+                     if (!fullCmd.empty()) fullCmd += " ";
+                     fullCmd += expandVariables(arg);
                 }
+                pipeCmds.push_back(fullCmd);
             }
-            lastExitCode = system(fullCmd.c_str());
+            
+            if (pipeCmds.empty()) return 0;
+            
+            std::vector<HANDLE> processes;
+            std::vector<HANDLE> threads;
+            HANDLE hPrevReadPipe = NULL;
+
+            // Save original console handles
+            HANDLE hConsoleIn = GetStdHandle(STD_INPUT_HANDLE);
+            HANDLE hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            HANDLE hConsoleErr = GetStdHandle(STD_ERROR_HANDLE);
+
+            for (size_t i = 0; i < pipeCmds.size(); i++) {
+                SECURITY_ATTRIBUTES saAttr;
+                saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+                saAttr.bInheritHandle = TRUE;
+                saAttr.lpSecurityDescriptor = NULL;
+                
+                HANDLE hReadPipe = NULL, hWritePipe = NULL;
+                
+                // Create pipe for output (except for last command)
+                if (i < pipeCmds.size() - 1) {
+                    if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0)) {
+                        return -1;
+                    }
+                    // Ensure read handle is inheritable, write handle is inheritable
+                }
+                
+                STARTUPINFOA si;
+                PROCESS_INFORMATION pi;
+                ZeroMemory(&si, sizeof(si));
+                si.cb = sizeof(si);
+                si.dwFlags = STARTF_USESTDHANDLES;
+                
+                // Set stdin - from previous pipe or console
+                si.hStdInput = (hPrevReadPipe) ? hPrevReadPipe : hConsoleIn;
+                
+                // Set stdout - to next pipe or console
+                si.hStdOutput = (hWritePipe) ? hWritePipe : hConsoleOut;
+                
+                // Set stderr - shared
+                si.hStdError = hConsoleErr;
+                
+                ZeroMemory(&pi, sizeof(pi));
+                
+                // We need to re-invoke ourselves or the target command
+                // For builtins, we really should recurse, but for now assuming external/registry utils in pipes
+                // A true enterprise shell would fork(), but here we spawn linuxify -c "cmd" or the cmd directly
+                // To avoid "simulation", we run the command directly if possible, or linuxify -c if internal
+                
+                std::string currentCmd = pipeCmds[i];
+                char cmdBuffer[8192];
+                
+                // Check if it's an internal builtin that needs the shell environment
+                // For simplicity in this native refactor, we use the shell itself to execute pipeline stages
+                // This ensures aliases, functions, and builtins work in pipes
+                char modulePath[MAX_PATH];
+                GetModuleFileNameA(NULL, modulePath, MAX_PATH);
+                std::string finalCmdLine = "\"" + std::string(modulePath) + "\" -c \"" + currentCmd + "\"";
+                
+                strncpy_s(cmdBuffer, finalCmdLine.c_str(), sizeof(cmdBuffer) - 1);
+                
+                if (CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, currentDir.c_str(), &si, &pi)) {
+                    processes.push_back(pi.hProcess);
+                    threads.push_back(pi.hThread);
+                } else {
+                    std::cerr << "Failed to spawn pipeline stage: " << currentCmd << "\n";
+                }
+                
+                // Cleanup handles in parent
+                if (hWritePipe) CloseHandle(hWritePipe);
+                if (hPrevReadPipe) CloseHandle(hPrevReadPipe);
+                hPrevReadPipe = hReadPipe; // Pass read end to next
+            }
+            
+            // Wait for all
+            for (size_t i = 0; i < processes.size(); i++) {
+                WaitForSingleObject(processes[i], INFINITE);
+                if (i == processes.size() - 1) {
+                    DWORD code;
+                    GetExitCodeProcess(processes[i], &code);
+                    lastExitCode = (int)code;
+                }
+                CloseHandle(processes[i]);
+                CloseHandle(threads[i]);
+            }
+            
             return lastExitCode;
         }
         
@@ -2287,7 +2460,7 @@ public:
             
             return executor.run(program);
         } catch (const std::exception& e) {
-            std::cerr << "lish: error: " << e.what() << "\n";
+            std::cerr << "\033[31mError: " << e.what() << "\033[0m\n";
             return 1;
         }
     }

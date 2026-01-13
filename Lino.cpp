@@ -11,6 +11,7 @@
 #include <cctype>
 #include <windows.h>
 #include <conio.h>
+#include <deque>
 
 namespace fs = std::filesystem;
 
@@ -76,6 +77,59 @@ struct LineCacheEntry {
 
 class LinoEditor {
 private:
+    HANDLE hIn;
+    std::deque<int> inputQueue;
+
+    // Emulate _getch but using ReadConsoleInput for efficiency
+    int waitForInput() {
+        if (!inputQueue.empty()) {
+            int ch = inputQueue.front();
+            inputQueue.pop_front();
+            return ch;
+        }
+
+        DWORD count;
+        INPUT_RECORD ir;
+
+        while (true) {
+            // Wait for event
+            if (!ReadConsoleInput(hIn, &ir, 1, &count)) return 0;
+
+            if (ir.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+                needsFullRedraw = true;
+                return 0; // Return to allow main loop to handle redraw
+            }
+
+            if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
+                KEY_EVENT_RECORD& ker = ir.Event.KeyEvent;
+                
+                if (ker.uChar.AsciiChar != 0) {
+                    return (unsigned char)ker.uChar.AsciiChar;
+                } else {
+                    // Map Virtual Key to BIOS Scan Code equivalent
+                    int scanCode = 0;
+                    switch (ker.wVirtualKeyCode) {
+                        case VK_UP:    scanCode = 72; break;
+                        case VK_DOWN:  scanCode = 80; break;
+                        case VK_LEFT:  scanCode = 75; break;
+                        case VK_RIGHT: scanCode = 77; break;
+                        case VK_HOME:  scanCode = 71; break;
+                        case VK_END:   scanCode = 79; break;
+                        case VK_PRIOR: scanCode = 73; break; // PgUp
+                        case VK_NEXT:  scanCode = 81; break; // PgDn
+                        case VK_DELETE: scanCode = 83; break;
+                        case VK_INSERT: scanCode = 82; break;
+                    }
+
+                    if (scanCode != 0) {
+                        inputQueue.push_back(scanCode);
+                        return 224; // Extended key prefix
+                    }
+                }
+            }
+        }
+    }
+
     // Memory-efficient file storage
     std::vector<std::streamoff> lineOffsets;  // Byte position of each line start
     std::fstream fileHandle;                   // Keep file open for reading
@@ -1308,28 +1362,18 @@ private:
     }
     
     void flushBuffer() {
-        std::cout << "\x1b[H";
-        WORD lastAttr = 0xFFFF;
-        for (int y = 0; y < screenHeight; y++) {
-            for (int x = 0; x < screenWidth; x++) {
-                int idx = y * screenWidth + x;
-                if (idx < (int)screenBuffer.size()) {
-                    WORD attr = screenBuffer[idx].Attributes;
-                    char ch = screenBuffer[idx].Char.AsciiChar;
-                    if (attr != lastAttr) {
-                        std::cout << wordToAnsi(attr);
-                        lastAttr = attr;
-                    }
-                    std::cout << (ch ? ch : ' ');
-                }
-            }
-            if (y < screenHeight - 1) std::cout << "\r\n";
-        }
-        std::cout << "\x1b[0m" << std::flush;
+        if (screenBuffer.empty()) return;
+        
+        COORD bufferSize = { (SHORT)screenWidth, (SHORT)screenHeight };
+        COORD bufferCoord = { 0, 0 };
+        SMALL_RECT writeRegion = { 0, 0, (SHORT)(screenWidth - 1), (SHORT)(screenHeight - 1) };
+        
+        WriteConsoleOutputA(hConsole, screenBuffer.data(), bufferSize, bufferCoord, &writeRegion);
     }
 
     void drawHeader() {
-        WORD headerAttr = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | FOREGROUND_BLUE;
+        // Red Aesthetic: Red Background, White Text
+        WORD headerAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY;
         
         std::string title = " Lino ";
         if (filename.empty()) {
@@ -1352,9 +1396,10 @@ private:
         int line1 = screenHeight - 2;
         int line2 = screenHeight - 1;
         
-        WORD bgWhite = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY;
-        WORD keyColor = bgWhite | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
-        WORD textColor = bgWhite;
+        // Red Aesthetic: Red Background like Header/Prompt
+        WORD bgRed = BACKGROUND_RED | BACKGROUND_INTENSITY;
+        WORD keyColor = bgRed | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY; // Keys pop in White
+        WORD textColor = bgRed | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE); // Desc in Grey/White
         
         bufferFill(0, line1, screenWidth, ' ', textColor);
         bufferFill(0, line2, screenWidth, ' ', textColor);
@@ -1390,14 +1435,14 @@ private:
             if (!statusMessage.empty()) {
                 int msgStart = 45; // Arbitrary gap
                 if (msgStart < pos) msgStart = pos + 1;
-                bufferWrite(msgStart, line2, statusMessage, bgWhite | FOREGROUND_RED | FOREGROUND_BLUE);
+                bufferWrite(msgStart, line2, statusMessage, bgRed | FOREGROUND_RED | FOREGROUND_BLUE);
             }
             
             std::string posInfo = "L:" + std::to_string(cursorY + 1) + "/" + 
                                   std::to_string(getLineCount()) + " C:" + 
                                   std::to_string(cursorX + 1);
             int infoStart = screenWidth - (int)posInfo.length() - 1;
-            bufferWrite(infoStart, line2, posInfo, bgWhite | FOREGROUND_BLUE);
+            bufferWrite(infoStart, line2, posInfo, bgRed | FOREGROUND_BLUE);
         }
     }
 
@@ -1770,9 +1815,10 @@ private:
     }
 
     void drawMenu() {
-        WORD bg = BACKGROUND_BLUE; 
-        WORD textAttr = bg | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-        WORD highlightAttr = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY | FOREGROUND_BLUE;
+        // Red Aesthetic: Black Background, Red Highlights
+        WORD bg = 0; 
+        WORD textAttr = FOREGROUND_RED | FOREGROUND_INTENSITY;
+        WORD highlightAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY;
 
         bufferFill(0, 0, screenWidth * screenHeight, ' ', bg);
         
@@ -1786,7 +1832,7 @@ private:
         int subX = (screenWidth - (int)subtitle.length()) / 2;
         int credX = (screenWidth - (int)credit.length()) / 2;
 
-        bufferWrite(titleX, centerY, title, textAttr);
+        bufferWrite(titleX, centerY, title, BACKGROUND_RED | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY);
         bufferWrite(subX, centerY + 2, subtitle, textAttr);
         bufferWrite(credX, centerY + 3, credit, textAttr);
 
@@ -1801,11 +1847,11 @@ private:
     }
 
     void drawBrowser() {
-        WORD bg = BACKGROUND_BLUE;
-        WORD textAttr = bg | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-        WORD dirAttr = bg | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
-        WORD fileAttr = bg | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-        WORD highlightAttr = BACKGROUND_GREEN; // Black text by default
+        WORD bg = 0; // Black
+        WORD textAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY; // White
+        WORD dirAttr = FOREGROUND_RED | FOREGROUND_INTENSITY; // Red Dirs
+        WORD fileAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // Grey Files
+        WORD highlightAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY;
         // Explicitly clear buffer using std::fill for robustness
         CHAR_INFO empty;
         empty.Char.AsciiChar = ' ';
@@ -1813,7 +1859,7 @@ private:
         std::fill(screenBuffer.begin(), screenBuffer.end(), empty);
 
         std::string pathStr = "Path: " + currentBrowserPath.string();
-        bufferWrite(2, 1, pathStr, textAttr | BACKGROUND_INTENSITY); // Lighter blue bar
+        bufferWrite(2, 1, pathStr, BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY);
 
         int startY = 3;
         int maxItems = screenHeight - 5;
@@ -2158,42 +2204,73 @@ private:
         updateSyntaxState();
     }
 
-    std::string promptInput(const std::string& prompt) {
-        int promptY = screenHeight - 2;
-        setCursorPosition(0, promptY);
-        setColor(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED);
-        std::cout << ' ' << prompt << ' ';
-        int inputStart = (int)prompt.length() + 2;
-        for (int i = inputStart; i < screenWidth; i++) std::cout << ' ';
+    std::string promptInput(const std::string& prompt, const std::vector<std::pair<std::string, std::string>>& shortcuts = {}, std::string prefill = "") {
+        std::string input = prefill;
+        int promptY = screenHeight - 3; // Nano style: 3rd line from bottom
         
-        setCursorPosition(inputStart, promptY);
-        showCursor();
-        
-        std::string input;
         while (true) {
-            int ch = _getch();
-            if (ch == 13) break;
-            if (ch == 27) { resetColor(); return ""; }
-            if (ch == 8 && !input.empty()) {
-                input.pop_back();
-                std::cout << "\b \b";
+            // 1. Draw Background for Footer Area
+            // Red Aesthetic: Bright Red Background
+            WORD promptAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY; 
+            WORD defaultAttr = FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED; // Normal text
+            
+            // Clear prompt line
+            bufferFill(0, promptY, screenWidth, ' ', promptAttr);
+            bufferWrite(0, promptY, " " + prompt + " " + input, promptAttr);
+            
+            // Show cursor emulation
+            int cursorVisX = (int)prompt.length() + 2 + (int)input.length();
+            if (cursorVisX < screenWidth) {
+                bufferWriteChar(cursorVisX, promptY, '_', promptAttr);
+            }
+            
+            // Clear shortcut lines to black
+            bufferFill(0, screenHeight - 2, screenWidth, ' ', 0);
+            bufferFill(0, screenHeight - 1, screenWidth, ' ', 0);
+            
+            // Draw hints/shortcuts
+            int x = 0;
+            int y = screenHeight - 2;
+            for (const auto& sc : shortcuts) {
+                int width = (int)sc.first.length() + (int)sc.second.length() + 3; 
+                if (x + width > screenWidth && y == screenHeight - 2) {
+                     x = 0;
+                     y = screenHeight - 1;
+                }
+                
+                // Draw Key: Red Text on Black (to match aesthetic?) or Inverted Red?
+                // Let's go with White Text on Red Background for the Key to pop, normal for desc.
+                // Or: Red Text for key.
+                // User said "red aesthetic". 
+                bufferWrite(x, y, sc.first, FOREGROUND_RED | FOREGROUND_INTENSITY); // Bright Red Text
+                x += (int)sc.first.length();
+                bufferWrite(x, y, " " + sc.second + "  ", FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                x += (int)sc.second.length() + 3;
+            }
+            
+            flushBuffer();
+            
+            int ch = waitForInput();
+            
+            if (ch == 13) break; // Enter
+            if (ch == 27 || ch == 3) { // Esc or Ctrl+C
+                statusMessage = "Cancelled";
+                return ""; 
+            } 
+            if (ch == 8) { // Backspace
+                if (!input.empty()) input.pop_back();
             } else if (ch >= 32 && ch < 127) {
                 input += (char)ch;
-                std::cout << (char)ch;
             }
         }
-        resetColor();
         return input;
     }
 
     void saveFile() {
-        std::string saveName = filename;
+        std::string saveName = promptInput("Filename to Write", {{"^G", "Get Help"}, {"^C", "Cancel"}}, filename);
         if (saveName.empty()) {
-            saveName = promptInput("Filename:");
-            if (saveName.empty()) {
-                statusMessage = "Cancelled";
-                return;
-            }
+             statusMessage = "Cancelled";
+             return;
         }
         
         std::ofstream ofs(saveName);
@@ -2263,7 +2340,7 @@ private:
     }
 
     void runSearch() {
-        std::string query = promptInput("Search:");
+        std::string query = promptInput("Search", {{"^C", "Cancel"}});
         if (query.empty()) return;
         
         highlightTerm = query;
@@ -2280,20 +2357,41 @@ private:
     }
 
     void runReplace() {
-        std::string find = promptInput("Find to Replace:");
+        std::string find = promptInput("Find to Replace", {{"^C", "Cancel"}});
         if (find.empty()) return;
 
-        std::string rep = promptInput("Replace with:");
+        std::string rep = promptInput("Replace with", {{"^C", "Cancel"}});
+    
+    // Custom footer prompt for confirmation
+    while(true) {
+        WORD promptAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY; 
+        int promptY = screenHeight - 3;
+        bufferFill(0, promptY, screenWidth, ' ', promptAttr);
+        bufferWrite(0, promptY, " Replace matches?", promptAttr);
         
-        statusMessage = "Replace matches? (Y=All, N=Cancel)";
-        refreshScreen();
-        int ch = _getch();
-        if (ch != 'y' && ch != 'Y') {
+        bufferFill(0, screenHeight - 2, screenWidth, ' ', 0);
+        bufferFill(0, screenHeight - 1, screenWidth, ' ', 0);
+        
+        std::vector<std::pair<std::string, std::string>> options = {{"Y", "All"}, {"N", "Cancel"}};
+        int x = 0;
+        int y = screenHeight - 2;
+        for (const auto& sc : options) {
+            bufferWrite(x, y, sc.first, FOREGROUND_RED | FOREGROUND_INTENSITY); 
+            x += (int)sc.first.length();
+            bufferWrite(x, y, " " + sc.second + "  ", FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            x += (int)sc.second.length() + 3;
+        }
+        flushBuffer();
+        
+        int ch = waitForInput();
+        if (ch == 'y' || ch == 'Y') break; 
+        if (ch == 'n' || ch == 'N' || ch == 27 || ch == 3) {
             statusMessage = "Cancelled";
             return;
         }
-        
-        int count = 0;
+    }
+    
+    int count = 0;
         for (int i = 0; i < (int)getLineCount(); i++) {
             std::string line = getLine(i);
             std::string originalLine = line;
@@ -2314,6 +2412,23 @@ private:
         updateSyntaxState();
     }
 
+    void runGotoLine() {
+        std::string numStr = promptInput("Go to Line", {{"^C", "Cancel"}});
+        if (numStr.empty()) return;
+        
+        try {
+            int lineNum = std::stoi(numStr);
+            if (lineNum < 1) lineNum = 1;
+            if (lineNum > getLineCount()) lineNum = getLineCount();
+            
+            cursorY = lineNum - 1;
+            cursorX = 0;
+            ensureCursorVisible();
+        } catch (...) {
+            statusMessage = "Invalid Line Number";
+        }
+    }
+
     void showHelp() {
         system("cls");
         std::cout << "\n  Lino HELP\n";
@@ -2330,19 +2445,57 @@ private:
         std::cout << "  Arrows      - Navigate matches\n";
         std::cout << "  Ctrl+X      - Exit Search\n";
         std::cout << "\n  Press any key to continue...";
-        _getch();
+        waitForInput();
     }
 
     bool confirmExit() {
         if (!modified) return true;
-        statusMessage = "Save? (Y/N/C)";
-        refreshScreen();
         
         while (true) {
-            int ch = _getch();
-            if (ch == 'y' || ch == 'Y') { saveFile(); return true; }
-            if (ch == 'n' || ch == 'N') return true;
-            if (ch == 'c' || ch == 'C' || ch == 27) { statusMessage = ""; return false; }
+             // 1. Draw Background for Footer Area
+            // Red Aesthetic
+            WORD promptAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY; 
+            WORD defaultAttr = FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED;
+            
+            int promptY = screenHeight - 3;
+            
+            // Clear prompt line
+            bufferFill(0, promptY, screenWidth, ' ', promptAttr);
+            std::string prompt = "Save modified buffer? (Answering \"No\" will DISCARD changes)";
+            bufferWrite(0, promptY, " " + prompt, promptAttr);
+            
+             // Clear shortcut lines to black
+            bufferFill(0, screenHeight - 2, screenWidth, ' ', 0);
+            bufferFill(0, screenHeight - 1, screenWidth, ' ', 0);
+            
+            // Draw options
+            std::vector<std::pair<std::string, std::string>> options = {
+                {"Y", "Yes"}, {"N", "No"}, {"^C", "Cancel"}
+            };
+            
+            int x = 0;
+            int y = screenHeight - 2;
+            for (const auto& sc : options) {
+                bufferWrite(x, y, sc.first, FOREGROUND_RED | FOREGROUND_INTENSITY); 
+                x += (int)sc.first.length();
+                bufferWrite(x, y, " " + sc.second + "  ", FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+                x += (int)sc.second.length() + 3;
+            }
+            
+            flushBuffer();
+            
+            int ch = waitForInput();
+            if (ch == 'y' || ch == 'Y') { 
+                saveFile(); 
+                return true; 
+            }
+            if (ch == 'n' || ch == 'N') {
+                return true;
+            }
+            if (ch == 'c' || ch == 'C' || ch == 27) { 
+                statusMessage = ""; 
+                return false; 
+            }
         }
     }
 
@@ -2359,7 +2512,7 @@ private:
 
     bool processMenuInput(int ch) {
         if (ch == 0 || ch == 224) {
-            ch = _getch();
+            ch = waitForInput();
             if (ch == 72) { // Up
                 menuIndex--;
                 if (menuIndex < 0) menuIndex = (int)menuOptions.size() - 1;
@@ -2421,7 +2574,7 @@ private:
 
     bool processBrowserInput(int ch) {
         if (ch == 0 || ch == 224) {
-            ch = _getch();
+            ch = waitForInput();
              if (ch == 72) { // Up
                 browserIndex--;
                 if (browserIndex < -1) browserIndex = (int)browserFiles.size() - 1; 
@@ -2462,7 +2615,7 @@ private:
         
         if (currentMode == SEARCH) {
             if (ch == 0 || ch == 224) {
-                ch = _getch();
+                ch = waitForInput();
                 switch (ch) {
                     case 77: // Right - Next Match
                     case 80: // Down
@@ -2494,7 +2647,7 @@ private:
 
         // NORMAL MODE
         if (ch == 0 || ch == 224) {
-            ch = _getch();
+            ch = waitForInput();
             switch (ch) {
                 case 72: moveCursorUp(); break;
                 case 80: moveCursorDown(); break;
@@ -2528,6 +2681,8 @@ private:
             cutLine();
         } else if (ch == 21) {
             pasteLine();
+        } else if (ch == 20) { // Ctrl+T
+            runGotoLine();
         } else if (ch == 23) {
             // Ctrl+W legacy support
             runSearch();
@@ -2588,6 +2743,9 @@ public:
           needsFullRedraw(true) {
         
         hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        hIn = GetStdHandle(STD_INPUT_HANDLE);
+        SetConsoleMode(hIn, ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS);
+
         getTerminalSize();
         screenBuffer.resize(screenWidth * screenHeight);
         
@@ -2626,26 +2784,21 @@ public:
         refreshScreen();
         
         while (running) {
-            if (_kbhit()) {
-                while (_kbhit()) {
-                    int ch = _getch();
-                    if (!processSingleInput(ch)) {
-                        break;
-                    }
-                }
-                refreshScreen();
-            } else {
-                Sleep(50);
-                CONSOLE_SCREEN_BUFFER_INFO csbi;
-                if (GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-                    int newWidth = csbi.dwSize.X;
-                    int newHeight = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-                    if (newWidth != screenWidth || newHeight != screenHeight) {
-                        needsFullRedraw = true;
-                        refreshScreen();
-                    }
-                }
-            }
+             int ch = waitForInput();
+             
+             if (needsFullRedraw) {
+                 getTerminalSize(); // Update dimensions
+                 screenBuffer.resize(screenWidth * screenHeight);
+                 refreshScreen();
+                 needsFullRedraw = false;
+             }
+
+             if (ch != 0) {
+                 if (!processSingleInput(ch)) {
+                     break;
+                 }
+                 refreshScreen();
+             }
         }
         
         std::cout << "\x1b[?1049l" << std::flush;
@@ -2653,6 +2806,12 @@ public:
 };
 
 int main(int argc, char* argv[]) {
+    // Force US Standard Layout to fix "Dead Keys" (double press for quotes)
+    HKL hUsLayout = LoadKeyboardLayoutA("00000409", KLF_ACTIVATE | KLF_SUBSTITUTE_OK);
+    if (hUsLayout) {
+        ActivateKeyboardLayout(hUsLayout, KLF_SETFORPROCESS);
+    }
+
     SetConsoleOutputCP(CP_UTF8);
     
     std::string filename;

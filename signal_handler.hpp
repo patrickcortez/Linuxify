@@ -61,14 +61,14 @@ namespace SignalHandler {
         }
         void enableRawMode() {
             if (!initialized) return;
-            DWORD newMode = originalMode & ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
-            newMode |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
+            // Enable QuickEdit/Insert for mouse selection, disable MouseInput to avoid consuming events.
+            DWORD newMode = ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE; 
             SetConsoleMode(hStdin, newMode);
         }
         void restore() {
             if (initialized) {
                 // Force cooked mode flags to ensure child processes work
-                DWORD cookedMode = originalMode | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+                DWORD cookedMode = originalMode | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
                 SetConsoleMode(hStdin, cookedMode);
             }
         }
@@ -79,7 +79,12 @@ namespace SignalHandler {
             DWORD eventsAvailable = 0;
             GetNumberOfConsoleInputEvents(hStdin, &eventsAvailable);
             if (eventsAvailable == 0) return false;
-            std::vector<INPUT_RECORD> buffer(eventsAvailable);
+            
+            // Optimization: Static buffer to avoid reallocation
+            static std::vector<INPUT_RECORD> buffer;
+            if (buffer.capacity() < eventsAvailable) buffer.reserve(eventsAvailable + 16);
+            buffer.resize(eventsAvailable);
+
             DWORD eventsRead = 0;
             if (ReadConsoleInput(hStdin, buffer.data(), eventsAvailable, &eventsRead)) {
                 for (DWORD i = 0; i < eventsRead; i++) {

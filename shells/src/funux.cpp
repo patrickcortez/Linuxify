@@ -2479,6 +2479,12 @@ std::string getLinuxifyPath() {
 }
 
 int main() {
+    // Force US Standard Layout to fix "Dead Keys" (double press for quotes)
+    HKL hUsLayout = LoadKeyboardLayoutA("00000409", KLF_ACTIVATE | KLF_SUBSTITUTE_OK);
+    if (hUsLayout) {
+        ActivateKeyboardLayout(hUsLayout, KLF_SETFORPROCESS);
+    }
+
     SetConsoleOutputCP(CP_UTF8);
     
     DesktopEnvironment desktop;
