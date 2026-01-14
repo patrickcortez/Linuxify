@@ -6173,6 +6173,16 @@ public:
                            (BYTE*)assocValue.c_str(), (DWORD)assocValue.length() + 1) == ERROR_SUCCESS);
                 RegCloseKey(hKey);
             }
+
+            // Set assoc: HKEY_CLASSES_ROOT\.lin -> LishScript
+            bool resultLin = false;
+            if (RegCreateKeyExA(HKEY_CLASSES_ROOT, ".lin", 0, NULL,
+                                REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+                std::string assocValue = "LishScript";
+                resultLin = (RegSetValueExA(hKey, NULL, 0, REG_SZ,
+                           (BYTE*)assocValue.c_str(), (DWORD)assocValue.length() + 1) == ERROR_SUCCESS);
+                RegCloseKey(hKey);
+            }
             
             // Add .SH to PATHEXT for PowerShell compatibility
             std::cout << "Adding .SH to PATHEXT for PowerShell...\n";
@@ -6186,9 +6196,9 @@ public:
             if (pathext) {
                 std::string pathextStr = pathext;
                 std::transform(pathextStr.begin(), pathextStr.end(), pathextStr.begin(), ::toupper);
-                if (pathextStr.find(".SH") != std::string::npos) {
+                if (pathextStr.find(".SH") != std::string::npos && pathextStr.find(".LIN") != std::string::npos) {
                     needsPathext = false;
-                    std::cout << ".SH already in PATHEXT\n";
+                    std::cout << ".SH and .LIN already in PATHEXT\n";
                 }
                 free(pathext);
             }
@@ -6208,7 +6218,20 @@ public:
                     if (RegQueryValueExA(hEnvKey, "PATHEXT", NULL, &pathextType, 
                         (BYTE*)pathextBuf, &pathextSize) == ERROR_SUCCESS) {
                         
-                        std::string newPathext = std::string(pathextBuf) + ";.SH";
+                        std::string currentPathExt = pathextBuf;
+                        std::string currentPathExtUpper = currentPathExt;
+                        std::transform(currentPathExtUpper.begin(), currentPathExtUpper.end(), currentPathExtUpper.begin(), ::toupper);
+                        
+                        std::string newPathext = currentPathExt;
+                        
+                        if (currentPathExtUpper.find(".SH") == std::string::npos) {
+                            newPathext += ";.SH";
+                        }
+                        
+                        if (currentPathExtUpper.find(".LIN") == std::string::npos) {
+                            newPathext += ";.LIN";
+                        }
+                        
                         if (RegSetValueExA(hEnvKey, "PATHEXT", 0, pathextType,
                             (BYTE*)newPathext.c_str(), (DWORD)newPathext.length() + 1) == ERROR_SUCCESS) {
                             result3 = 0;
@@ -6222,10 +6245,10 @@ public:
             
             if (result1 && result2) {
                 SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-                std::cout << "\nSuccess! .sh files are now associated with lish.exe\n";
+                std::cout << "\nSuccess! .sh and .lin files are now associated with lish.exe\n";
                 SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-                std::cout << "\nHow to run .sh scripts:\n";
-                std::cout << "  From cmd:         script.sh  or  .\\script.sh\n";
+                std::cout << "\nHow to run scripts:\n";
+                std::cout << "  From cmd:         script.sh  or  script.lin\n";
                 std::cout << "  From PowerShell:  lish script.sh\n";
                 std::cout << "  Double-click:     Works in Explorer\n";
                 std::cout << "  From Linuxify:    ./script.sh\n";
@@ -6238,10 +6261,11 @@ public:
             }
             
         } else if (action == "uninstall") {
-            std::cout << "Removing .sh file association...\n";
+            std::cout << "Removing .sh/.lin file association...\n";
             
-            // Remove .sh association using native Registry API
+            // Remove .sh/.lin association using native Registry API
             RegDeleteTreeA(HKEY_CLASSES_ROOT, ".sh");
+            RegDeleteTreeA(HKEY_CLASSES_ROOT, ".lin");
             RegDeleteTreeA(HKEY_CLASSES_ROOT, "LishScript");
             
             printSuccess("File association removed.");
@@ -6264,6 +6288,16 @@ public:
                 RegCloseKey(hKey);
             } else {
                 std::cout << ".sh association not found\n";
+            }
+
+            valueSize = sizeof(valueBuf);
+            if (RegOpenKeyExA(HKEY_CLASSES_ROOT, ".lin", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                if (RegQueryValueExA(hKey, NULL, NULL, NULL, (BYTE*)valueBuf, &valueSize) == ERROR_SUCCESS) {
+                    std::cout << ".lin=" << valueBuf << "\n";
+                }
+                RegCloseKey(hKey);
+            } else {
+                std::cout << ".lin association not found\n";
             }
             
             valueSize = sizeof(valueBuf);
@@ -7308,6 +7342,64 @@ public:
             }
         } else if (cmd == "uninstall") {
             cmdUninstall(expandedTokens);
+        } else if (cmd == "nuke") {
+            HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+            
+            // Save current states
+            DWORD oldOutMode, oldInMode;
+            UINT oldCP = GetConsoleOutputCP();
+            GetConsoleMode(hOut, &oldOutMode);
+            GetConsoleMode(hIn, &oldInMode);
+            
+            // Enable UTF-8 for the art
+            SetConsoleOutputCP(65001); // CP_UTF8
+            
+            // Enable cooked mode for input
+            SetConsoleMode(hIn, ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+            
+            SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_INTENSITY);
+            
+            std::cout << R"(
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠋⠀⠉⠢⢀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⡁⠀⠀⠀⠀⠀⠑⠠⡀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡏⠑⢄⡀⠀⠀⠀⠀⠈⠑⢄⡀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣇⣀⣰⢉⣦⣄⠀⠀⠀⠀⠀⠈⢢
+⠀⠀⠀⠀⠀⠀⠀⠀⡠⠐⠊⠁⠀⢩⣿⣯⡶⠃⠢⡀⠀⠀⡠⠊
+⠀⠀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⢠⡟⠁⢹⠀⡀⠄⠚⠑⠒⠁⠀
+⠀⠀⠀⢀⠎⠉⠂⢄⠀⠀⠀⠀⠀⠀⠀⢸⠁⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⡰⠁⠀⠀⠀⠀⠁⠢⢀⠀⠀⠀⠀⡆⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⣘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⠀⡀⡘⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠰⠁⠁⠢⡀⠀⠀⠀⠀⠀⠀⠀⠀⢈⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⡇⠀⠀⠀⠀⠑⠄⡀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⢣⠀⠀⠀⠀⠀⠀⠈⠐⠄⢀⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠈⠆⡀⠀⠀⠀⠀⢀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠉⠀⠀⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+)" << std::endl;
+            
+            std::cout << "[Atomic]: Are you sure? This change will diasable cmd and powershell and will redirect them to linuxify? <Y/N>: ";
+            SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            
+            char c = 0;
+            // Use ReadConsole for reliable reading in this mode mixed with std::cin state
+            char readBuf[16];
+            DWORD readBytes;
+            if (ReadConsoleA(hIn, readBuf, sizeof(readBuf), &readBytes, NULL)) {
+                if (readBytes > 0) c = readBuf[0];
+            }
+            
+            if (c == 'y' || c == 'Y') {
+                 SystemIntegrator::enforceDeepIntegration();
+            } else {
+                 std::cout << "[Atomic]:Nuke aborted.\n";
+            }
+            
+            // Restore states
+            SetConsoleOutputCP(oldCP);
+            SetConsoleMode(hIn, oldInMode);
+        } else if (cmd == "unnuke") {
+            SystemIntegrator::restoreSystemShells();
         } else if (cmd == "sleep") {
             if (expandedTokens.size() > 1) {
                 try {
@@ -7561,7 +7653,7 @@ public:
             "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
             "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt",
             // Admin commands
-            "sudo", "setup", "uninstall",
+            "sudo", "setup", "uninstall", "nuke", "unnuke",
             // Scheduler commands
             "crontab",
             // Utils

@@ -13,12 +13,7 @@ class ChildHandler {
 public:
 
     static int spawn(const std::string& cmdLine, const std::string& workDir, bool wait = true) {
-        // STRATEGY: Native Inheritance
-        // Instead of duplicating handles, we make the Shell's own handles inheritable.
-        // This ensures the Child receives the exact same console connection as the parent.
-        // 1. Create Explicit Console Handles (Inheritable)
-        // We open the console device directly to ensure we get a fresh, valid handle.
-        // GetStdHandle() was returning a handle that was invalid (Error 6) in the child.
+ 
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
         sa.bInheritHandle = TRUE;
@@ -36,7 +31,7 @@ public:
         // 2. Configure Console Input (Standard Cooked Mode - Fixes Keys)
         // ENABLE_VIRTUAL_TERMINAL_INPUT removed to restore Arrow/Backspace in Cooked Mode.
         DWORD inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
-                          ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT;
+                          ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE;
         if (!SetConsoleMode(hIn, inputMode)) {
             std::cerr << "[ChildHandler] Warning: SetConsoleMode failed for Stdin. Error: " << GetLastError() << "\n";
         }
@@ -99,7 +94,7 @@ public:
             signalHandler.init(); 
             return -1;
         }
-
+        
         int exitCode = 0;
         if (wait) {
             g_procMgr.setForegroundPid(pi.dwProcessId);
