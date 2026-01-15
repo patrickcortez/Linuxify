@@ -26,6 +26,7 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ChangesEnvironment=yes
+ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -51,7 +52,7 @@ Source: "{#SourcePath}\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion 
 Source: "{#SourcePath}\linuxdb\*"; DestDir: "{app}\linuxdb"; Flags: ignoreversion
 
 ; Custom commands (lvc, etc.)
-Source: "{#SourcePath}\cmds\node.exe"; DestDir: "{app}\cmds"; Flags: ignoreversion
+Source: "{#SourcePath}\cmds\snode.exe"; DestDir: "{app}\cmds"; Flags: ignoreversion
 Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Bundled C++ Toolchain (MinGW-w64)

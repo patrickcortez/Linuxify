@@ -1676,7 +1676,7 @@ public:
         int limit = -1;  // -1 means show all
         
         for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-c" || args[i] == "--clear") {
+            if (args[i] == "-c" || args[i] == "--clear" || args[i] == "clear") {
                 // Clear history
                 ctx.commandHistory.clear();
                 std::ofstream file(getHistoryFilePath(), std::ios::trunc);
