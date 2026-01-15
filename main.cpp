@@ -6679,21 +6679,37 @@ public:
             
             std::cout << "[1/3] Setting ComSpec environment variable...\n";
             HKEY hEnvKey;
-            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+            long regResult = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
                 "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-                0, KEY_SET_VALUE, &hEnvKey) == ERROR_SUCCESS) {
-                
+                0, KEY_SET_VALUE | KEY_QUERY_VALUE, &hEnvKey);
+
+            if (regResult == ERROR_SUCCESS) {
                 if (RegSetValueExA(hEnvKey, "ComSpec", 0, REG_SZ,
                     (const BYTE*)linuxifyPath.c_str(),
                     (DWORD)(linuxifyPath.length() + 1)) == ERROR_SUCCESS) {
-                    std::cout << "  ComSpec -> " << linuxifyPath << "\n";
+                    
+                    // Verify the write
+                    char verifyBuf[MAX_PATH];
+                    DWORD verifySize = sizeof(verifyBuf);
+                    if (RegQueryValueExA(hEnvKey, "ComSpec", NULL, NULL, (LPBYTE)verifyBuf, &verifySize) == ERROR_SUCCESS) {
+                         if (linuxifyPath == verifyBuf) {
+                             std::cout << "  \033[32mOK\033[0m ComSpec -> " << linuxifyPath << "\n";
+                         } else {
+                             printError("Verification failed: ComSpec mismatch");
+                             allSuccess = false;
+                         }
+                    } else {
+                        printError("Verification failed: Could not read back ComSpec");
+                         allSuccess = false;
+                    }
                 } else {
-                    printError("Failed to set ComSpec");
+                    printError("Failed to set ComSpec (RegSetValueExA failed)");
                     allSuccess = false;
                 }
                 RegCloseKey(hEnvKey);
             } else {
-                printError("Failed to open environment registry");
+                printError("Failed to open environment registry (Error: " + std::to_string(regResult) + ")");
+                std::cout << "  Make sure you are running as Administrator.\n";
                 allSuccess = false;
             }
             
@@ -7107,58 +7123,7 @@ public:
                     printError("Failed to set priority");
                 }
             }
-        } else if (cmd == "gcc" || cmd == "g++" || cmd == "cc" || cmd == "c++" || 
-                   cmd == "make" || cmd == "gdb" || cmd == "ar" || cmd == "ld" ||
-                   cmd == "objdump" || cmd == "objcopy" || cmd == "strip" || cmd == "windres" ||
-                   cmd == "as" || cmd == "nm" || cmd == "ranlib" || cmd == "size" ||
-                   cmd == "strings" || cmd == "addr2line" || cmd == "c++filt") {
-            char exePath[MAX_PATH];
-            GetModuleFileNameA(NULL, exePath, MAX_PATH);
-            fs::path toolchainBin = fs::path(exePath).parent_path() / "toolchain" / "compiler" / "mingw64" / "bin";
-            
-            std::string actualCmd = cmd;
-            if (cmd == "cc") actualCmd = "gcc";
-            else if (cmd == "c++") actualCmd = "g++";
-            
-            fs::path cmdPath = toolchainBin / (actualCmd + ".exe");
-            
-            if (fs::exists(cmdPath)) {
-                std::string cmdLine = "\"" + cmdPath.string() + "\"";
-                for (size_t i = 1; i < expandedTokens.size(); i++) {
-                    cmdLine += " \"" + expandedTokens[i] + "\"";
-                }
-                
-                STARTUPINFOA si;
-                PROCESS_INFORMATION pi;
-                ZeroMemory(&si, sizeof(si));
-                si.cb = sizeof(si);
-                ZeroMemory(&pi, sizeof(pi));
-                
-                char cmdBuffer[8192];
-                strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer));
-                
-                if (CreateProcessA(
-                    NULL,
-                    cmdBuffer,
-                    NULL,
-                    NULL,
-                    TRUE,
-                    0,
-                    NULL,
-                    ctx.currentDir.c_str(),
-                    &si,
-                    &pi
-                )) {
-                    WaitForSingleObject(pi.hProcess, INFINITE);
-                    CloseHandle(pi.hProcess);
-                    CloseHandle(pi.hThread);
-                } else {
-                    printError("Failed to execute: " + cmd);
-                }
-            } else {
-                printError("Toolchain not found. Expected at: " + toolchainBin.string());
-                printError("Please reinstall Linuxify or check toolchain installation.");
-            }
+
         } else if (cmd == "sudo") {
             if (expandedTokens.size() < 2) {
                 std::cout << "Usage: sudo <command> [arguments]\n";
