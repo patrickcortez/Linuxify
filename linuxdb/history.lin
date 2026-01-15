@@ -1,70 +1,8 @@
-lino README.md
-nano README.md
+if [ 1 -eq 1 ]; echo hello
+if [ 1 -eq 1 ]; echo hello
+echo hello
+echo "hello
+declare var;echo $var
+declare var=;echo $var;
 help
-nuke
-./test
-ls
-python test.py
-./test
-pyenv init
-./test
-ls
-pyenv init
-where python
-where node
-./..
-./Onedrive
-./Documents/Projects/Linuxify/test
-ls
-./test.sh
 clear
-ls
-./comment.exe
-./comment.exe | grep -n "Hello"
-clear
-cd
-./Documents/Projects/Linuxify/test
-./Onedrive/Documents/Projects/Linuxify/
-ls
-lino
-clear
-Funux
-clear
-lino README.md
-lino
-ls
-cd test
-ls
-lino sample.txt
-lino
-lino
-lino
-cls
-ear
-cl
-ear
-cdear
-ear
-clear
-ls
-lino
-funux
-clear
-lino
-lino README.md
-ls
-./test
-ls
-lino sample.sh
-ls
-snode
-snode list
-snode list main2
-snode init main2
-help
-nuke
-echo "hello world"
-declare var=false;if[var==false]{echo "Hello";}else{echo "Oh no";}fi
-declare var=false;if[var==true]{echo "Hello";}else{echo "Oh no";}fi
-echo "hello world"
-echo "hello $MASTER"

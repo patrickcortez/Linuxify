@@ -16,66 +16,137 @@
 #include <chrono>
 #include <io.h>
 #include <windows.h>
+#include <algorithm>
 
 namespace Bash {
 
-// ============================================================================
-// TOKEN TYPES
-// ============================================================================
+enum class ErrorType {
+    LEXER_ERROR,
+    PARSER_ERROR,
+    RUNTIME_ERROR
+};
+
+class ScriptError : public std::exception {
+public:
+    ErrorType errorType;
+    std::string message;
+    std::string source;
+    int line;
+    int column;
+    
+    ScriptError(ErrorType type, const std::string& msg, const std::string& src, int ln, int col)
+        : errorType(type), message(msg), source(src), line(ln), column(col) {}
+    
+    static std::string getLineFromSource(const std::string& src, int targetLine) {
+        std::istringstream stream(src);
+        std::string line;
+        int currentLine = 1;
+        while (std::getline(stream, line)) {
+            if (currentLine == targetLine) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+                    line.pop_back();
+                }
+                return line;
+            }
+            currentLine++;
+        }
+        return "";
+    }
+    
+    static std::string createPointer(int column) {
+        if (column <= 0) return "^";
+        return std::string(column - 1, ' ') + "^";
+    }
+    
+    std::string formatError() const {
+        std::ostringstream oss;
+        
+        switch (errorType) {
+            case ErrorType::LEXER_ERROR:  oss << "\033[31mLexer Error"; break;
+            case ErrorType::PARSER_ERROR: oss << "\033[31mSyntax Error"; break;
+            case ErrorType::RUNTIME_ERROR: oss << "\033[31mRuntime Error"; break;
+        }
+        
+        oss << " at line " << line << ", column " << column << ":\033[0m\n";
+        oss << "  " << message << "\n\n";
+        
+        std::string srcLine = getLineFromSource(source, line);
+        if (!srcLine.empty()) {
+            oss << "    " << srcLine << "\n";
+            oss << "    \033[33m" << createPointer(column) << "\033[0m\n";
+        }
+        
+        return oss.str();
+    }
+    
+    const char* what() const noexcept override {
+        static thread_local std::string formatted;
+        formatted = formatError();
+        return formatted.c_str();
+    }
+};
+
+class LexerError : public ScriptError {
+public:
+    LexerError(const std::string& msg, const std::string& src, int ln, int col)
+        : ScriptError(ErrorType::LEXER_ERROR, msg, src, ln, col) {}
+};
+
+class ParseError : public ScriptError {
+public:
+    ParseError(const std::string& msg, const std::string& src, int ln, int col)
+        : ScriptError(ErrorType::PARSER_ERROR, msg, src, ln, col) {}
+};
+
+class RuntimeError : public ScriptError {
+public:
+    RuntimeError(const std::string& msg, const std::string& src, int ln, int col)
+        : ScriptError(ErrorType::RUNTIME_ERROR, msg, src, ln, col) {}
+};
+
 enum class TokenType {
-    // Literals
-    WORD,           // command, argument, identifier
-    STRING,         // "quoted string" or 'single quoted'
-    NUMBER,         // 123
-    
-    // Variables
-    VARIABLE,       // $VAR or ${VAR}
-    ASSIGNMENT,     // VAR=value
-    
-    // Operators
-    PIPE,           // |
-    REDIRECT_OUT,   // >
-    REDIRECT_APPEND,// >>
-    REDIRECT_IN,    // <
-    REDIRECT_STDERR,// 2> or 2>>
-    REDIRECT_FD,    // 2>&1 or &>
-    AND,            // &&
-    OR,             // ||
-    SEMICOLON,      // ;
-    AMPERSAND,      // &
-    NOT,            // !
-    
-    // Grouping
-    LPAREN,         // (
-    RPAREN,         // )
-    LBRACE,         // {
-    RBRACE,         // }
-    LBRACKET,       // [
-    RBRACKET,       // ]
-    
-    // Keywords (prefixed to avoid Windows macro conflicts)
-    KW_IF,          // if
-    KW_THEN,        // then
-    KW_ELSE,        // else
-    KW_ELIF,        // elif
-    KW_FI,          // fi
-    KW_FOR,         // for
-    KW_IN,          // in
-    KW_DO,          // do
-    KW_DONE,        // done
-    KW_WHILE,       // while
-    KW_UNTIL,       // until
-    KW_CASE,        // case
-    KW_ESAC,        // esac
-    KW_FUNCTION,    // function
-    KW_BREAK,       // break
-    KW_CONTINUE,    // continue
-    KW_RETURN,      // return
-    
-    // Special
-    NEWLINE,        // \n
-    COMMENT,        // # comment
-    END_OF_FILE,    // EOF
+    WORD,
+    STRING,
+    NUMBER,
+    VARIABLE,
+    ASSIGNMENT,
+    PIPE,
+    REDIRECT_OUT,
+    REDIRECT_APPEND,
+    REDIRECT_IN,
+    REDIRECT_STDERR,
+    REDIRECT_FD,
+    AND,
+    OR,
+    SEMICOLON,
+    AMPERSAND,
+    NOT,
+    LPAREN,
+    RPAREN,
+    LBRACE,
+    RBRACE,
+    LBRACKET,
+    RBRACKET,
+    KW_IF,
+    KW_THEN,
+    KW_ELSE,
+    KW_ELIF,
+    KW_FI,
+    KW_FOR,
+    KW_IN,
+    KW_DO,
+    KW_DONE,
+    KW_WHILE,
+    KW_UNTIL,
+    KW_CASE,
+    KW_ESAC,
+    KW_FUNCTION,
+    KW_BREAK,
+    KW_CONTINUE,
+    KW_RETURN,
+    NEWLINE,
+    COMMENT,
+    END_OF_FILE,
 };
 
 // Token structure
@@ -199,10 +270,16 @@ private:
     
     Token readString(char quote) {
         int startLine = line, startCol = column;
-        advance(); // skip opening quote
+        advance();
         std::string value;
         
         while (current() != '\0' && current() != quote) {
+            if (current() == '\n' && quote == '\'') {
+                throw LexerError(
+                    std::string("Unterminated single-quoted string (started with ")
+                    + quote + ", newline found before closing quote)",
+                    source, startLine, startCol);
+            }
             if (current() == '\\' && peek() != '\0') {
                 advance();
                 switch (current()) {
@@ -212,7 +289,7 @@ private:
                     case '"': value += '"'; break;
                     case '\'': value += '\''; break;
                     default: 
-                        value += '\\';  // Preserve backslash for unknown escapes
+                        value += '\\';
                         value += current(); 
                         break;
                 }
@@ -221,22 +298,40 @@ private:
             }
             advance();
         }
-        advance(); // skip closing quote
+        
+        if (current() != quote) {
+            std::string quoteType = (quote == '"') ? "double" : "single";
+            throw LexerError(
+                "Unterminated " + quoteType + "-quoted string (missing closing " + quote + ")",
+                source, startLine, startCol);
+        }
+        advance();
         return Token(TokenType::STRING, value, startLine, startCol);
     }
     
     Token readVariable() {
         int startLine = line, startCol = column;
-        advance(); // skip $
+        advance();
         std::string name;
         
         if (current() == '{') {
-            advance(); // skip {
+            int braceStartLine = line, braceStartCol = column;
+            advance();
             while (current() != '\0' && current() != '}') {
+                if (current() == '\n') {
+                    throw LexerError(
+                        "Unterminated variable expansion ${...} (newline found before closing })",
+                        source, braceStartLine, braceStartCol);
+                }
                 name += current();
                 advance();
             }
-            advance(); // skip }
+            if (current() != '}') {
+                throw LexerError(
+                    "Unterminated variable expansion ${" + name + " (missing closing })",
+                    source, braceStartLine, braceStartCol);
+            }
+            advance();
             return Token(TokenType::VARIABLE, "${" + name + "}", startLine, startCol);
         } else if (current() == '?') {
             name = "?";
@@ -247,7 +342,7 @@ private:
             advance();
             return Token(TokenType::VARIABLE, "$$", startLine, startCol);
         } else if (current() == '(') {
-            // Command substitution $(...)
+            int parenStartLine = line, parenStartCol = column;
             advance();
             int depth = 1;
             while (current() != '\0' && depth > 0) {
@@ -255,6 +350,11 @@ private:
                 else if (current() == ')') depth--;
                 if (depth > 0) name += current();
                 advance();
+            }
+            if (depth > 0) {
+                throw LexerError(
+                    "Unterminated command substitution $(...) (missing " + std::to_string(depth) + " closing parenthesis)",
+                    source, parenStartLine, parenStartCol);
             }
             return Token(TokenType::VARIABLE, "$(" + name + ")", startLine, startCol);
         } else {
@@ -264,7 +364,6 @@ private:
             }
         }
         
-        // Return with $ prefix so expandVariables can recognize it
         return Token(TokenType::VARIABLE, "$" + name, startLine, startCol);
     }
     
@@ -276,13 +375,13 @@ private:
                current() != ';' && current() != '|' && current() != '&' &&
                current() != '>' && current() != '<' && current() != '(' &&
                current() != ')' && current() != '{' && current() != '}' &&
-               // Quotes handled inside loop
                current() != '#' &&
                current() != '$') {
             
             if (current() == '"' || current() == '\'') {
                 char quote = current();
-                advance(); // skip opening quote
+                int quoteStartLine = line, quoteStartCol = column;
+                advance();
                 
                 while (current() != '\0' && current() != quote) {
                     if (current() == '\\' && peek() != '\0') {
@@ -303,32 +402,34 @@ private:
                     }
                     advance();
                 }
-                if (current() == quote) advance(); // skip closing quote
+                if (current() != quote) {
+                    std::string quoteType = (quote == '"') ? "double" : "single";
+                    throw LexerError(
+                        "Unterminated " + quoteType + "-quoted string in word (missing closing " + quote + ")",
+                        source, quoteStartLine, quoteStartCol);
+                }
+                advance();
             }
             else if (current() == '\\' && peek() != '\0') {
                 advance();
                 value += current();
-                advance(); // advance past the escaped char
+                advance();
             } else {
                 value += current();
                 advance();
             }
         }
         
-        // Check for assignment (VAR=value)
         size_t eqPos = value.find('=');
         if (eqPos != std::string::npos && eqPos > 0) {
-            // It's an assignment
             return Token(TokenType::ASSIGNMENT, value, startLine, startCol);
         }
         
-        // Check for keyword
         auto it = keywords.find(value);
         if (it != keywords.end()) {
             return Token(it->second, value, startLine, startCol);
         }
         
-        // Check if it's a number
         bool isNum = !value.empty();
         for (char c : value) {
             if (!isdigit(c)) { isNum = false; break; }
@@ -652,11 +753,12 @@ public:
 class Parser {
 private:
     std::vector<Token> tokens;
+    std::string source;
     size_t pos = 0;
     size_t iterations = 0;
-    static constexpr size_t MAX_ITERATIONS = 100000;  // Safety limit
+    static constexpr size_t MAX_ITERATIONS = 100000;
     std::chrono::steady_clock::time_point startTime;
-    static constexpr int TIMEOUT_SECONDS = 10;  // 10 second timeout
+    static constexpr int TIMEOUT_SECONDS = 10;
     
     void checkLimits() {
         if (++iterations > MAX_ITERATIONS) {
@@ -666,6 +768,31 @@ private:
             std::chrono::steady_clock::now() - startTime).count();
         if (elapsed > TIMEOUT_SECONDS) {
             throw std::runtime_error("Parser: timeout exceeded");
+        }
+    }
+    
+    std::string tokenTypeName(TokenType type) const {
+        switch (type) {
+            case TokenType::KW_THEN: return "'then'";
+            case TokenType::KW_FI: return "'fi'";
+            case TokenType::KW_DO: return "'do'";
+            case TokenType::KW_DONE: return "'done'";
+            case TokenType::KW_ESAC: return "'esac'";
+            case TokenType::KW_IN: return "'in'";
+            case TokenType::RBRACE: return "'}'";
+            case TokenType::RPAREN: return "')'";
+            case TokenType::RBRACKET: return "']'";
+            default: return "token";
+        }
+    }
+    
+    void expectToken(TokenType expected, const std::string& context) {
+        if (!match(expected)) {
+            Token tok = current();
+            std::string found = tok.value.empty() ? "end of input" : ("'" + tok.value + "'");
+            throw ParseError(
+                "Expected " + tokenTypeName(expected) + " in " + context + ", but found " + found,
+                source, tok.line, tok.column);
         }
     }
     
@@ -774,27 +901,21 @@ private:
     
     std::shared_ptr<IfNode> parseIf() {
         auto node = std::make_shared<IfNode>();
+        Token ifToken = current();
         
-        advance(); // skip 'if'
+        advance();
         skipNewlines();
         
-        // Parse condition (usually [ ... ] or command)
         node->condition = parsePipeline();
         
-        // Skip semicolon if present (e.g., if [ cond ]; then)
         match(TokenType::SEMICOLON);
         skipNewlines();
         
-        // Must have 'then'
-        if (!match(TokenType::KW_THEN)) {
-            return node;  // Malformed if
-        }
+        expectToken(TokenType::KW_THEN, "if statement after condition");
         skipNewlines();
         
-        // Parse then body
         while (!check(TokenType::KW_FI) && !check(TokenType::KW_ELSE) && 
                !check(TokenType::KW_ELIF) && !check(TokenType::END_OF_FILE)) {
-            // Skip semicolons between statements
             while (check(TokenType::SEMICOLON)) {
                 advance();
             }
@@ -806,18 +927,15 @@ private:
             auto stmt = parseStatement();
             if (stmt) node->thenBody.push_back(stmt);
             
-            // Skip semicolons and newlines after statement
             while (check(TokenType::SEMICOLON) || check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
                 advance();
             }
         }
         
-        // Parse else body
         if (check(TokenType::KW_ELSE)) {
             advance();
             skipNewlines();
             while (!check(TokenType::KW_FI) && !check(TokenType::END_OF_FILE)) {
-                // Skip semicolons between statements
                 while (check(TokenType::SEMICOLON)) {
                     advance();
                 }
@@ -828,33 +946,46 @@ private:
                 auto stmt = parseStatement();
                 if (stmt) node->elseBody.push_back(stmt);
                 
-                // Skip semicolons and newlines after statement
                 while (check(TokenType::SEMICOLON) || check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
                     advance();
                 }
             }
         }
         
-        match(TokenType::KW_FI);
+        if (!match(TokenType::KW_FI)) {
+            throw ParseError(
+                "Unterminated 'if' statement (missing 'fi')",
+                source, ifToken.line, ifToken.column);
+        }
         return node;
     }
     
     std::shared_ptr<ForNode> parseFor() {
         auto node = std::make_shared<ForNode>();
+        Token forToken = current();
         
-        advance(); // skip 'for'
+        advance();
         skipNewlines();
         
-        // Variable name
-        if (check(TokenType::WORD)) {
-            node->variable = current().value;
-            advance();
+        if (!check(TokenType::WORD)) {
+            Token tok = current();
+            throw ParseError(
+                "Expected variable name after 'for', but found '" + tok.value + "'",
+                source, tok.line, tok.column);
         }
+        node->variable = current().value;
+        advance();
         
         skipNewlines();
+        
+        if (!check(TokenType::KW_IN) && !check(TokenType::KW_DO) && !check(TokenType::SEMICOLON)) {
+            Token tok = current();
+            throw ParseError(
+                "Expected 'in' or 'do' after variable '" + node->variable + "' in for loop",
+                source, tok.line, tok.column);
+        }
         match(TokenType::KW_IN);
         
-        // Values - stop at do, semicolon, newline, or EOF
         while (!check(TokenType::KW_DO) && !check(TokenType::SEMICOLON) && 
                !check(TokenType::NEWLINE) && !check(TokenType::END_OF_FILE)) {
             if (check(TokenType::WORD) || check(TokenType::STRING) || check(TokenType::VARIABLE) || check(TokenType::NUMBER)) {
@@ -863,20 +994,13 @@ private:
             advance();
         }
         
-        // Skip semicolon if present
         match(TokenType::SEMICOLON);
         skipNewlines();
         
-        // Must have 'do'
-        if (!match(TokenType::KW_DO)) {
-            // If no 'do', something is wrong - return what we have
-            return node;
-        }
+        expectToken(TokenType::KW_DO, "for loop after values");
         skipNewlines();
         
-        // Body - parse until 'done'
         while (!check(TokenType::KW_DONE) && !check(TokenType::END_OF_FILE)) {
-            // Skip semicolons between statements
             while (check(TokenType::SEMICOLON)) {
                 advance();
             }
@@ -887,26 +1011,32 @@ private:
             auto stmt = parseStatement();
             if (stmt) node->body.push_back(stmt);
             
-            // Skip semicolons and newlines after statement
             while (check(TokenType::SEMICOLON) || check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
                 advance();
             }
         }
         
-        match(TokenType::KW_DONE);
+        if (!match(TokenType::KW_DONE)) {
+            throw ParseError(
+                "Unterminated 'for' loop (missing 'done')",
+                source, forToken.line, forToken.column);
+        }
         return node;
     }
     
     std::shared_ptr<WhileNode> parseWhile() {
         auto node = std::make_shared<WhileNode>();
+        Token whileToken = current();
         
-        advance(); // skip 'while'
+        advance();
         skipNewlines();
         
         node->condition = parsePipeline();
         
+        match(TokenType::SEMICOLON);
         skipNewlines();
-        match(TokenType::KW_DO);
+        
+        expectToken(TokenType::KW_DO, "while loop after condition");
         skipNewlines();
         
         while (!check(TokenType::KW_DONE) && !check(TokenType::END_OF_FILE)) {
@@ -915,7 +1045,11 @@ private:
             skipNewlines();
         }
         
-        match(TokenType::KW_DONE);
+        if (!match(TokenType::KW_DONE)) {
+            throw ParseError(
+                "Unterminated 'while' loop (missing 'done')",
+                source, whileToken.line, whileToken.column);
+        }
         return node;
     }
     
@@ -1221,7 +1355,8 @@ private:
     }
 
 public:
-    explicit Parser(const std::vector<Token>& toks) : tokens(toks), startTime(std::chrono::steady_clock::now()) {}
+    Parser(const std::vector<Token>& toks, const std::string& src)
+        : tokens(toks), source(src), startTime(std::chrono::steady_clock::now()) {}
     
     std::vector<std::shared_ptr<ASTNode>> parse() {
         std::vector<std::shared_ptr<ASTNode>> program;
@@ -1481,15 +1616,15 @@ private:
             }
             return 0;
         };
-        
         builtins["source"] = [this](const std::vector<std::string>& args) {
             if (args.size() < 2) return 1;
             std::ifstream file(args[1]);
             if (!file) return 1;
             std::stringstream buf;
             buf << file.rdbuf();
-            Lexer lex(buf.str());
-            Parser parser(lex.tokenize());
+            std::string src = buf.str();
+            Lexer lex(src);
+            Parser parser(lex.tokenize(), src);
             auto prog = parser.parse();
             for (auto& stmt : prog) {
                 execute(stmt);
@@ -2542,7 +2677,6 @@ public:
     }
     
     
-    // Execute code string directly
     int runCode(const std::string& code) {
         try {
             Lexer lexer(code);
@@ -2555,7 +2689,7 @@ public:
                 }
             }
             
-            Parser parser(tokens);
+            Parser parser(tokens, code);
             auto program = parser.parse();
             
             if (debugMode) {
@@ -2563,6 +2697,9 @@ public:
             }
             
             return executor.run(program);
+        } catch (const ScriptError& e) {
+            std::cerr << e.what();
+            return 1;
         } catch (const std::exception& e) {
             std::cerr << "\033[31mError: " << e.what() << "\033[0m\n";
             return 1;

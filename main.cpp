@@ -181,8 +181,9 @@ public:
                         break;
                 }
             }
+        } catch (const Bash::ScriptError&) {
+            return true;
         } catch (...) {
-            // If lexer fails, fallback to standard execution
             return false;
         }
         
