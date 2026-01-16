@@ -1825,7 +1825,7 @@ private:
         int centerY = screenHeight / 3;
         
         std::string title = "L I N O   v 2 . 0";
-        std::string subtitle = "Linuxified Lino Editor";
+        std::string subtitle = "Lino Text Editor";
         std::string credit = "Created by Cortez";
 
         int titleX = (screenWidth - (int)title.length()) / 2;
