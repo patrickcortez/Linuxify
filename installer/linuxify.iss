@@ -55,9 +55,6 @@ Source: "{#SourcePath}\linuxdb\*"; DestDir: "{app}\linuxdb"; Flags: ignoreversio
 Source: "{#SourcePath}\cmds\snode.exe"; DestDir: "{app}\cmds"; Flags: ignoreversion
 Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Bundled C++ Toolchain (MinGW-w64)
-Source: "{#SourcePath}\toolchain\*"; DestDir: "{app}\toolchain"; Flags: ignoreversion recursesubdirs createallsubdirs
-
 ; Lino syntax highlighting plugins
 Source: "{#SourcePath}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 

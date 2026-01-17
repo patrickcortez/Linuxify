@@ -2,3 +2,14 @@
 ./..
 ./test
 ./..
+mysql
+mysql -u root -p
+admin
+clear
+declare
+declare type="Women"; echo $type;
+declare type="Women"; if[type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi
+declare type="Women"; if[type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi;
+declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi
+declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";};fi
+setup

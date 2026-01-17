@@ -63,4 +63,9 @@ Windows kernel with linux syntax for its commands.
 
 ## Phase 7 Integrating Linux commands and utilities
 
-- [ ] Integrate the rest of the Linux commands and utilities
+- [X] Integrate the rest of the Linux commands and utilities
+
+## Phase 8 MSIX Package
+
+- [ ] Create MSIX Package so Linuxify is a terminal application.
+
