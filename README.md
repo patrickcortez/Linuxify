@@ -1,6 +1,6 @@
 # Linuxify
 
-A native Unix-like shell and development platform for Windows — featuring an integrated Bash interpreter, GUI terminal, version control, virtual file system, task scheduler, and bundled toolchain. Built entirely from scratch in C++.
+A native Unix-like shell and development platform for Windows — featuring an integrated Bash interpreter, GUI terminal, version control, virtual file system, task scheduler. Built entirely from scratch in C++.
 
 ## Features
 
@@ -8,7 +8,6 @@ A native Unix-like shell and development platform for Windows — featuring an i
 - Linux Shell with 60+ Linux commands
 - Lin Package Manager (winget-powered)
 - Registry for packages and commands
-- Bundled C++ Toolchain (MinGW-w64 GCC 15.x) with dev libraries
 - Integrated Bash shell script interpreter
 - LVC version control system
 - Node graph file system with encryption support
@@ -36,7 +35,7 @@ The main shell executable (`linuxify.exe`) — a complete Unix-like shell enviro
 | **System Info** | `lsmem`, `free`, `lscpu`, `lshw`, `sysinfo`, `lsmount`, `lsblk`, `df`, `lsusb`, `lsnet`, `lsof` |
 | **Networking** | `ip`, `ping`, `traceroute`, `nslookup`, `dig`, `curl`, `wget`, `netstat`, `ifconfig` |
 | **Shell** | `history`, `whoami`, `env`, `export`, `which`, `clear`, `exit` |
-| **Toolchain** | `gcc`, `g++`, `make`, `gdb`, `ar`, `ld`, `objdump`, `nm`, `strip` |
+| **Tools** | `make`, `gdb`, `ar`, `ld`, `objdump`, `nm`, `strip` |
 | **Scheduling** | `crontab`, `crond` |
 
 **Shell Features:**
@@ -417,44 +416,6 @@ A Unix-style cron daemon (`crond.exe`) for scheduling recurring tasks on Windows
 
 ---
 
-### **Bundled C++ Toolchain**
-
-Linuxify bundles MinGW-w64 GCC 15.x providing a complete C++ development environment.
-
-**Included Tools:**
-- Compilers: `gcc`, `g++`, `cc`, `c++`
-- Build tools: `make`, `ar`, `ld`, `as`, `ranlib`
-- Debug tools: `gdb`, `objdump`, `addr2line`
-- Utilities: `strip`, `size`, `strings`, `nm`, `c++filt`
-
-**IDE Integration:**
-After installation:
-- `PATH` includes toolchain binaries
-- `CC`or `g++` → `gcc.exe`
-- `CXX`or `gcc` → `g++.exe`
-
-IDEs like VS Code and CLion auto-detect the compiler.
-
-**Bundled Development Libraries:**
-
-The toolchain includes pre-compiled libraries for common development needs:
-
-| Library | Version | Include | Link Flags | Purpose |
-|---------|---------|---------|------------|---------|
-| zlib | 1.3.1 | `<zlib.h>` | `-lz` | Compression |
-| OpenSSL | 3.4.0 | `<openssl/ssl.h>` | `-lssl -lcrypto` | TLS/crypto |
-| PDCurses | 4.5.3 | `<curses.h>` | `-lpdcurses` | Terminal UI |
-| libpng | 1.6.53 | `<png.h>` | `-lpng -lz` | PNG images |
-| libcurl | 8.11.1 | `<curl/curl.h>` | `-lcurl` | HTTP client |
-| SQLite3 | 3.51.1 | `<sqlite3.h>` | `-lsqlite3` | Embedded database |
-
-**Example:**
-```bash
-gcc myapp.c -lz -lssl -lcrypto -lcurl -lsqlite3 -o myapp.exe
-```
-
----
-
 ## Directory Structure
 
 ```
@@ -507,28 +468,28 @@ Run the installer, which will:
 
 ```bash
 # Build main shell
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp
+g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp
 
 # Build Lino
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -O2 -o Lino.exe Lino.cpp
+g++ -std=c++17 -O2 -o Lino.exe Lino.cpp
 
 # Build lish
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\lish.exe cmds-src\lish.cpp
+g++ -std=c++17 -static -o lish.cpp
 
 # Build lvc
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\lvc.exe cmds-src\lvc.cpp
+g++ -std=c++17 -static -o lvc.cpp
 
 # Build node
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\node.exe cmds-src\node.cpp
+g++ -std=c++17 -static -o node.cpp
 
 # Build nexplore (GUI)
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -mwindows -o cmds\nexplore.exe cmds-src\nexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
+g++ -std=c++17 -static -mwindows -onexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
 
 # Build GUI terminal (windux)
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -mwindows -o cmds\windux.exe cmds-src\gui_terminal.cpp cmds-src\terminal.res -lgdi32 -luser32 -ldwmapi
+g++ -std=c++17 -static -mwindows -o cmds\windux.exe cmds-src\gui_terminal.cpp cmds-src\terminal.res -lgdi32 -luser32 -ldwmapi
 
 # Build crond
-.\toolchain\compiler\mingw64\bin\g++ -std=c++17 -static -o cmds\crond.exe cmds-src\crond.cpp -lws2_32
+g++ -std=c++17 -static -o cmds\crond.exe cmds-src\crond.cpp -lws2_32
 
 # Build installer
 .\build-installer.ps1
