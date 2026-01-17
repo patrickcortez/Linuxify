@@ -8563,6 +8563,13 @@ public:
         if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\" ||
             cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos ||
             (cmd.length() > 4 && cmd.substr(cmd.length() - 4) == ".exe")) {
+            std::string resolvedCmd = resolvePath(cmd);
+            if (fs::exists(resolvedCmd) && fs::is_directory(resolvedCmd)) {
+                try {
+                    ctx.currentDir = fs::canonical(resolvedCmd).string();
+                    return 0;
+                } catch (...) {}
+            }
             std::string execPath = cmd;
             if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\") {
                 execPath = cmd.substr(2);
@@ -8749,9 +8756,10 @@ void execute_command_logic(ShellContext& ctx, const std::string& input) {
         logic.handleChainedCommands(trimmed);
     } else {
         namespace fs = std::filesystem;
-        if (fs::exists(trimmed) && fs::is_directory(trimmed)) {
+        fs::path resolvedPath = fs::path(ctx.currentDir) / trimmed;
+        if (fs::exists(resolvedPath) && fs::is_directory(resolvedPath)) {
             try {
-                ctx.currentDir = fs::canonical(trimmed).string();
+                ctx.currentDir = fs::canonical(resolvedPath).string();
                 ctx.lastExitCode = 0;
                 return;
             } catch (...) {}

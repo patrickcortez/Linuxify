@@ -1,8 +1,4 @@
-if [ 1 -eq 1 ]; echo hello
-if [ 1 -eq 1 ]; echo hello
-echo hello
-echo "hello
-declare var;echo $var
-declare var=;echo $var;
-help
-clear
+./OneDrive/
+./..
+./test
+./..

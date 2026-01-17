@@ -3,6 +3,7 @@
 #define LINUXIFY_CHILD_HANDLER_HPP
 
 #include <windows.h>
+#include <shellapi.h>
 #include <string>
 #include <vector>
 #include <iostream>
@@ -74,7 +75,7 @@ public:
             cmdBuffer,
             NULL,
             NULL,
-            TRUE,   // Inherit handles (The ones we marked as inheritable)
+            TRUE,
             0,
             NULL,
             dir,
@@ -82,14 +83,68 @@ public:
             &pi
         );
         
-        // We can close ours now that child has inherited them
         CloseHandle(hIn);
         CloseHandle(hOut);
         CloseHandle(hErr);
 
         if (!success) {
-            std::cerr << "[ChildHandler] Failed to create process: " << cmdLine << " Error: " << GetLastError() << "\n";
-            // Restore handlers
+            DWORD err = GetLastError();
+            if (err == ERROR_ELEVATION_REQUIRED) {
+                SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
+                signalHandler.init();
+                
+                std::string executable;
+                std::string arguments;
+                if (!cmdLine.empty() && cmdLine[0] == '"') {
+                    size_t closeQuote = cmdLine.find('"', 1);
+                    if (closeQuote != std::string::npos) {
+                        executable = cmdLine.substr(1, closeQuote - 1);
+                        if (closeQuote + 1 < cmdLine.length()) {
+                            arguments = cmdLine.substr(closeQuote + 1);
+                            size_t argStart = arguments.find_first_not_of(' ');
+                            if (argStart != std::string::npos) {
+                                arguments = arguments.substr(argStart);
+                            } else {
+                                arguments.clear();
+                            }
+                        }
+                    } else {
+                        executable = cmdLine;
+                    }
+                } else {
+                    size_t firstSpace = cmdLine.find(' ');
+                    if (firstSpace != std::string::npos) {
+                        executable = cmdLine.substr(0, firstSpace);
+                        arguments = cmdLine.substr(firstSpace + 1);
+                    } else {
+                        executable = cmdLine;
+                    }
+                }
+                
+                SHELLEXECUTEINFOA sei = {0};
+                sei.cbSize = sizeof(sei);
+                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+                sei.lpVerb = "runas";
+                sei.lpFile = executable.c_str();
+                sei.lpParameters = arguments.empty() ? NULL : arguments.c_str();
+                sei.lpDirectory = dir;
+                sei.nShow = SW_SHOWNORMAL;
+                
+                if (ShellExecuteExA(&sei)) {
+                    if (wait && sei.hProcess) {
+                        WaitForSingleObject(sei.hProcess, INFINITE);
+                        DWORD code;
+                        GetExitCodeProcess(sei.hProcess, &code);
+                        CloseHandle(sei.hProcess);
+                        return (int)code;
+                    }
+                    if (sei.hProcess) CloseHandle(sei.hProcess);
+                    return 0;
+                }
+                std::cerr << "[ChildHandler] Elevation failed. Error: " << GetLastError() << "\n";
+                return -1;
+            }
+            std::cerr << "[ChildHandler] Failed to create process: " << cmdLine << " Error: " << err << "\n";
             SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
             signalHandler.init(); 
             return -1;
