@@ -1,21 +1,23 @@
 # Linuxify
 
-A native Unix-like shell and development platform for Windows — featuring an integrated Bash interpreter, GUI terminal, version control, virtual file system, task scheduler. Built entirely from scratch in C++.
+A native Unix-like shell and development platform for Windows — built on a continuation-passing style (CPS) state machine engine that provides stackless execution, preventing stack overflow regardless of session length. Features an integrated Bash interpreter, GUI terminal, version control, virtual file system, and task scheduler. Built entirely from scratch in C++.
 
 ## Features
 
-- Lino Text Editor with User-defined Syntax Highlighting
-- Linux Shell with 60+ Linux commands
-- Lin Package Manager (winget-powered)
-- Registry for packages and commands
-- Integrated Bash shell script interpreter
-- LVC version control system
-- Node graph file system with encryption support
-- Nexplore - GUI file explorer for Node images
-- GUI Terminal (windux) with tabs and ConPTY
-- Crond daemon for scheduled tasks
-- LinMake build system
+- **Linuxify Shell** with 60+ built-in Linux commands
+- **Lino Text Editor** with syntax highlighting plugins
+- **Lin Package Manager** (winget-powered) with 180+ package aliases
+- **Integrated Bash interpreter** with full lexer, parser, and AST executor
+- **LVC version control** system with SHA-256 content addressing
+- **Node graph file system** with full disk encryption
+- **Nexplore** - GUI file explorer for Node images
+- **Windux** - GUI terminal with tabs and ConPTY
+- **Crond daemon** for scheduled tasks
+- **LinMake build system** with incremental builds
 - Shebang (`./`) execution support
+- Real-time syntax highlighting as you type
+- Frequency-based auto-suggestions
+- Signal and crash handlers
 
 ## Components
 
@@ -23,31 +25,154 @@ A native Unix-like shell and development platform for Windows — featuring an i
 
 ### **Linuxify Shell**
 
-The main shell executable (`linuxify.exe`) — a complete Unix-like shell environment for Windows with an integrated Bash interpreter. Comparable to bash or zsh, it features native script execution, control flow, variable expansion, and 60+ built-in commands. Written in C++ with 5500+ lines.
+The main shell executable (`linuxify.exe`) — a complete Unix-like shell environment for Windows powered by a **trampoline-based state machine engine**. Unlike traditional shells that use recursive call stacks, Linuxify uses a continuation-passing architecture where each shell state (`StatePrompt`, `StateReadInput`, `StateExecute`) is an independent node that returns the next state to execute. The `ShellEngine` dispatcher iteratively bounces between states, eliminating stack growth and preventing overflow regardless of session length.
+
+Comparable to bash or zsh, it features an integrated Bash interpreter, native script execution, control flow, variable expansion, and 60+ built-in commands. Written in C++ with 8900+ lines.
 
 **Supported Commands:**
 
 | Category | Commands |
 |----------|----------|
 | **File System** | `pwd`, `cd`, `ls`, `mkdir`, `rm`, `rmdir`, `mv`, `cp`, `cat`, `touch`, `chmod`, `chown`, `find` |
-| **Text** | `grep`, `head`, `tail`, `wc`, `sort`, `uniq`, `echo` |
+| **Text** | `grep`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `echo` |
 | **Process** | `ps`, `kill`, `top`, `htop`, `jobs`, `fg`, `&` (background) |
 | **System Info** | `lsmem`, `free`, `lscpu`, `lshw`, `sysinfo`, `lsmount`, `lsblk`, `df`, `lsusb`, `lsnet`, `lsof` |
 | **Networking** | `ip`, `ping`, `traceroute`, `nslookup`, `dig`, `curl`, `wget`, `netstat`, `ifconfig` |
-| **Shell** | `history`, `whoami`, `env`, `export`, `which`, `clear`, `exit` |
+| **Shell** | `history`, `whoami`, `env`, `export`, `which`, `clear`, `exit`, `source`, `alias`, `declare` |
 | **Tools** | `make`, `gdb`, `ar`, `ld`, `objdump`, `nm`, `strip` |
 | **Scheduling** | `crontab`, `crond` |
+| **System** | `nuke`, `unnuke`, `setup` |
 
 **Shell Features:**
 - Syntax highlighting for commands as you type
-- Persistent command history
+- Frequency-based auto-suggestions (ghost text)
+- Persistent command history with `history clear` support
 - Piping: `cmd1 | cmd2`
-- Redirection: `>` (write), `>>` (append)
+- Redirection: `>` (write), `>>` (append), `2>` (stderr), `&>` (both)
+- Input redirection: `<`, `<<` (heredoc), `<<<` (here-string)
 - Background processes: `command &`
 - Environment variables: `$VAR`, `${VAR}`
+- Command substitution: `$(command)`
+- Arithmetic evaluation
+- Auto-pairing for quotes and brackets
+- Text selection with copy/cut/paste (Ctrl+C/X/V)
 - Integrated Bash interpreter for `.sh` scripts
 
 ---
+
+### **Shell Architecture**
+
+The shell is built on a modular architecture with specialized subsystems working together to provide a complete Unix-like experience on Windows.
+
+#### Engine Core (`engine/`)
+
+The engine provides the foundational state management for the shell:
+
+| File | Purpose |
+|------|---------|
+| `shell_context.hpp` | Central shell state container holding current directory, environment variables, shell variables, last exit code, and execution flags |
+| `continuation.hpp` | Detects incomplete input (unclosed quotes, brackets, heredocs) and handles multi-line continuation prompts (`> `) |
+| `states.hpp` | Shell execution state machine managing interactive mode, script execution, and pipeline states |
+
+#### Input System
+
+The input subsystem provides a sophisticated terminal experience:
+
+**`input_handler.hpp`** (824 lines) - The main input loop:
+- Real-time syntax highlighting as you type (commands, arguments, flags, strings)
+- Cursor movement with proper multi-line wrapping
+- History navigation with Up/Down arrows
+- Tab completion with filesystem and command suggestions
+- Bracket and quote auto-pairing with smart wrap-selection
+- Text selection with Shift+Arrow keys
+- Clipboard support (Ctrl+C/X/V when text selected)
+- Ghost text auto-suggestions based on command frequency
+
+**`io_handler.hpp`** - Low-level console I/O:
+- Direct Win32 Console API (`WriteConsoleA`, `SetConsoleCursorPosition`)
+- Color management with predefined shell colors (commands, args, flags, strings)
+- Screen buffer operations (clear screen, clear area, clear from cursor)
+- Cursor position tracking and manipulation
+
+#### Output System
+
+**`shell_streams.hpp`** (295 lines) - Custom I/O streams:
+- `ShellIO::sout` - Thread-safe stdout with color support
+- `ShellIO::serr` - Thread-safe stderr 
+- `ShellIO::sin` - Buffered stdin with tokenization
+- Automatic prompt redrawing when background output interrupts input
+- ANSI color codes via `ShellIO::Color` enum
+- Console vs pipe detection for proper output handling
+
+#### Signal & Interrupt Handling
+
+**`signal_handler.hpp`** (196 lines) - Unified event handling:
+- `InputDispatcher` singleton managing raw console input
+- Key binding registration for custom shortcuts
+- Console control handler for CTRL_C, CTRL_BREAK, CTRL_CLOSE
+- Standard signal handlers (SIGINT, SIGTERM, SIGABRT)
+- Signal blocking during critical sections
+- Graceful shutdown with cleanup callbacks
+
+**`interrupt.hpp`** (705 lines) - Deep interrupt diagnostics:
+- `PEResolver` - PE header parsing and symbol resolution
+- `UnwindMachine` - x64 stack unwinding using RUNTIME_FUNCTION tables
+- Memory dump utilities for crash analysis
+- Module enumeration via PEB/LDR structures
+- Disassembly around crash addresses
+- Thread enumeration and hung thread detection
+
+**`crash_handler.hpp`** (148 lines) - Crash recovery:
+- Windows SEH (Structured Exception Handling) filter
+- C++ `std::terminate` handler
+- Formatted crash reports with:
+  - Exception name and code
+  - Crash address with module+offset
+  - Full stack trace with symbol resolution
+- Console mode restoration before crash output
+
+#### Process Management
+
+**`child_handler.hpp`** (178 lines) - Child process spawning:
+- Console handle duplication for proper I/O inheritance
+- Console mode configuration (cooked mode for children, VT processing)
+- Signal handler suspension during child execution
+- UAC elevation support via `ShellExecuteEx` with "runas" verb
+- Foreground process tracking for job control
+- Automatic shell state restoration after child exits
+
+**`process_manager.hpp`** - Background job management:
+- Job list tracking (PID, command, status)
+- Foreground/background process switching
+- Process termination and cleanup
+
+#### Shell Features
+
+**`auto-suggest.hpp`** (300+ lines) - Intelligent suggestions:
+- Frequency index built from command history
+- Binary search for prefix matching
+- Recency as tie-breaker for equal frequencies
+- Filesystem path completion fallback
+- Case-insensitive matching
+
+**`auto-nav.hpp`** (128 lines) - Auto-navigation:
+- Detects path-like inputs (starting with `/`, `./`, `..`, `~`, or drive letter)
+- Path validation and resolution
+- Automatic `cd` when typing a valid directory path
+
+**`arith.hpp`** (322 lines) - Arithmetic evaluator:
+- Full expression parser (Tokenizer → Parser → Evaluator)
+- Operators: `+`, `-`, `*`, `/`, `()`
+- Proper operator precedence
+- Floating-point support with integer output when possible
+- Used for `$(( expression ))` evaluation
+
+**`fuzzy.hpp`** - Fuzzy matching:
+- Levenshtein distance for typo correction
+- Command name suggestions for "did you mean?" prompts
+
+---
+
 
 ### **Registry**
 
@@ -97,43 +222,29 @@ print("Hello from Python!")
 - `#!/usr/bin/env lish` - Unix-style (env is stripped)
 - `#!C:/path/to/interpreter.exe` - Absolute path
 
-**Important:** Without a shebang, `./script.sh` will fail with:
-```
-Script missing shebang line: script.sh
-Add a shebang: #!<interpreter> (registry name or absolute path)
-```
-
 ---
 
-### **Setup Command**
+### **System Integration**
 
-The `setup` command registers .sh files with Windows, allowing you to run scripts from Explorer, cmd, and PowerShell.
+Linuxify provides deep system integration capabilities:
 
 **Commands:**
 
 | Command | Description |
 |---------|-------------|
-| `setup install` | Register .sh files with Windows (requires admin) |
+| `nuke` | Replace cmd.exe and powershell.exe with Linuxify (requires admin) |
+| `unnuke` | Restore original Windows shells |
+| `setup install` | Register .sh files with Windows for Explorer/cmd/PowerShell execution |
 | `setup uninstall` | Remove .sh file association |
 | `setup status` | Check current file association |
 
-**What `setup install` does:**
-1. Creates `LishScript` file type pointing to `lish.exe`
-2. Associates `.sh` extension with `LishScript`
-3. Adds `.SH` to `PATHEXT` for PowerShell compatibility
-4. Requires Administrator privileges (will prompt for elevation)
-
-**After installation, you can run .sh scripts:**
-- From cmd: `script.sh` or `.\script.sh`
-- From PowerShell: `lish script.sh` or `cmd /c .\script.sh`
-- Double-click in Explorer
-- From Linuxify: `./script.sh`
+**Warning:** The `nuke` command uses IFEO (Image File Execution Options) injection to redirect shell binaries. Use with caution.
 
 ---
 
 ### **Lin Package Manager**
 
-A winget-powered package manager with Linux-style syntax. Uses `linuxdb/packages.lin` for 128+ package aliases.
+A winget-powered package manager with Linux-style syntax. Uses `linuxdb/packages.lin` for 180+ package aliases.
 
 **Commands:**
 
@@ -149,10 +260,12 @@ A winget-powered package manager with Linux-style syntax. Uses `linuxdb/packages
 | `lin alias` | Show package mappings |
 
 **Package Aliases Include:**
-- Languages: `python`, `nodejs`, `rust`, `go`, `java`, `ruby`, `php`
-- Tools: `git`, `docker`, `cmake`, `curl`, `wget`, `jq`, `fzf`
-- Editors: `code`, `vim`, `neovim`, `notepad++`, `sublime`
-- Browsers: `chrome`, `firefox`, `edge`, `brave`
+- Languages: `python`, `nodejs`, `rust`, `go`, `java`, `ruby`, `php`, `lua`, `zig`, `nim`
+- Tools: `git`, `docker`, `cmake`, `curl`, `wget`, `jq`, `fzf`, `ripgrep`, `fd`, `bat`
+- Editors: `code`, `vim`, `neovim`, `notepad++`, `sublime`, `helix`
+- Browsers: `chrome`, `firefox`, `edge`, `brave`, `opera`, `vivaldi`
+- Databases: `sqlite`, `mysql`, `postgres`, `mongodb`, `redis`
+- Cloud: `azure-cli`, `aws-cli`, `gcloud`, `docker`, `kubectl`, `terraform`
 
 ---
 
@@ -179,7 +292,7 @@ A terminal-based text editor with fast rendering and plugin-based syntax highlig
 
 **Syntax Highlighting Plugins:**
 
-Create `.Lino` files in `plugins/` folder:
+Create `.nano` files in `plugins/` folder:
 ```
 Section [.cpp]{
     keyword: int, blue;
@@ -189,7 +302,7 @@ Section [.cpp]{
 }
 ```
 
-Bundled plugins: `cpp.Lino` (C/C++), `python.Lino`
+Bundled plugins: `cpp.nano` (C/C++), `python.nano`
 
 ---
 
@@ -199,7 +312,6 @@ A native shell script interpreter (`lish.exe`) that runs `.sh` scripts on Window
 
 **Usage:**
 ```bash
-#!lish
 lish script.sh         # Run a script
 lish -c "echo hello"   # Run inline command
 lish                   # Interactive mode
@@ -217,7 +329,7 @@ lish                   # Interactive mode
 
 ### **Integrated Bash Interpreter**
 
-The shell now includes a fully integrated Bash interpreter (`interpreter.hpp`) with 1600+ lines of code, providing:
+The shell includes a fully integrated Bash interpreter (`interpreter.hpp`) with 2700+ lines of code, providing:
 
 **Components:**
 - **Lexer**: Tokenizes shell script input with support for all bash tokens
@@ -229,9 +341,11 @@ The shell now includes a fully integrated Bash interpreter (`interpreter.hpp`) w
 - Compound commands (`&&`, `||`)
 - If/elif/else conditionals
 - For and while loops
+- Case statements
 - Function definitions and calls
 - Variable expansion and command substitution
 - Redirections and background execution
+- Break/continue/return statements
 
 ---
 
@@ -354,7 +468,7 @@ A Windows GUI application (`nexplore.exe`) for browsing `.node` file system imag
 
 ---
 
-### **GUI Terminal (windux)**
+### **GUI Terminal (Windux)**
 
 A modern Windows GUI terminal emulator (`windux.exe`) with tabbed interface and ConPTY support.
 
@@ -420,7 +534,7 @@ A Unix-style cron daemon (`crond.exe`) for scheduling recurring tasks on Windows
 
 ```
 Linuxify/
-├── linuxify.exe        # Main shell (8800+ lines)
+├── linuxify.exe        # Main shell (8900+ lines)
 ├── Lino.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
@@ -428,25 +542,36 @@ Linuxify/
 │   ├── node.exe        # Graph file system
 │   ├── nexplore.exe    # GUI file explorer
 │   ├── windux.exe      # GUI terminal
-│   └── crond.exe       # Cron daemon
+│   ├── crond.exe       # Cron daemon
+│   ├── curl.exe        # HTTP client
+│   ├── grep.exe        # Pattern search
+│   ├── linmake.exe     # Build system
+│   └── ...             # 20+ additional tools
 ├── cmds-src/           # Source files
-│   ├── interpreter.hpp # Bash interpreter (1600+ lines)
-│   ├── lish.hpp        # Lish interpreter
+│   ├── interpreter.hpp # Bash interpreter (2700+ lines)
+│   ├── auto-suggest.hpp # Auto-suggestion system
+│   ├── child_handler.hpp # Process management
+│   ├── system_integrator.hpp # Nuke/unnuke functionality
+│   ├── lish.cpp        # Lish interpreter
 │   ├── lvc.hpp         # LVC implementation
 │   ├── node.hpp        # Node FS implementation
 │   ├── nexplore.cpp    # Nexplore GUI
-│   ├── gui_terminal.cpp # Terminal GUI (850+ lines)
+│   ├── gui_terminal.cpp # Terminal GUI
 │   └── crond.cpp       # Cron daemon
 ├── linuxdb/            # Database files
 │   ├── registry.lin    # Registered commands
-│   ├── packages.lin    # Package aliases (128+)
+│   ├── packages.lin    # Package aliases (180+)
 │   ├── history.lin     # Command history
+│   ├── var.lin         # Persistent variables
 │   ├── crontab         # Scheduled tasks
 │   ├── crond.log       # Daemon log
 │   └── nodes/          # Node FS images
-├── plugins/            # Lino syntax plugins
-│   ├── cpp.Lino
-│   └── python.Lino
+├── plugins/            # Syntax highlighting plugins
+│   ├── cpp.nano
+│   └── python.nano
+├── input_handler.hpp   # Input handling with auto-suggestions
+├── signal_handler.hpp  # Signal handling
+├── crash_handler.hpp   # Crash recovery
 └── toolchain/          # Bundled MinGW-w64
     └── compiler/
         └── mingw64/
@@ -468,28 +593,28 @@ Run the installer, which will:
 
 ```bash
 # Build main shell
-g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp
+g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi
 
 # Build Lino
 g++ -std=c++17 -O2 -o Lino.exe Lino.cpp
 
 # Build lish
-g++ -std=c++17 -static -o lish.cpp
+g++ -std=c++17 -static -o cmds/lish.exe cmds-src/lish.cpp
 
 # Build lvc
-g++ -std=c++17 -static -o lvc.cpp
+g++ -std=c++17 -static -o cmds/lvc.exe cmds-src/lvc.cpp
 
 # Build node
-g++ -std=c++17 -static -o node.cpp
+g++ -std=c++17 -static -o cmds/node.exe cmds-src/node.cpp
 
 # Build nexplore (GUI)
-g++ -std=c++17 -static -mwindows -onexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
+g++ -std=c++17 -static -mwindows -o cmds/nexplore.exe cmds-src/nexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
 
 # Build GUI terminal (windux)
-g++ -std=c++17 -static -mwindows -o cmds\windux.exe cmds-src\gui_terminal.cpp cmds-src\terminal.res -lgdi32 -luser32 -ldwmapi
+g++ -std=c++17 -static -mwindows -o cmds/windux.exe cmds-src/gui_terminal.cpp cmds-src/terminal.res -lgdi32 -luser32 -ldwmapi
 
 # Build crond
-g++ -std=c++17 -static -o cmds\crond.exe cmds-src\crond.cpp -lws2_32
+g++ -std=c++17 -static -o cmds/crond.exe cmds-src/crond.cpp -lws2_32
 
 # Build installer
 .\build-installer.ps1
