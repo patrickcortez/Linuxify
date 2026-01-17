@@ -13,3 +13,4 @@ declare type="Women"; if[type == "Women"]{ echo "they aint that bad";}else{echo 
 declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi
 declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";};fi
 setup
+help

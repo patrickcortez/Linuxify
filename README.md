@@ -420,7 +420,7 @@ A Unix-style cron daemon (`crond.exe`) for scheduling recurring tasks on Windows
 
 ```
 Linuxify/
-├── linuxify.exe        # Main shell (5500+ lines)
+├── linuxify.exe        # Main shell (8800+ lines)
 ├── Lino.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
