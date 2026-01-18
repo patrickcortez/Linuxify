@@ -17,6 +17,7 @@ A native Unix-like shell and development platform for Windows — built on a con
 - Shebang (`./`) execution support
 - Real-time syntax highlighting as you type
 - Frequency-based auto-suggestions
+- Auto-navigation (type a directory path to navigate directly)
 - Signal and crash handlers
 
 ## Components

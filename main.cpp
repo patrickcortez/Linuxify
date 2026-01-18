@@ -8734,6 +8734,16 @@ void execute_command_logic(ShellContext& ctx, const std::string& input) {
     
     if (trimmed.empty()) return;
 
+    if (Arith::isArithmeticExpression(trimmed)) {
+        try {
+            std::string result = Arith::evaluate(trimmed);
+            std::cout << result << std::endl;
+            ctx.lastExitCode = 0;
+            return;
+        } catch (...) {
+        }
+    }
+
     // Check for shell syntax first
     if (logic.isShellSyntax(trimmed)) {
         ctx.lastExitCode = ctx.interpreter.runCode(trimmed);

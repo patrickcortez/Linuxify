@@ -1,5 +1,5 @@
 // Linuxify Arithmetic Expression Evaluator
-// Supports: +, -, *, /, () with proper operator precedence
+// Supports: +, -, *, /, ^, () with proper operator precedence
 // Compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
 #pragma once
@@ -20,6 +20,7 @@ enum class TokenType {
     MINUS,
     MULTIPLY,
     DIVIDE,
+    POWER,
     LPAREN,
     RPAREN,
     END
@@ -98,7 +99,8 @@ public:
                     tokens.back().type == TokenType::PLUS ||
                     tokens.back().type == TokenType::MINUS ||
                     tokens.back().type == TokenType::MULTIPLY ||
-                    tokens.back().type == TokenType::DIVIDE) {
+                    tokens.back().type == TokenType::DIVIDE ||
+                    tokens.back().type == TokenType::POWER) {
                     tokens.push_back(Token(TokenType::NUMBER, readNumber()));
                 } else {
                     tokens.push_back(Token(TokenType::MINUS));
@@ -119,6 +121,10 @@ public:
             }
             else if (c == ')') {
                 tokens.push_back(Token(TokenType::RPAREN));
+                advance();
+            }
+            else if (c == '^') {
+                tokens.push_back(Token(TokenType::POWER));
                 advance();
             }
             else {
@@ -175,12 +181,12 @@ private:
     }
     
     double parseMulDiv() {
-        double left = parsePrimary();
+        double left = parsePower();
         
         while (current().type == TokenType::MULTIPLY || current().type == TokenType::DIVIDE) {
             TokenType op = current().type;
             advance();
-            double right = parsePrimary();
+            double right = parsePower();
             
             if (op == TokenType::MULTIPLY) {
                 left = left * right;
@@ -193,6 +199,18 @@ private:
         }
         
         return left;
+    }
+    
+    double parsePower() {
+        double base = parsePrimary();
+        
+        if (current().type == TokenType::POWER) {
+            advance();
+            double exponent = parsePower();
+            return std::pow(base, exponent);
+        }
+        
+        return base;
     }
     
     double parsePrimary() {
@@ -253,7 +271,7 @@ inline bool isArithmeticExpression(const std::string& input) {
         if (std::isdigit(c) || c == '.') {
             hasDigit = true;
         }
-        else if (c == '+' || c == '*' || c == '/') {
+        else if (c == '+' || c == '*' || c == '/' || c == '^') {
             hasOperator = true;
         }
         else if (c == '-') {
