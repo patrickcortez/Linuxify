@@ -17,7 +17,8 @@ namespace SignalHandler {
     inline std::atomic<bool> g_signalsBlocked(false); 
     inline HANDLE g_mainThreadHandle = NULL;         
     inline std::function<void()> g_cleanupCallback = nullptr;
-    inline std::function<void()> g_interruptCallback = nullptr; 
+    inline std::function<void()> g_interruptCallback = nullptr;
+    inline std::function<void()> g_suspendCallback = nullptr; 
 
     inline void blockSignals() { g_signalsBlocked.store(true); }
     inline void unblockSignals() { g_signalsBlocked.store(false); }
@@ -129,6 +130,19 @@ namespace SignalHandler {
         if (g_signalsBlocked.load()) return;
         if (g_interruptCallback) g_interruptCallback();
         else std::cout << "^C\n";
+    }
+
+    inline void handleSuspend() {
+        if (g_signalsBlocked.load()) return;
+        if (g_suspendCallback) {
+            std::cout << "^Z\n";
+            g_suspendCallback();
+        }
+    }
+
+    inline void registerSuspendHandler(std::function<void()> callback) {
+        g_suspendCallback = callback;
+        InputDispatcher::getInstance().registerKeyHandler('Z', true, false, false, handleSuspend);
     }
 
     inline void handleTermination(const char* eventName) {

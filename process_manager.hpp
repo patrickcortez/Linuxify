@@ -20,8 +20,10 @@ struct BackgroundJob {
     int jobId;
     DWORD pid;
     HANDLE hProcess;
+    HANDLE hThread;
     std::string command;
     bool running;
+    bool suspended;
     DWORD startTime;
     int priority;
 };
@@ -33,13 +35,15 @@ private:
     std::atomic<DWORD> foregroundPid{0};
 
 public:
-    int addJob(HANDLE hProcess, DWORD pid, const std::string& cmd) {
+    int addJob(HANDLE hProcess, DWORD pid, const std::string& cmd, HANDLE hThread = NULL) {
         BackgroundJob job;
         job.jobId = nextJobId++;
         job.pid = pid;
         job.hProcess = hProcess;
+        job.hThread = hThread;
         job.command = cmd;
         job.running = true;
+        job.suspended = false;
         job.startTime = GetTickCount();
         job.priority = 0;
         jobs.push_back(job);
@@ -66,17 +70,18 @@ public:
         
         bool hasJobs = false;
         for (const auto& job : jobs) {
-            if (job.running) {
+            if (job.running || job.suspended) {
                 hasJobs = true;
                 DWORD elapsed = (GetTickCount() - job.startTime) / 1000;
-                ShellIO::sout << "[" << job.jobId << "] Running    PID:" << job.pid 
+                const char* status = job.suspended ? "Stopped " : "Running ";
+                ShellIO::sout << "[" << job.jobId << "]+ " << status << "   PID:" << job.pid 
                               << "  " << elapsed << "s  " << job.command << ShellIO::endl;
             }
         }
         
         for (const auto& job : jobs) {
-            if (!job.running) {
-                ShellIO::sout << "[" << job.jobId << "] Done       " << job.command << ShellIO::endl;
+            if (!job.running && !job.suspended) {
+                ShellIO::sout << "[" << job.jobId << "]  Done       " << job.command << ShellIO::endl;
             }
         }
         
@@ -179,9 +184,80 @@ public:
             if (hProc) {
                 TerminateProcess(hProc, 1);
                 CloseHandle(hProc);
-                // We don't clear pid here immediately; main loop will clear it after wait
                 return true;
             }
+        }
+        return false;
+    }
+
+    bool suspendJob(int jobId) {
+        BackgroundJob* job = getJob(jobId);
+        if (!job || !job->running || job->suspended) return false;
+
+        typedef LONG(NTAPI* NtSuspendProcess_t)(HANDLE);
+        static NtSuspendProcess_t NtSuspendProcess = (NtSuspendProcess_t)
+            GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtSuspendProcess");
+        
+        if (NtSuspendProcess && job->hProcess) {
+            if (NtSuspendProcess(job->hProcess) == 0) {
+                job->suspended = true;
+                job->running = false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool resumeJob(int jobId) {
+        BackgroundJob* job = getJob(jobId);
+        if (!job || !job->suspended) return false;
+
+        typedef LONG(NTAPI* NtResumeProcess_t)(HANDLE);
+        static NtResumeProcess_t NtResumeProcess = (NtResumeProcess_t)
+            GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtResumeProcess");
+        
+        if (NtResumeProcess && job->hProcess) {
+            if (NtResumeProcess(job->hProcess) == 0) {
+                job->suspended = false;
+                job->running = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool suspendForeground() {
+        DWORD pid = foregroundPid.load();
+        if (pid == 0) return false;
+        
+        for (auto& job : jobs) {
+            if (job.pid == pid && job.running) {
+                return suspendJob(job.jobId);
+            }
+        }
+        
+        HANDLE hProc = OpenProcess(PROCESS_SUSPEND_RESUME, FALSE, pid);
+        if (hProc) {
+            typedef LONG(NTAPI* NtSuspendProcess_t)(HANDLE);
+            static NtSuspendProcess_t NtSuspendProcess = (NtSuspendProcess_t)
+                GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtSuspendProcess");
+            
+            if (NtSuspendProcess && NtSuspendProcess(hProc) == 0) {
+                BackgroundJob job;
+                job.jobId = nextJobId++;
+                job.pid = pid;
+                job.hProcess = hProc;
+                job.hThread = NULL;
+                job.command = "[suspended foreground]";
+                job.running = false;
+                job.suspended = true;
+                job.startTime = GetTickCount();
+                job.priority = 0;
+                jobs.push_back(job);
+                foregroundPid.store(0);
+                return true;
+            }
+            CloseHandle(hProc);
         }
         return false;
     }

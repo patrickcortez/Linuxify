@@ -17,6 +17,7 @@
 #include <io.h>
 #include <windows.h>
 #include <algorithm>
+#include "glob.hpp"
 
 namespace Bash {
 
@@ -223,6 +224,8 @@ private:
     
     // Keyword map
     std::map<std::string, TokenType> keywords = {
+        {"{", TokenType::LBRACE},
+        {"}", TokenType::RBRACE},
         {"if", TokenType::KW_IF},
         {"then", TokenType::KW_THEN},
         {"else", TokenType::KW_ELSE},
@@ -374,7 +377,7 @@ private:
         while (current() != '\0' && !isspace(current()) &&
                current() != ';' && current() != '|' && current() != '&' &&
                current() != '>' && current() != '<' && current() != '(' &&
-               current() != ')' && current() != '{' && current() != '}' &&
+               current() != ')' &&
                current() != '#' &&
                current() != '$') {
             
@@ -566,18 +569,7 @@ public:
                 continue;
             }
             
-            if (current() == '{') {
-                advance();
-                tokens.push_back(Token(TokenType::LBRACE, "{", startLine, startCol));
-                continue;
-            }
-            
-            if (current() == '}') {
-                advance();
-                tokens.push_back(Token(TokenType::RBRACE, "}", startLine, startCol));
-                continue;
-            }
-            
+
             if (current() == '[') {
                 advance();
                 tokens.push_back(Token(TokenType::LBRACKET, "[", startLine, startCol));
@@ -1472,13 +1464,51 @@ private:
         };
         
         builtins["export"] = [this](const std::vector<std::string>& args) {
+            bool isArray = false;
             for (size_t i = 1; i < args.size(); i++) {
+                if (args[i] == "-arr" || args[i] == "-a" || args[i] == "-p") {
+                    if (args[i] == "-arr" || args[i] == "-a") isArray = true;
+                    continue;
+                }
+                
                 size_t eq = args[i].find('=');
-                if (eq != std::string::npos) {
-                    std::string name = args[i].substr(0, eq);
-                    std::string value = args[i].substr(eq + 1);
-                    (*_variableMap)[name] = value;
-                    SetEnvironmentVariableA(name.c_str(), value.c_str());
+                if (eq == std::string::npos) continue;
+                
+                std::string name = args[i].substr(0, eq);
+                std::string value = args[i].substr(eq + 1);
+                
+                if (name.size() >= 2 && name.substr(name.size() - 2) == "[]") {
+                    name = name.substr(0, name.size() - 2);
+                    isArray = true;
+                }
+                
+                if (isArray || (value.size() >= 2 && value.front() == '{' && value.back() == '}')) {
+                    std::string inner = value;
+                    if (inner.size() >= 2 && inner.front() == '{' && inner.back() == '}') {
+                        inner = inner.substr(1, inner.size() - 2);
+                    }
+                    
+                    std::vector<std::string> arr;
+                    std::stringstream ss(inner);
+                    std::string item;
+                    while (std::getline(ss, item, ',')) {
+                        size_t start = item.find_first_not_of(" \t\"'");
+                        size_t end = item.find_last_not_of(" \t\"'");
+                        if (start != std::string::npos && end != std::string::npos) {
+                            arr.push_back(item.substr(start, end - start + 1));
+                        } else if (!item.empty()) {
+                            arr.push_back(item);
+                        }
+                    }
+                    
+                    if (_arrayMap) {
+                        (*_arrayMap)[name] = arr;
+                    }
+                    isArray = false;
+                } else {
+                    std::string expanded = expandVariables(value);
+                    (*_variableMap)[name] = expanded;
+                    SetEnvironmentVariableA(name.c_str(), expanded.c_str());
                 }
             }
             return 0;
@@ -1715,6 +1745,32 @@ private:
     public:
     // Execute a command and capture its output (for command substitution) using anonymous pipes
     std::string executeAndCapture(const std::string& command) {
+        // Handle array access $(arr[i]) or $(arr[*])
+        size_t openBracket = command.find('[');
+        if (openBracket != std::string::npos && command.back() == ']') {
+            std::string arrName = command.substr(0, openBracket);
+            std::string idxStr = command.substr(openBracket + 1, command.size() - openBracket - 2);
+            
+            if (_arrayMap && _arrayMap->count(arrName)) {
+                const auto& vec = (*_arrayMap)[arrName];
+                
+                if (idxStr == "*" || idxStr == "@") {
+                    std::string result;
+                    for (size_t i = 0; i < vec.size(); i++) {
+                        if (i > 0) result += " ";
+                        result += vec[i];
+                    }
+                    return result;
+                } else {
+                    try {
+                        size_t idx = std::stoul(idxStr);
+                        if (idx < vec.size()) return vec[idx];
+                        else return "";
+                    } catch (...) {}
+                }
+            }
+        }
+
         HANDLE hReadPipe, hWritePipe;
         SECURITY_ATTRIBUTES saAttr;
         saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -1784,10 +1840,9 @@ private:
     std::string expandVariables(const std::string& input) {
         std::string result = input;
         
-        // First, handle command substitution $(command)
+        // First, handle command substitution $(command) - but check for array access first
         size_t start = 0;
         while ((start = result.find("$(", start)) != std::string::npos) {
-            // Find matching closing paren (handle nesting)
             int depth = 1;
             size_t end = start + 2;
             while (end < result.size() && depth > 0) {
@@ -1796,12 +1851,43 @@ private:
                 end++;
             }
             if (depth == 0) {
-                std::string cmd = result.substr(start + 2, end - start - 3);
-                std::string output = executeAndCapture(cmd);
+                std::string inner = result.substr(start + 2, end - start - 3);
+                
+                size_t bracketPos = inner.find('[');
+                if (bracketPos != std::string::npos && inner.back() == ']') {
+                    std::string arrName = inner.substr(0, bracketPos);
+                    std::string indexPart = inner.substr(bracketPos + 1, inner.size() - bracketPos - 2);
+                    
+                    if ((indexPart == "*" || indexPart == "@") && _arrayMap && _arrayMap->count(arrName)) {
+                        const auto& arr = (*_arrayMap)[arrName];
+                        std::string allValues;
+                        for (size_t i = 0; i < arr.size(); i++) {
+                            if (i > 0) allValues += " ";
+                            allValues += arr[i];
+                        }
+                        result.replace(start, end - start, allValues);
+                        start += allValues.length();
+                        continue;
+                    }
+                    
+                    if (_arrayMap && _arrayMap->count(arrName)) {
+                        try {
+                            size_t idx = std::stoul(indexPart);
+                            const auto& arr = (*_arrayMap)[arrName];
+                            std::string value;
+                            if (idx < arr.size()) value = arr[idx];
+                            result.replace(start, end - start, value);
+                            start += value.length();
+                            continue;
+                        } catch (...) {}
+                    }
+                }
+                
+                std::string output = executeAndCapture(inner);
                 result.replace(start, end - start, output);
                 start += output.length();
             } else {
-                start++;  // Unmatched, skip
+                start++;
             }
         }
         
@@ -1854,6 +1940,33 @@ private:
                 result.replace(pos, defMatch[0].length(), varValue);
             }
             temp = defMatch.suffix();
+        }
+        
+        // Handle array expansion ${VAR[@]} ${VAR[*]} $VAR[@] $VAR[*] - expand all elements
+        std::regex arrayAllRegex("\\$(\\{)?([a-zA-Z_][a-zA-Z0-9_]*)\\[[@*]\\](\\})?");
+        std::smatch arrayAllMatch;
+        temp = result;
+        while (std::regex_search(temp, arrayAllMatch, arrayAllRegex)) {
+            std::string varName = arrayAllMatch[2];
+            bool hasBraces = arrayAllMatch[1].matched && arrayAllMatch[3].matched;
+            bool noBraces = !arrayAllMatch[1].matched && !arrayAllMatch[3].matched;
+            
+            if (hasBraces || noBraces) {
+                std::string allValues;
+                if (_arrayMap && _arrayMap->count(varName)) {
+                    const auto& arr = (*_arrayMap)[varName];
+                    for (size_t i = 0; i < arr.size(); i++) {
+                        if (i > 0) allValues += " ";
+                        allValues += arr[i];
+                    }
+                }
+                
+                size_t pos = result.find(arrayAllMatch[0]);
+                if (pos != std::string::npos) {
+                    result.replace(pos, arrayAllMatch[0].length(), allValues);
+                }
+            }
+            temp = arrayAllMatch.suffix();
         }
         
         // Handle array variables ${VAR[INDEX]} and $VAR[INDEX]
@@ -2227,6 +2340,11 @@ public:
         fallbackHandler = handler;
     }
     
+    void setMaps(std::map<std::string, std::string>* vars, std::map<std::string, std::vector<std::string>>* arrays) {
+        if (vars) _variableMap = vars;
+        if (arrays) _arrayMap = arrays;
+    }
+    
     void setVariable(const std::string& name, const std::string& value) {
         // Check for array assignment var[idx]
         size_t openBracket = name.find('[');
@@ -2281,10 +2399,67 @@ public:
         if (auto cmd = std::dynamic_pointer_cast<CommandNode>(node)) {
             if (cmd->args.empty()) return 0;
             
-            // Expand variables in all arguments
             std::vector<std::string> expandedArgs;
+            bool hasArrayIteration = false;
+            std::string iterArrayName;
+            size_t iterArgIdx = 0;
+            
             for (const auto& arg : cmd->args) {
-                expandedArgs.push_back(expandVariables(arg));
+                std::string expanded = expandVariables(arg);
+                
+                size_t bracketPos = expanded.find('[');
+                if (bracketPos != std::string::npos && expanded.size() > bracketPos + 2) {
+                    std::string afterBracket = expanded.substr(bracketPos + 1);
+                    if (afterBracket == "*]" || afterBracket == "@]") {
+                        std::string arrName = expanded.substr(0, bracketPos);
+                        if (_arrayMap && _arrayMap->count(arrName)) {
+                            const auto& arr = (*_arrayMap)[arrName];
+                            if (!arr.empty()) {
+                                hasArrayIteration = true;
+                                iterArrayName = arrName;
+                                iterArgIdx = expandedArgs.size();
+                                expandedArgs.push_back(expanded);
+                                continue;
+                            }
+                        }
+                    }
+                }
+                
+                if (Glob::containsGlob(expanded)) {
+                    auto matches = Glob::expandGlob(expanded, currentDir);
+                    for (const auto& m : matches) {
+                        expandedArgs.push_back(m);
+                    }
+                } else {
+                    expandedArgs.push_back(expanded);
+                }
+            }
+            
+            if (hasArrayIteration && _arrayMap && _arrayMap->count(iterArrayName)) {
+                const auto& arr = (*_arrayMap)[iterArrayName];
+                for (const auto& elem : arr) {
+                    std::vector<std::string> iterArgs = expandedArgs;
+                    iterArgs[iterArgIdx] = elem;
+                    
+                    std::string iterCmdName = iterArgs[0];
+                    if (builtins.count(iterCmdName)) {
+                        lastExitCode = builtins[iterCmdName](iterArgs);
+                    } else if (functions.count(iterCmdName)) {
+                        positionalArgsStack.push_back(iterArgs);
+                        try {
+                            for (auto& stmt : functions[iterCmdName]) {
+                                lastExitCode = execute(stmt);
+                            }
+                        } catch (ReturnException& e) {
+                            lastExitCode = e.value;
+                        }
+                        positionalArgsStack.pop_back();
+                    } else {
+                        std::vector<std::pair<std::string, std::string>> emptyRedirects;
+                        lastExitCode = executeExternalWithRedirects(iterArgs, emptyRedirects);
+                    }
+                }
+                return lastExitCode;
             }
             
             std::string cmdName = expandedArgs[0];

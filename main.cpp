@@ -49,6 +49,7 @@
 #include "shell_streams.hpp"
 #include "crash_handler.hpp"
 #include "cmds-src/system_integrator.hpp"
+#include "cmds-src/glob.hpp"
 #include "cmds-src/child_handler.hpp" // Integrated ChildHandler
 
 // Global process manager instance
@@ -75,7 +76,7 @@ class ShellLogic {
         "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
         "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
         "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
-        "tree", "du", "lin", "top", "jobs", "fg", "less", "more", "uninstall",
+        "tree", "du", "lin", "top", "jobs", "fg", "bg", "less", "more", "uninstall",
         "setup", "alias", "unalias", "source", "read", "test", "true", "false",
         "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
         "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
@@ -99,6 +100,7 @@ public:
             ctx.sessionEnv["IS_ADMIN"] = ctx.isAdmin ? "1" : "0";
         }
 
+        // Bind interpreter to shell context variables for shared state
         // Bind interpreter to shell context variables for shared state
         ctx.interpreter.bindVariables(ctx.sessionEnv);
         ctx.interpreter.bindArrays(&ctx.sessionArrayEnv);
@@ -265,6 +267,24 @@ public:
         if (tokens.empty()) return 0;
         
         std::string cmd = tokens[0];
+        
+        // STRICT INDEPENDENCE: Actively reject delegated shells
+        std::string cmdLower = cmd;
+        std::transform(cmdLower.begin(), cmdLower.end(), cmdLower.begin(), ::tolower);
+        
+        static const std::set<std::string> forbiddenShells = {
+            "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+            "cmd", "cmd.exe",
+            "wsl", "wsl.exe",
+            "bash", "bash.exe", "sh", "sh.exe",
+            "zsh", "zsh.exe", "csh", "csh.exe", "ksh", "ksh.exe", "tcsh", "tcsh.exe",
+            "git-bash.exe", "git-bash" 
+        };
+        
+        if (forbiddenShells.count(cmdLower)) {
+            printError("Strict Mode: Delegation to external shell '" + cmd + "' is prohibited. Linuxify is independent.");
+            return 127; // Command not found / prohibited
+        }
         
         // Check if it's an internal command - if so, route to internal handler
 
@@ -1531,12 +1551,19 @@ public:
                         std::string idxStr = inner.substr(bracket + 1, inner.size() - bracket - 2);
                         auto it = ctx.sessionArrayEnv.find(arrName);
                         if (it != ctx.sessionArrayEnv.end()) {
-                            try {
-                                size_t idx = std::stoul(idxStr);
-                                if (idx < it->second.size()) {
-                                    value = it->second[idx];
+                            if (idxStr == "*" || idxStr == "@") {
+                                for(size_t i=0; i<it->second.size(); i++) {
+                                    if(i>0) value += " ";
+                                    value += it->second[i];
                                 }
-                            } catch (...) {}
+                            } else {
+                                try {
+                                    size_t idx = std::stoul(idxStr);
+                                    if (idx < it->second.size()) {
+                                        value = it->second[idx];
+                                    }
+                                } catch (...) {}
+                            }
                         }
                     } 
                     // Check if this is a simple variable $(VAR) - no spaces, known as variable
@@ -1667,7 +1694,31 @@ public:
     std::vector<std::string> expandTokens(const std::vector<std::string>& tokens) {
         std::vector<std::string> expanded;
         for (const auto& token : tokens) {
-            expanded.push_back(expandVariables(token));
+            std::string exp = expandVariables(token);
+            
+            size_t bracketPos = exp.find('[');
+            if (bracketPos != std::string::npos && exp.size() > bracketPos + 2) {
+                std::string afterBracket = exp.substr(bracketPos + 1);
+                if (afterBracket == "*]" || afterBracket == "@]") {
+                    std::string arrName = exp.substr(0, bracketPos);
+                    auto it = ctx.sessionArrayEnv.find(arrName);
+                    if (it != ctx.sessionArrayEnv.end() && !it->second.empty()) {
+                        for (const auto& elem : it->second) {
+                            expanded.push_back(elem);
+                        }
+                        continue;
+                    }
+                }
+            }
+            
+            if (Glob::containsGlob(exp)) {
+                auto matches = Glob::expandGlob(exp, ctx.currentDir);
+                for (const auto& m : matches) {
+                    expanded.push_back(m);
+                }
+            } else {
+                expanded.push_back(exp);
+            }
         }
         return expanded;
     }
@@ -2359,7 +2410,7 @@ public:
 
     // fg - bring job to foreground
     void cmdFg(const std::vector<std::string>& args) {
-        int jobId = 1;  // Default to job 1
+        int jobId = 1;
         
         if (args.size() > 1) {
             std::string target = args[1];
@@ -2375,11 +2426,46 @@ public:
         }
         
         BackgroundJob* job = g_procMgr.getJob(jobId);
-        if (job && job->running) {
-            std::cout << job->command << std::endl;
-            g_procMgr.waitForJob(jobId);
+        if (job) {
+            if (job->suspended) {
+                g_procMgr.resumeJob(jobId);
+            }
+            if (job->running || job->suspended) {
+                std::cout << job->command << std::endl;
+                g_procMgr.waitForJob(jobId);
+            } else {
+                printError("fg: job has already completed");
+            }
         } else {
             printError("fg: no such job");
+        }
+    }
+
+    // bg - resume job in background
+    void cmdBg(const std::vector<std::string>& args) {
+        int jobId = 1;
+        
+        if (args.size() > 1) {
+            std::string target = args[1];
+            if (target[0] == '%') {
+                target = target.substr(1);
+            }
+            try {
+                jobId = std::stoi(target);
+            } catch (...) {
+                printError("bg: invalid job ID");
+                return;
+            }
+        }
+        
+        BackgroundJob* job = g_procMgr.getJob(jobId);
+        if (job && job->suspended) {
+            g_procMgr.resumeJob(jobId);
+            std::cout << "[" << jobId << "]+ " << job->command << " &" << std::endl;
+        } else if (job && job->running) {
+            printError("bg: job is already running");
+        } else {
+            printError("bg: no such suspended job");
         }
     }
 
@@ -7009,6 +7095,8 @@ public:
             cmdJobs(expandedTokens);
         } else if (cmd == "fg") {
             cmdFg(expandedTokens);
+        } else if (cmd == "bg") {
+            cmdBg(expandedTokens);
         } else if (cmd == "grep") {
             cmdGrep(expandedTokens);
         } else if (cmd == "head") {
@@ -8903,6 +8991,12 @@ int main(int argc, char* argv[]) {
             return; 
         }
         std::cout << "^C\n";
+    });
+
+    SignalHandler::registerSuspendHandler([]() {
+        if (g_procMgr.suspendForeground()) {
+            std::cout << "[Suspended]\n";
+        }
     });
     
     ShellContext context;

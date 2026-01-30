@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <algorithm>
 #include "shell_streams.hpp"
+#include <set>
 
 namespace fs = std::filesystem;
 
@@ -340,6 +341,23 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
     if (exePath.empty()) {
         return false;
     }
+    
+    // BLACKLIST CHECK (Strict Independence)
+    try {
+        std::string filename = fs::path(exePath).filename().string();
+        std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+        
+        static const std::set<std::string> forbidden = {
+            "powershell.exe", "pwsh.exe", "cmd.exe", "wsl.exe",
+            "bash.exe", "sh.exe", "zsh.exe", "csh.exe", "ksh.exe", "tcsh.exe",
+            "git-bash.exe"
+        };
+        
+        if (forbidden.count(filename)) {
+            ShellIO::serr << "Strict Mode: Execution of " << filename << " is prohibited." << ShellIO::endl;
+            return true; // Handled (blocked)
+        }
+    } catch (...) {}
     
     // Check if it's a shell script (.sh file)
     std::string ext = fs::path(exePath).extension().string();

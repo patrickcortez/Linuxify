@@ -1,44 +1,68 @@
-./OneDrive/
-./..
+$(commandosan[*]);
+$(commandosan[*])
+$(commandosan[*])
+$(commandosan[*]);
+export -arr commandosana={echo test1, echo test2, var list}
+export -arr commandosana={echo test1, echo test2, var list};
+commandosana
+$(commandosana[*])
+$(commandosana[*]);
+$(commandosana[*]);
+export -arr commandosanaa={"echo test1", "echo test2","echo test3"};
+$(commandosanaa[*]);
+export -arr -c commandosanaaa={"echo test1", "echo test2","echo test3"};
+export -arr -c commandosanaaa={"echo test1", "echo test2","echo test3"}
+export -p -arr -c commandosanaaa={"echo test1", "echo test2","echo test3"}
+$(commandosanaa[*]);
+$(commandosanaa[*])
+export -p -arr countries={"usa","nazi","russia","china","japan"}
+echo $(countries[*])
+echo $(countries[*]) "\n"
+echo "\n "$(countries[*])
+echo $( "\n" countries[*])
+echo $( "\n", countries[*])
+echo $(countries[*])
+var list
+var
+var del hello
+var del commando
+var list
+var del commandos
+var list
+var del commandosan
+var list
+var del commands
+var list
+exit
+lino
+vim test.txt
+lino test.txt
+lino one.1
+ls
+ls | grep -n ".txt"
+cat test.txtx
+cat test.txt
+lino test.txt
+ls
 ./test
-./..
-mysql
-mysql -u root -p
-admin
-clear
-declare
-declare type="Women"; echo $type;
-declare type="Women"; if[type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi
-declare type="Women"; if[type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi;
-declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";}fi
-declare type="Women"; if [type == "Women"]{ echo "they aint that bad";}else{echo "oml they are that bad huh";};fi
-setup
-help
-nm
-clear
-powershell
-cmd
-gitbash
-msys
-msys2
-linuxify
-clear
-exit
-exit
-docker
-2+2*2
-(2+2)*2
-(2+2)^2
-(2+2)^2
-(2+2)^1/2
-(6)^1/2
-(5)^1/2
-(5.7)^1/2
-(25)^0.5
-(9)^0.5
-(10)^0.5
-(11)^0.5
-(12)^0.5
-(15)^0.5
-(18)^0.5
-(36)^0.5
+ls
+ls folder
+lino test.txt
+lino test.txt
+lino test.txt
+lino test.txt &
+jobs
+ssh
+void clearArea(int startRow, int numLines) {}
+updateInfo();
+COORD clearPos;
+DWORD written;
+for (int i = 0; i < numLines + 2; i++) { // Clear a bit extra for safety}
+clearPos.X = 0;
+clearPos.Y = (SHORT)(startRow + i);
+if (clearPos.Y < csbi.dwSize.Y) {}
+FillConsoleOutputCharacterA(hOut, ' ', csbi.dwSize.X, clearPos, &written);
+// ADDED: Also clear the attributes (colors) to default
+FillConsoleOutputAttribute(hOut, csbi.wAttributes, csbi.dwSize.X, clearPos, &written);
+}
+}

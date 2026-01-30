@@ -6,5 +6,7 @@ HOME=C:\Users\patri
 MASTER=LINOS_TORVARDS
 cmd=ssh -p 8022 cortez@192.168.254.109
 comds[]={mount C:\Users\patri\test\main.img}
+countries[]={usa,nazi,russia,china,japan}
 dirs[]={C:\Users\patri\OneDrive\Documents\Projects\Linuxify\,C:\Users\patri\OneDrive\Documents\Projects,C:\Users}
+terminals[]={powershell,cmd,gitbash,wsl,zsh}
 words[]={status,connect,mysql,git,lino}

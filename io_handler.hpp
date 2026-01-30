@@ -86,6 +86,7 @@ namespace IO {
                 clearPos.Y = (SHORT)(startRow + i);
                 if (clearPos.Y < csbi.dwSize.Y) {
                     FillConsoleOutputCharacterA(hOut, ' ', csbi.dwSize.X, clearPos, &written);
+                    FillConsoleOutputAttribute(hOut, csbi.wAttributes, csbi.dwSize.X, clearPos, &written);
                 }
             }
         }
