@@ -1,0 +1,9 @@
+[Linuxify]
+    path: "linuxify.exe"
+    default: true
+    icon: "../../assets/linux-logo.ico"
+
+[Yori]
+    path: "C:\Users\patri\AppData\Local\Yori\yori.exe"
+    default: false
+    icon: ""

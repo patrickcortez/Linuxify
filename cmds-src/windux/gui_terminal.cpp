@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <sstream>
 
 #include "conpty_defs.hpp"
 
@@ -46,6 +48,118 @@ const int TAB_HEIGHT = 32;
 #endif
 
 // ============================================================================
+// Shell Profiles
+// ============================================================================
+
+struct ShellProfile {
+    std::string name;
+    std::string path;
+    std::string sdir; // Starting directory
+    std::string iconPath;
+    bool isDefault = false;
+    HICON hIcon = NULL;
+};
+
+std::vector<ShellProfile> g_profiles;
+
+void LoadProfiles() {
+    char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    fs::path exeDir = fs::path(exePath).parent_path();
+    // Adjusted: if running from cmds/ and executable is in cmds/, 
+    // we want shells/ at same level as executable or parent? 
+    // User said "windux on startup doesnt detect any shells folder it'll create the folder"
+    // Usually relative to CWD or EXE. Let's use EXE dir.
+    
+    fs::path shellsDir = exeDir / "shells";
+    if (!fs::exists(shellsDir)) {
+        fs::create_directory(shellsDir);
+    }
+    
+    fs::path profPath = shellsDir / "shells.prof";
+    if (!fs::exists(profPath)) {
+        std::ofstream out(profPath);
+        out << "[Linuxify]\n";
+        out << "    path: \"linuxify.exe\"\n";
+        out << "    sdir: \"home\"\n";
+        out << "    default: true\n";
+        out << "    icon: \"../../assets/linux-logo.ico\"\n";
+        out.close();
+    }
+    
+    // Parse
+    std::ifstream file(profPath);
+    std::string line;
+    ShellProfile current;
+    bool inSection = false;
+    
+    while (std::getline(file, line)) {
+        // Trim
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;
+        size_t last = line.find_last_not_of(" \t");
+        std::string trimmed = line.substr(first, last - first + 1);
+        
+        // Remove comments
+        size_t comment = trimmed.find("//");
+        if (comment != std::string::npos) trimmed = trimmed.substr(0, comment);
+        // Retrim
+        last = trimmed.find_last_not_of(" \t");
+        if (last == std::string::npos) continue;
+        trimmed = trimmed.substr(0, last + 1);
+        
+        if (trimmed.front() == '[' && trimmed.back() == ']') {
+            if (inSection) {
+                if (!current.iconPath.empty() && fs::exists(current.iconPath)) {
+                    current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+                }
+                g_profiles.push_back(current);
+            }
+            current = ShellProfile();
+            current.name = trimmed.substr(1, trimmed.size() - 2);
+            inSection = true;
+        } else if (inSection) {
+            size_t colon = trimmed.find(':');
+            if (colon != std::string::npos) {
+                std::string key = trimmed.substr(0, colon);
+                std::string val = trimmed.substr(colon + 1);
+                
+                // key trim
+                last = key.find_last_not_of(" \t");
+                if (last != std::string::npos) key = key.substr(0, last + 1);
+                
+                // val trim & remove quotes
+                first = val.find_first_not_of(" \t");
+                if (first != std::string::npos) val = val.substr(first);
+                if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
+                    val = val.substr(1, val.size() - 2);
+                }
+                
+                if (key == "path") current.path = val;
+                else if (key == "sdir") current.sdir = val;
+                else if (key == "icon") current.iconPath = val;
+                else if (key == "default") current.isDefault = (val == "true");
+            }
+        }
+    }
+    if (inSection) {
+        if (!current.iconPath.empty() && fs::exists(current.iconPath)) {
+            current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+        }
+        g_profiles.push_back(current);
+    }
+    
+    // Fallback if empty
+    if (g_profiles.empty()) {
+        char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path exeDir = fs::path(exePath).parent_path();
+        if (exeDir.filename() == "cmds") exeDir = exeDir.parent_path();
+        std::string defaultShell = (exeDir / "linuxify.exe").string();
+        
+        g_profiles.push_back({"Linuxify", defaultShell, "home", "home", true, NULL});
+    }
+}
+
+// ============================================================================
 // Data Structures
 // ============================================================================
 
@@ -55,14 +169,16 @@ struct Cell {
     COLORREF bg = DEFAULT_BG;
 };
 
-// Forward decl
 struct Session;
+struct ShellProfile;
 void ProcessOutput(Session* session, const char* buffer, DWORD bytes);
+void CreateNewSession(const ShellProfile* prof = nullptr);
 
 enum ParseState { STATE_TEXT, STATE_ESCAPE, STATE_CSI, STATE_OSC };
 
 struct Session {
     int id;
+    std::string name = "Terminal";
     std::mutex mutex;
     std::vector<std::vector<Cell>> grid;
     std::deque<std::vector<Cell>> history;
@@ -88,6 +204,7 @@ struct Session {
     PROCESS_INFORMATION pi = {0};
     bool active = true;
     std::thread readerThread;
+    HICON hIcon = NULL;
 
     void Resize(int r, int c) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -141,9 +258,117 @@ int g_fontWidth = 8;
 int g_fontHeight = 16;
 HWND g_hwnd = NULL;
 
+// ============================================================================
+// Global State & Selection
+// ============================================================================
+
 bool g_selecting = false;
 int g_selStartRow = -1, g_selStartCol = -1;
 int g_selEndRow = -1, g_selEndCol = -1;
+
+// UI State
+bool g_hoverPlus = false;
+bool g_hoverDown = false;
+HWND g_hMenuWnd = NULL;
+int g_menuHoverIndex = -1;
+
+// Custom Menu Window
+LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch(msg) {
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc; GetClientRect(hwnd, &rc);
+            
+            HBRUSH hBg = CreateSolidBrush(RGB(12, 12, 12));
+            FillRect(hdc, &rc, hBg);
+            DeleteObject(hBg);
+            
+            // Border
+            HBRUSH hBorder = CreateSolidBrush(RGB(60, 60, 60));
+            FrameRect(hdc, &rc, hBorder);
+            DeleteObject(hBorder);
+            
+            SelectObject(hdc, g_hFont);
+            SetBkMode(hdc, TRANSPARENT);
+            
+            int itemHeight = 24;
+            for (size_t i = 0; i < g_profiles.size(); i++) {
+                RECT rcItem = {1, 1 + (LONG)i * itemHeight, rc.right - 1, 1 + (LONG)(i+1) * itemHeight};
+                
+                if (i == g_menuHoverIndex) {
+                    HBRUSH hHover = CreateSolidBrush(RGB(50, 50, 50));
+                    FillRect(hdc, &rcItem, hHover);
+                    DeleteObject(hHover);
+                }
+                
+                SetTextColor(hdc, RGB(220, 220, 220));
+                
+                // Draw Icon if available
+                if (g_profiles[i].hIcon) {
+                    DrawIconEx(hdc, rcItem.left + 5, rcItem.top + 4, g_profiles[i].hIcon, 16, 16, 0, NULL, DI_NORMAL);
+                }
+                
+                RECT rcText = rcItem; rcText.left += 26;
+                DrawTextA(hdc, g_profiles[i].name.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+        {
+            int y = HIWORD(lParam);
+            int newIndex = (y - 1) / 24;
+            if (newIndex < 0 || newIndex >= g_profiles.size()) newIndex = -1;
+            
+            if (newIndex != g_menuHoverIndex) {
+                g_menuHoverIndex = newIndex;
+                InvalidateRect(hwnd, NULL, FALSE);
+                
+                TRACKMOUSEEVENT tme;
+                tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                TrackMouseEvent(&tme);
+            }
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            g_menuHoverIndex = -1;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+            
+        case WM_LBUTTONUP:
+        {
+            int y = HIWORD(lParam);
+            int index = (y - 1) / 24;
+            if (index >= 0 && index < g_profiles.size()) {
+                CreateNewSession(&g_profiles[index]);
+            }
+            ShowWindow(hwnd, SW_HIDE); // Hide first
+            DestroyWindow(hwnd);
+            g_hMenuWnd = NULL;
+            return 0;
+        }
+        
+        case WM_KILLFOCUS:
+            DestroyWindow(hwnd);
+            g_hMenuWnd = NULL;
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void RegisterMenuClass() {
+    WNDCLASSEXA wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc = MenuWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "LinuxifyMenuClass";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.style = CS_DROPSHADOW; // Add drop shadow
+    RegisterClassExA(&wc);
+}
 
 void ScreenToCell(int screenX, int screenY, int& row, int& col) {
     int padding = 10;
@@ -513,8 +738,12 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
     if (s->cursorCol < 0) s->cursorCol = 0;
     if (s->cursorCol >= s->cols) s->cursorCol = s->cols - 1;
     
-    // Reset wrapPending when cursor is explicitly moved or screen is modified
-    s->wrapPending = false;
+    // Reset wrapPending ONLY when cursor is explicitly moved
+    switch (cmd) {
+        case 'H': case 'f': case 'G': case 'd': case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
+            s->wrapPending = false;
+            break;
+    }
 }
 
 void ApplyOSC(Session* s, const std::string& params) {}
@@ -644,9 +873,26 @@ void ReaderThread(Session* s) {
     }
 }
 
-void CreateNewSession() {
+void CreateNewSession(const ShellProfile* prof) {
+    // Load profiles if empty
+    if (g_profiles.empty()) LoadProfiles();
+    
+    // Find default if none specified
+    if (!prof) {
+        for (const auto& p : g_profiles) {
+            if (p.isDefault) {
+                prof = &p;
+                break;
+            }
+        }
+        // Fallback to first if no default marked
+        if (!prof && !g_profiles.empty()) prof = &g_profiles[0];
+    }
+
     Session* s = new Session();
     s->id = g_sessions.size() + 1;
+    s->name = prof ? prof->name : "Terminal";
+    s->hIcon = prof ? prof->hIcon : NULL;
     
     RECT rc; GetClientRect(g_hwnd, &rc);
     int termHeight = rc.bottom - TAB_HEIGHT;
@@ -671,12 +917,40 @@ void CreateNewSession() {
     InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &attrSize);
     UpdateProcThreadAttribute(siEx.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, s->hPC, sizeof(HPCON), NULL, NULL);
 
-    char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    fs::path exeDir = fs::path(exePath).parent_path();
-    if (exeDir.filename() == "cmds") exeDir = exeDir.parent_path();
-    std::string cmd = (exeDir / "linuxify.exe").string();
+    std::string cmd;
+    std::string cwd = ""; 
 
-    CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &siEx.StartupInfo, &s->pi);
+    if (prof) {
+        cmd = prof->path;
+        // If relative path like "linuxify.exe", resolve it
+        if (cmd.find(':') == std::string::npos && cmd.find('/') == std::string::npos && cmd.find('\\') == std::string::npos) {
+             char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
+             fs::path exeDir = fs::path(exePath).parent_path();
+             if (exeDir.filename() == "cmds" && cmd == "linuxify.exe") exeDir = exeDir.parent_path();
+             cmd = (exeDir / cmd).string();
+        }
+        
+        // Resolve Starting Directory
+        if (!prof->sdir.empty()) {
+            if (prof->sdir == "home") {
+                const char* home = getenv("USERPROFILE");
+                if (home) cwd = std::string(home);
+            } else {
+                 // Expand environment variables if needed
+                 char expandBuf[MAX_PATH];
+                 ExpandEnvironmentStringsA(prof->sdir.c_str(), expandBuf, MAX_PATH);
+                 cwd = std::string(expandBuf);
+            }
+        }
+    } else {
+        // Fallback safety
+        char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        fs::path exeDir = fs::path(exePath).parent_path();
+        if (exeDir.filename() == "cmds") exeDir = exeDir.parent_path();
+        cmd = (exeDir / "linuxify.exe").string();
+    }
+
+    CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, cwd.empty() ? NULL : (LPSTR)cwd.c_str(), &siEx.StartupInfo, &s->pi);
 
     CloseHandle(hPTYIn); CloseHandle(hPTYOut);
     DeleteProcThreadAttributeList(siEx.lpAttributeList);
@@ -745,8 +1019,15 @@ void PaintWindow(HWND hwnd, HDC hdc) {
         FillRect(hdcMem, &rcItem, hItemBg);
         DeleteObject(hItemBg);
         
-        std::string title = " Terminal " + std::to_string(i+1);
-        RECT rcText = rcItem; rcText.right -= 20; 
+        Session* s = g_sessions[i];
+        if (s->hIcon) {
+             DrawIconEx(hdcMem, rcItem.left + 8, 8, s->hIcon, 16, 16, 0, NULL, DI_NORMAL);
+        }
+
+        std::string title = s->name; // Use custom name
+        RECT rcText = rcItem; 
+        rcText.left += 24; // Space for icon
+        rcText.right -= 20; 
         DrawTextA(hdcMem, title.c_str(), -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         
         RECT rcClose = {rcItem.right - 20, rcItem.top, rcItem.right - 5, rcItem.bottom};
@@ -761,14 +1042,37 @@ void PaintWindow(HWND hwnd, HDC hdc) {
         }
     }
     
-    RECT rcPlus = { (LONG)g_sessions.size() * tabWidth, 0, (LONG)g_sessions.size() * tabWidth + 40, TAB_HEIGHT };
-    SetBkColor(hdcMem, TAB_BG);
+    // Draw + button
+    RECT rcPlus = { (LONG)g_sessions.size() * tabWidth, 0, (LONG)g_sessions.size() * tabWidth + 30, TAB_HEIGHT };
+    if (g_hoverPlus) {
+        HBRUSH hHover = CreateSolidBrush(RGB(60, 60, 60)); // Light grey/hover
+        FillRect(hdcMem, &rcPlus, hHover);
+        DeleteObject(hHover);
+    }
+    SetBkMode(hdcMem, TRANSPARENT);
     SetTextColor(hdcMem, RGB(200, 200, 200));
     DrawTextA(hdcMem, "+", 1, &rcPlus, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Separator Line
+    RECT rcSep = { rcPlus.right, 4, rcPlus.right + 1, TAB_HEIGHT - 4 };
+    HBRUSH hSep = CreateSolidBrush(RGB(80, 80, 80));
+    FillRect(hdcMem, &rcSep, hSep);
+    DeleteObject(hSep);
+
+    // Draw v dropdown
+    RECT rcDown = { rcPlus.right + 1, 0, rcPlus.right + 31, TAB_HEIGHT };
+    if (g_hoverDown) {
+        HBRUSH hHover = CreateSolidBrush(RGB(60, 60, 60));
+        FillRect(hdcMem, &rcDown, hHover);
+        DeleteObject(hHover);
+    }
+    DrawTextA(hdcMem, "v", 1, &rcDown, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     if (g_activeSessionIndex >= 0 && g_activeSessionIndex < g_sessions.size()) {
         Session* s = g_sessions[g_activeSessionIndex];
         std::lock_guard<std::mutex> lock(s->mutex);
+        
+        SetBkMode(hdcMem, OPAQUE); // Reset for grid drawing
         
         int padding = 10;
         int termY = TAB_HEIGHT + padding;
@@ -824,7 +1128,7 @@ void PaintWindow(HWND hwnd, HDC hdc) {
                     if (isSelected) {
                         // Highlight: invert colors (white bg, dark text)
                         SetTextColor(hdcMem, RGB(0, 0, 0));
-                        SetBkColor(hdcMem, RGB(100, 149, 237)); // Cornflower blue selection
+                        SetBkColor(hdcMem, RGB(0, 255, 255)); // Cyan selection
                     } else {
                         SetTextColor(hdcMem, cell.fg);
                         SetBkColor(hdcMem, cell.bg);
@@ -891,6 +1195,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             ReleaseDC(hwnd, hdc);
         }
 
+        LoadProfiles();
         if (!g_pty.Init()) MessageBoxA(NULL, "Failed to init ConPTY", "Error", MB_OK);
         else CreateNewSession();
         return 0;
@@ -913,7 +1218,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
              }
 
              // FIX: Update window title with debug info
-             std::string title = std::string(WINDOW_TITLE) + " [" + std::to_string(cols) + "x" + std::to_string(rows) + "]";
+             std::string title = std::string(WINDOW_TITLE); // + " [" + std::to_string(cols) + "x" + std::to_string(rows) + "]";
              SetWindowTextA(hwnd, title.c_str());
         }
         InvalidateRect(hwnd, NULL, FALSE);
@@ -922,8 +1227,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT) {
             POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
-            // Always use arrow cursor in terminal (like PowerShell)
-            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            if (pt.y < TAB_HEIGHT) SetCursor(LoadCursor(NULL, IDC_ARROW)); 
+            else SetCursor(LoadCursor(NULL, IDC_IBEAM)); // IBeam in terminal area
             return TRUE;
         }
         break;
@@ -938,7 +1243,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     int tabLeft = clickedIndex * tabWidth;
                     if (x > tabLeft + tabWidth - 25) CloseSession(clickedIndex);
                     else SwitchTab(clickedIndex);
-                } else if (clickedIndex == g_sessions.size() && x < ((g_sessions.size()*tabWidth)+40)) CreateNewSession();
+                } else if (clickedIndex == g_sessions.size()) {
+                    // Check if clicked the + button (approx 0-30px relative to start)
+                    int startX = g_sessions.size() * tabWidth;
+                    int localX = x - startX;
+                    if (localX < 30) {
+                         CreateNewSession();
+                    } else if (localX >= 31 && localX < 61) {
+                        // Dropdown menu - Custom Window
+                        if (g_hMenuWnd) { DestroyWindow(g_hMenuWnd); g_hMenuWnd = NULL; return 0; }
+                        
+                        POINT pt = {startX + 31, TAB_HEIGHT};
+                        ClientToScreen(hwnd, &pt);
+                        
+                        int w = 200;
+                        int h = 2 + (g_profiles.size() * 24);
+                        
+                        g_hMenuWnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "LinuxifyMenuClass", "", 
+                                       WS_POPUP, pt.x, pt.y, w, h, hwnd, NULL, GetModuleHandle(NULL), NULL);
+                                       
+                        SetForegroundWindow(g_hMenuWnd);
+                        SetFocus(g_hMenuWnd);
+                        AnimateWindow(g_hMenuWnd, 150, AW_SLIDE | AW_VER_POSITIVE | AW_ACTIVATE);
+                    }
+                }
             } else {
                 // Start text selection in terminal area
                 ScreenToCell(x, y, g_selStartRow, g_selStartCol);
@@ -952,11 +1280,51 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_MOUSEMOVE:
-        if (g_selecting) {
+        {
             int x = LOWORD(lParam); int y = HIWORD(lParam);
-            ScreenToCell(x, y, g_selEndRow, g_selEndCol);
-            InvalidateRect(hwnd, NULL, FALSE);
+            bool redraw = false;
+            
+            if (y < TAB_HEIGHT) {
+                int tabWidth = 140; 
+                int startX = g_sessions.size() * tabWidth;
+                int localX = x - startX;
+                
+                bool oldPlus = g_hoverPlus;
+                bool oldDown = g_hoverDown;
+                
+                int clickedIndex = x / tabWidth;
+                if (clickedIndex == g_sessions.size()) {
+                    g_hoverPlus = (localX >= 0 && localX < 30);
+                    g_hoverDown = (localX >= 31 && localX < 61);
+                } else {
+                    g_hoverPlus = false;
+                    g_hoverDown = false;
+                }
+                
+                if (oldPlus != g_hoverPlus || oldDown != g_hoverDown) {
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    TRACKMOUSEEVENT tme;
+                    tme.cbSize = sizeof(TRACKMOUSEEVENT);
+                    tme.dwFlags = TME_LEAVE;
+                    tme.hwndTrack = hwnd;
+                    TrackMouseEvent(&tme);
+                }
+            } else if (g_selecting) {
+                ScreenToCell(x, y, g_selEndRow, g_selEndCol);
+                InvalidateRect(hwnd, NULL, FALSE);
+            } else {
+                if (g_hoverPlus || g_hoverDown) {
+                    g_hoverPlus = false; g_hoverDown = false;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
         }
+        return 0;
+
+    case WM_MOUSELEAVE:
+        g_hoverPlus = false;
+        g_hoverDown = false;
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_LBUTTONUP:
@@ -1150,6 +1518,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_IBEAM);
     wc.hbrBackground = NULL;
     RegisterClassExA(&wc);
+    
+    RegisterMenuClass();
 
     HWND hwnd = CreateWindowExA(0, CLASS_NAME, WINDOW_TITLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 900, 600, NULL, NULL, hInstance, NULL);

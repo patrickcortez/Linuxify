@@ -1,0 +1,9 @@
+[Sample Shell] //to declare name of a shell and attributes of shell is declared below it
+    path: "C:/sample/path/shell" //to declare path of a shell
+    default: true //to declare default shell
+    icon: "C:/sample/path/icon.ico" //icon of shell to be displayed
+
+[Another Shell] //to declare name of a shell and attributes of shell is declared below it
+    path: "C:/another/path/shell" //to declare path of a shell
+    default: false //to declare default shell
+    icon: "C:/another/path/icon.ico" //icon of shell to be displayed    
