@@ -67,3 +67,22 @@ C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
 ls
 git status
 git add -A
+git commit -m "added mouse events on tuis, todo: fix tuis on window resize events"
+git push turtle master
+git branch exp
+git checkout exp
+ls
+git --help
+git diff master exp
+yori
+python
+cd rustsrc
+ls
+rust-src
+ls
+atomizer
+ls
+atomic
+./test.exe
+cat test.exe
+clear

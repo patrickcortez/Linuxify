@@ -1,0 +1,5 @@
+// testing out
+out("Hello from Atomizer!")
+out("This is another line.")
+// This comment should be ignored
+out("Compilation successful.")
