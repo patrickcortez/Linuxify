@@ -89,3 +89,6 @@ clear
 git checkout master
 lino .gitignore
 git add -A
+git commit -m "cleared history"
+git status
+git checkout master
