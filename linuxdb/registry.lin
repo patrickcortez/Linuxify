@@ -2,6 +2,7 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
+./powershell=C:\WINDOWS\System32\WindowsPowerShell\v1.0\./powershell.exe
 ARP=C:\WINDOWS\system32\ARP.EXE
 ActionsMcpHost=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\ActionsMcpHost.exe
 AggregatorHost=C:\WINDOWS\system32\AggregatorHost.exe

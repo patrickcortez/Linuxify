@@ -2286,6 +2286,7 @@ private:
 
     // Callback for reading input (prompt, isPassword) -> input string
     // Moved to top of class
+    std::function<std::string(const std::string&)> aliasResolver;
     
 public:
     Executor() : startTime(std::chrono::steady_clock::now()), _variableMap(&_localVariables) {
@@ -2306,6 +2307,10 @@ public:
             }
             return "";
         };
+    }
+
+    void setAliasResolver(std::function<std::string(const std::string&)> resolver) {
+        aliasResolver = resolver;
     }
     
     // Bind external variable map
@@ -2398,13 +2403,52 @@ public:
         // Command
         if (auto cmd = std::dynamic_pointer_cast<CommandNode>(node)) {
             if (cmd->args.empty()) return 0;
+
+            // Handle Alias Resolution on the first token
+            std::vector<std::string> currentArgs = cmd->args;
+            if (aliasResolver && !currentArgs.empty()) {
+                // Get the potential alias name
+                std::string potentialAlias = currentArgs[0];
+                
+                // Resolve it (this should return the expanded string, e.g. "ls -la")
+                std::string resolved = aliasResolver(potentialAlias);
+                
+                // If it expanded to something different
+                if (resolved != potentialAlias) {
+                    // We need to tokenize the valid resolution
+                    // We can reuse the Lexer for this small string
+                    Lexer aliasLex(resolved);
+                    try {
+                        auto tokens = aliasLex.tokenize();
+                        // Remove EOF
+                        if (!tokens.empty() && tokens.back().type == TokenType::END_OF_FILE) {
+                            tokens.pop_back();
+                        }
+                        
+                        // Convert tokens to strings
+                        std::vector<std::string> newArgs;
+                        for (const auto& t : tokens) {
+                            newArgs.push_back(t.value);
+                        }
+                        
+                        // Append original arguments (excluding the alias name itself)
+                        if (currentArgs.size() > 1) {
+                            newArgs.insert(newArgs.end(), currentArgs.begin() + 1, currentArgs.end());
+                        }
+                        
+                        currentArgs = newArgs;
+                    } catch (...) {
+                        // If tokenization fails, fallback to original
+                    }
+                }
+            }
             
             std::vector<std::string> expandedArgs;
             bool hasArrayIteration = false;
             std::string iterArrayName;
             size_t iterArgIdx = 0;
             
-            for (const auto& arg : cmd->args) {
+            for (const auto& arg : currentArgs) {
                 std::string expanded = expandVariables(arg);
                 
                 size_t bracketPos = expanded.find('[');
@@ -2879,6 +2923,10 @@ public:
             std::cerr << "\033[31mError: " << e.what() << "\033[0m\n";
             return 1;
         }
+    }
+
+    void setAliasResolver(std::function<std::string(const std::string&)> resolver) {
+        executor.setAliasResolver(resolver);
     }
 
     // Expose executor to allow external command registration

@@ -7,6 +7,7 @@
 #include <set>
 #include <filesystem>
 #include "../cmds-src/interpreter.hpp" // For Bash::Interpreter
+#include "../cmds-src/cmds.hpp" // For AliasManager
 
 namespace fs = std::filesystem;
 
@@ -25,6 +26,9 @@ struct ShellContext {
     // Environment
     std::string currentDir;
     std::vector<std::string> commandHistory;
+    
+    // Alias Manager
+    AliasManager aliasInContext;
     
     // Interpreter State
     Bash::Interpreter interpreter;

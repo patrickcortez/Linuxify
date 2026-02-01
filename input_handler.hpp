@@ -51,6 +51,86 @@ private:
     };
     std::vector<SuggestionEntry> frequencyIndex;
     std::string currentSuggestion;
+    
+    enum GitStatus { GIT_NONE, GIT_CLEAN, GIT_STAGED, GIT_UNSTAGED };
+    GitStatus currentGitStatus;
+
+    GitStatus checkGitStatus() {
+        // Fast check using git status --porcelain
+        // We create a pipe to capture output
+        SECURITY_ATTRIBUTES saAttr; 
+        saAttr.nLength = sizeof(SECURITY_ATTRIBUTES); 
+        saAttr.bInheritHandle = TRUE; 
+        saAttr.lpSecurityDescriptor = NULL; 
+
+        HANDLE hChildStd_OUT_Rd = NULL;
+        HANDLE hChildStd_OUT_Wr = NULL;
+
+        if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0)) return GIT_CLEAN; // Asume clean on fail
+        SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.hStdError = NULL; // Ignore stderr
+        si.hStdOutput = hChildStd_OUT_Wr;
+        si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+
+        ZeroMemory(&pi, sizeof(pi));
+        
+        // Command: git status --porcelain
+        std::string cmd = "git status --porcelain";
+        char cmdBuf[128];
+        strcpy(cmdBuf, cmd.c_str());
+
+        // Create the child process. 
+        if (!CreateProcessA(NULL, cmdBuf, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, currentDir.c_str(), &si, &pi)) {
+             CloseHandle(hChildStd_OUT_Wr);
+             CloseHandle(hChildStd_OUT_Rd);
+             return GIT_CLEAN;
+        }
+
+        CloseHandle(hChildStd_OUT_Wr); // Close write end so read ends
+
+        // Read output
+        std::string output;
+        DWORD bytesRead;
+        CHAR buffer[256];
+        bool hasStaged = false;
+        bool hasUnstaged = false;
+
+        while (ReadFile(hChildStd_OUT_Rd, buffer, 255, &bytesRead, NULL) && bytesRead != 0) {
+            output.append(buffer, bytesRead);
+            if (output.length() > 2048) break; // Limit read
+        }
+        
+        WaitForSingleObject(pi.hProcess, 100); // Wait bit
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(hChildStd_OUT_Rd);
+
+        if (output.empty()) return GIT_CLEAN;
+
+        std::istringstream iss(output);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.length() < 2) continue;
+            char x = line[0];
+            char y = line[1];
+            
+            if (x == '?' && y == '?') hasUnstaged = true; // Untracked
+            else {
+                if (x != ' ' && x != '?') hasStaged = true;
+                if (y != ' ' && y != '?') hasUnstaged = true;
+            }
+        }
+
+        if (hasUnstaged) return GIT_UNSTAGED;
+        if (hasStaged) return GIT_STAGED;
+        return GIT_CLEAN;
+    }
 
     void rebuildSuggestions() {
         if (history.empty()) return;
@@ -165,6 +245,35 @@ private:
         }
     }
 
+    std::string getClipboardText() {
+        if (!OpenClipboard(NULL)) return "";
+        HANDLE hData = GetClipboardData(CF_TEXT);
+        if (hData == NULL) {
+            CloseClipboard();
+            return "";
+        }
+        char* pszText = static_cast<char*>(GlobalLock(hData));
+        if (pszText == NULL) {
+            CloseClipboard();
+            return "";
+        }
+        std::string text(pszText);
+        GlobalUnlock(hData);
+        CloseClipboard();
+        
+        // Remove carriage returns to keep single-line if mostly used for commands, 
+        // or handle them. Shell usually expects single line or specific handling.
+        // For now, let's strip \r to play nice with linux-style line endings if needed,
+        // or just paste as is.
+        // Actually, simple paste is fine. shell might handle \n later or we strip it.
+        // Most shells strip newlines or execute immediately. 
+        // Let's strip newlines for safety in this simple shell to avoid multi-command injection weirdness
+        text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+        text.erase(std::remove(text.begin(), text.end(), '\n'), text.end());
+        
+        return text;
+    }
+
     void deleteSelection() {
         if (selectionAnchor == -1) return;
         int start = std::min(selectionAnchor, cursorPos);
@@ -176,6 +285,46 @@ private:
         selectionAnchor = -1;
     }
 
+    // Helper to get current git branch (if any)
+    std::string getGitBranch() {
+        // Look for .git/HEAD
+        namespace fs = std::filesystem;
+        try {
+            fs::path current(currentDir);
+            // Search up the tree for .git
+            while (true) {
+                fs::path gitDir = current / ".git";
+                if (fs::exists(gitDir) && fs::is_directory(gitDir)) {
+                    // Read HEAD
+                    fs::path headPath = gitDir / "HEAD";
+                    std::ifstream headFile(headPath);
+                    if (headFile.is_open()) {
+                        std::string line;
+                        std::getline(headFile, line);
+                        // format: ref: refs/heads/master
+                        if (line.substr(0, 5) == "ref: ") {
+                            std::string ref = line.substr(5);
+                            size_t lastSlash = ref.find_last_of('/');
+                            if (lastSlash != std::string::npos) {
+                                return ref.substr(lastSlash + 1);
+                            }
+                            return ref;
+                        } else {
+                            // detached HEAD? return short hash
+                            return line.substr(0, 7);
+                        }
+                    }
+                }
+                if (current.has_parent_path() && current.parent_path() != current) {
+                    current = current.parent_path();
+                } else {
+                    break;
+                }
+            }
+        } catch (...) {}
+        return "";
+    }
+
     void printPrompt() {
         IO::get().setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
         IO::get().write("linuxify");
@@ -183,8 +332,30 @@ private:
         IO::get().setColor(IO::Console::COLOR_DEFAULT);
         IO::get().write(":");
         
-        IO::get().setColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        IO::get().write(currentDir);
+        std::string branch = getGitBranch();
+        if (!branch.empty()) {
+             // Git Repo: Violet (Magenta)
+             IO::get().setColor(FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+             IO::get().write(currentDir);
+             
+             IO::get().setColor(IO::Console::COLOR_DEFAULT); // White @
+             IO::get().write("@");
+             
+             // Color based on status
+             WORD statusColor = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY; // Default Yellow (Clean)
+             if (currentGitStatus == GIT_UNSTAGED) {
+                 statusColor = FOREGROUND_RED | FOREGROUND_INTENSITY; // Red
+             } else if (currentGitStatus == GIT_STAGED) {
+                 statusColor = FOREGROUND_GREEN | FOREGROUND_INTENSITY; // Green
+             }
+             
+             IO::get().setColor(statusColor);
+             IO::get().write(branch);
+        } else {
+             // Normal: Blue
+             IO::get().setColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+             IO::get().write(currentDir);
+        }
         
         IO::get().setColor(IO::Console::COLOR_DEFAULT);
         if (isAdmin) {
@@ -201,6 +372,12 @@ private:
         
         // Calculate dimensions
         int promptLen = 9 + (int)currentDir.length() + 2; 
+        
+        // Adjust for Git Branch
+        std::string branch = getGitBranch();
+        if (!branch.empty()) {
+            promptLen += 1 + (int)branch.length(); // +1 for '@'
+        }
         
         int contentLen = (int)inputBuffer.length();
         if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
@@ -341,6 +518,13 @@ public:
           lastCharInput(0), initialized(false), isAdmin(admin) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
+        
+        // Check Git Status once on init
+        currentGitStatus = GIT_NONE;
+        if (!getGitBranch().empty()) {
+            currentGitStatus = checkGitStatus();
+        }
+        
         rebuildSuggestions(); // Build the frequency index logic
     }
 
@@ -399,6 +583,10 @@ public:
         }
 
         if (vk == VK_RETURN) {
+            // Fix: Clear any ghost text/suggestions before moving to next line
+            currentSuggestion.clear();
+            render();
+            
             ShellIO::sout.setPromptActive(false);
             ShellIO::sout << ShellIO::endl; 
             return PollResult::LineReady;
@@ -408,13 +596,32 @@ public:
                 cursorPos = (int)inputBuffer.length();
                 render();
             }
+            else if (vk == 'L' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
+                IO::get().clearScreen();
+                promptStartRow = 0;
+                render();
+            }
             else if (vk == VK_BACK) {
                 lastCharInput = 0; 
                 if (selectionAnchor != -1) {
                     deleteSelection();
                     updateSuggestion();
                     render();
-                } else if (cursorPos > 0) {
+                }
+                else if ((ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) && cursorPos > 0) {
+                    // Ctrl+Backspace: Delete word left
+                    int i = cursorPos - 1;
+                    while (i > 0 && inputBuffer[i] == ' ') i--; // Skip trailing spaces
+                    while (i > 0 && inputBuffer[i] != ' ') i--; // Skip word characters
+                    if (inputBuffer[i] == ' ') i++; // Keep the boundary space
+                    
+                    int len = cursorPos - i;
+                    inputBuffer.erase(i, len);
+                    cursorPos = i;
+                    updateSuggestion();
+                    render();
+                } 
+                else if (cursorPos > 0) {
                     // Smart Backspace: Delete matched empty pair
                     if (cursorPos < (int)inputBuffer.length()) {
                         char prev = inputBuffer[cursorPos - 1];
@@ -452,6 +659,18 @@ public:
                     render();
                 }
             }
+            else if (vk == VK_HOME) {
+                lastCharInput = 0;
+                if (selectionAnchor != -1) selectionAnchor = -1;
+                cursorPos = 0;
+                render();
+            }
+            else if (vk == VK_END) {
+                lastCharInput = 0;
+                if (selectionAnchor != -1) selectionAnchor = -1;
+                cursorPos = (int)inputBuffer.length();
+                render();
+            }
             else if (vk == VK_LEFT) {
                 lastCharInput = 0; 
                 if (selectionAnchor != -1) {
@@ -459,7 +678,19 @@ public:
                     cursorPos = std::min(selectionAnchor, cursorPos);
                     selectionAnchor = -1;
                     render();
-                } else if (cursorPos > 0) { 
+                } 
+                else if (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) {
+                    // Word Jump Left
+                    if (cursorPos > 0) {
+                        int i = cursorPos - 1;
+                        while (i > 0 && inputBuffer[i] == ' ') i--; // Skip trailing spaces
+                        while (i > 0 && inputBuffer[i] != ' ') i--; // Skip word characters
+                        if (inputBuffer[i] == ' ') i++; // Stop at boundary
+                        cursorPos = i;
+                        render();
+                    }
+                }
+                else if (cursorPos > 0) { 
                     cursorPos--; render(); 
                 }
             }
@@ -477,7 +708,18 @@ public:
                     cursorPos = std::max(selectionAnchor, cursorPos);
                     selectionAnchor = -1;
                     render();
-                } else if (cursorPos < (int)inputBuffer.length()) {
+                } 
+                else if (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) {
+                    // Word Jump Right
+                    if (cursorPos < (int)inputBuffer.length()) {
+                        int i = cursorPos;
+                        while (i < (int)inputBuffer.length() && inputBuffer[i] != ' ') i++; // Skip word chars
+                        while (i < (int)inputBuffer.length() && inputBuffer[i] == ' ') i++; // Skip spaces
+                        cursorPos = i;
+                        render();
+                    }
+                }
+                else if (cursorPos < (int)inputBuffer.length()) {
                      cursorPos++; render(); 
                 } else {
                     // Accept Autosuggest
@@ -639,7 +881,10 @@ public:
                     int end = std::max(selectionAnchor, cursorPos);
                     copyToClipboard(inputBuffer.substr(start, end - start));
                 } else {
-                    std::cout << "^C\n";
+                    currentSuggestion.clear();
+                    render();
+                    ShellIO::sout.setPromptActive(false);
+                    ShellIO::sout << "^C" << ShellIO::endl;
                     inputBuffer.clear();
                     return PollResult::Cancelled;
                 }
@@ -651,6 +896,17 @@ public:
                     int end = std::max(selectionAnchor, cursorPos);
                     copyToClipboard(inputBuffer.substr(start, end - start));
                     deleteSelection();
+                    render();
+                }
+            }
+            else if (vk == 'V' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) {
+                // Paste
+                std::string text = getClipboardText();
+                if (!text.empty()) {
+                    if (selectionAnchor != -1) deleteSelection();
+                    inputBuffer.insert(cursorPos, text);
+                    cursorPos += (int)text.length();
+                    updateSuggestion();
                     render();
                 }
             }

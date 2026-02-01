@@ -45,8 +45,6 @@
 #include "io_handler.hpp"
 #include "input_handler.hpp"
 #include "shell_streams.hpp"
-#include "input_handler.hpp"
-#include "shell_streams.hpp"
 #include "crash_handler.hpp"
 #include "cmds-src/system_integrator.hpp"
 #include "cmds-src/glob.hpp"
@@ -116,6 +114,14 @@ public:
                  return line;
             }
             return InputHandler::readSimpleLine(prompt, isPassword);
+        });
+
+        // Bind Alias Resolver
+        ctx.interpreter.setAliasResolver([this](const std::string& cmd) -> std::string {
+             if (ctx.aliasInContext.hasAlias(cmd)) {
+                 return ctx.aliasInContext.getAlias(cmd);
+             }
+             return cmd;
         });
 
         // Register fallback handler for internal commands
@@ -242,7 +248,10 @@ public:
 
     // Execute a command - handles built-in commands internally or uses CreateProcessA for external
     // Returns exit code, -1 on failure
-    int runProcess(const std::string& cmdLine, const std::string& workDir = "", bool wait = true) {
+    int runProcess(const std::string& originalCmdLine, const std::string& workDir = "", bool wait = true) {
+        // Resolve aliases
+        std::string cmdLine = ctx.aliasInContext.resolve(originalCmdLine);
+        
         // First, tokenize and check if it's a built-in command
         std::vector<std::string> tokens;
         std::istringstream iss(cmdLine);
@@ -1383,6 +1392,61 @@ public:
              } else {
                  printError("chown: changing ownership of '" + file + "': Operation not permitted (or user invalid)");
              }
+        }
+    }
+
+    void cmdAlias(const std::vector<std::string>& args) {
+        if (args.size() == 1) {
+            // List all aliases
+            const auto& aliases = ctx.aliasInContext.getAllAliases();
+            for (const auto& pair : aliases) {
+                std::cout << "alias " << pair.first << "='" << pair.second << "'" << std::endl;
+            }
+            return;
+        }
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            std::string arg = args[i];
+            size_t eqPos = arg.find('=');
+            
+            if (eqPos != std::string::npos) {
+                std::string name = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                // If the value is quoted (e.g. alias foo="'bar'"), remove the outer quotes
+                if (value.size() >= 2) {
+                    char first = value.front();
+                    char last = value.back();
+                    if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                        value = value.substr(1, value.size() - 2);
+                    }
+                }
+                
+                ctx.aliasInContext.addAlias(name, value);
+            } else {
+                std::string val = ctx.aliasInContext.getAlias(arg);
+                if (!val.empty()) {
+                    std::cout << "alias " << arg << "='" << val << "'" << std::endl;
+                } else {
+                    printError("alias: " + arg + ": not found");
+                }
+            }
+        }
+    }
+
+    void cmdUnalias(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("unalias: usage: unalias name [name ...]");
+            return;
+        }
+        
+        if (args[1] == "-a") {
+             ctx.aliasInContext.clear();
+             return;
+        }
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            ctx.aliasInContext.removeAlias(args[i]);
         }
     }
 
@@ -6959,6 +7023,10 @@ public:
             cmdLin(expandedTokens);
         } else if (cmd == "setup") {
             cmdSetup(expandedTokens);
+        } else if (cmd == "alias") {
+            cmdAlias(expandedTokens);
+        } else if (cmd == "unalias") {
+            cmdUnalias(expandedTokens);
         } else if (cmd == "wsltest") {
             HANDLE hCon = GetStdHandle(STD_OUTPUT_HANDLE);
             SetConsoleTextAttribute(hCon, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
@@ -8812,7 +8880,10 @@ void execute_command_logic(ShellContext& ctx, const std::string& input) {
     
     std::string expandedInput = logic.expandHistoryInString(input);
     
-    std::string trimmed = expandedInput;
+    // Resolve aliases early so they apply to everything (arithmetic, shell syntax, internal cmds)
+    std::string resolvedInput = ctx.aliasInContext.resolve(expandedInput);
+    
+    std::string trimmed = resolvedInput;
     trimmed.erase(0, trimmed.find_first_not_of(" \t"));
     if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
     
@@ -9021,4 +9092,3 @@ int main(int argc, char* argv[]) {
     
     return 0;
 }
-

@@ -35,8 +35,14 @@ public:
     }
     
     static std::vector<std::string> getExternalCommands() {
-        std::vector<std::string> commands;
+        static std::vector<std::string> cachedCommands;
+        static bool cachePopulated = false;
         
+        if (cachePopulated) return cachedCommands;
+
+        std::set<std::string> uniqueCmds;
+        
+        // 1. Scan local 'cmds' folder (as before)
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
         fs::path exeDir = fs::path(exePath).parent_path();
@@ -46,19 +52,60 @@ public:
             if (fs::exists(cmdsDir) && fs::is_directory(cmdsDir)) {
                 for (const auto& entry : fs::directory_iterator(cmdsDir)) {
                     if (entry.is_regular_file()) {
-                        std::string filename = entry.path().filename().string();
                         std::string ext = entry.path().extension().string();
-                        
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                         if (ext == ".exe" || ext == ".bat" || ext == ".cmd") {
-                            std::string cmdName = entry.path().stem().string();
-                            commands.push_back(cmdName);
+                            uniqueCmds.insert(entry.path().stem().string());
                         }
                     }
                 }
             }
         } catch (...) {}
         
-        return commands;
+        // 2. Scan PATH
+        char* pathEnv = getenv("PATH");
+        if (pathEnv) {
+            std::string pathStr = pathEnv;
+            std::string delimiter = ";";
+            size_t pos = 0;
+            std::string token;
+            while ((pos = pathStr.find(delimiter)) != std::string::npos) {
+                token = pathStr.substr(0, pos);
+                try {
+                    if (!token.empty() && fs::exists(token) && fs::is_directory(token)) {
+                        for (const auto& entry : fs::directory_iterator(token)) {
+                             // Only grab .exe/bat/cmd
+                             if (entry.is_regular_file()) {
+                                 std::string ext = entry.path().extension().string();
+                                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                                 if (ext == ".exe" || ext == ".bat" || ext == ".cmd") {
+                                      uniqueCmds.insert(entry.path().stem().string());
+                                 }
+                             }
+                        }
+                    }
+                } catch (...) {} // Ignore permission errors etc
+                pathStr.erase(0, pos + delimiter.length());
+            }
+            // Check last token
+             try {
+                if (!pathStr.empty() && fs::exists(pathStr) && fs::is_directory(pathStr)) {
+                    for (const auto& entry : fs::directory_iterator(pathStr)) {
+                         if (entry.is_regular_file()) {
+                             std::string ext = entry.path().extension().string();
+                             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                             if (ext == ".exe" || ext == ".bat" || ext == ".cmd") {
+                                  uniqueCmds.insert(entry.path().stem().string());
+                             }
+                         }
+                    }
+                }
+            } catch (...) {}
+        }
+
+        cachedCommands.assign(uniqueCmds.begin(), uniqueCmds.end());
+        cachePopulated = true;
+        return cachedCommands;
     }
 
     static std::vector<std::string> getCommandSuggestions(const std::string& prefix) {
