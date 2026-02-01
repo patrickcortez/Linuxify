@@ -182,6 +182,12 @@ struct Session {
     std::mutex mutex;
     std::vector<std::vector<Cell>> grid;
     std::deque<std::vector<Cell>> history;
+    
+    // Mouse Tracking Modes
+    bool mouseMode = false;      // Any mouse reporting enabled
+    bool sgrMouseMode = false;   // SGR extended mode (1006)
+    bool clickMode = false;      // Click only (1000)
+    bool dragMode = false;       // Drag support (1002)
     int viewOffset = 0; 
     
     // TUI Support
@@ -208,20 +214,22 @@ struct Session {
 
     void Resize(int r, int c) {
         std::lock_guard<std::mutex> lock(mutex);
-        int oldRows = rows, oldCols = cols;
+        int oldRows = rows;
         rows = std::max(1, r); cols = std::max(1, c);
         
-        std::vector<std::vector<Cell>> newGrid(rows);
-        for (auto& row : newGrid) row.resize(cols);
+        // Resize current grid
+        grid.resize(rows); 
+        for (auto& row : grid) {
+            row.resize(cols, Cell{' ', DEFAULT_FG, DEFAULT_BG});
+        }
         
-        int copyRows = std::min(oldRows, rows);
-        int copyCols = std::min(oldCols, cols);
-        for (int i = 0; i < copyRows && i < (int)grid.size(); i++) {
-            for (int j = 0; j < copyCols && j < (int)grid[i].size(); j++) {
-                newGrid[i][j] = grid[i][j];
+        // Resize saved grid if exists (to prevent restoring wrong size)
+        if (!savedGrid.empty()) {
+            savedGrid.resize(rows);
+            for (auto& row : savedGrid) {
+                row.resize(cols, Cell{' ', DEFAULT_FG, DEFAULT_BG});
             }
         }
-        grid = std::move(newGrid);
         
         if (cursorRow >= rows) cursorRow = rows - 1;
         if (cursorCol >= cols) cursorCol = cols - 1;
@@ -624,6 +632,8 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
             }
         }
         break;
+
+        break;
     
     // Insert Character (ICH)
     case '@':
@@ -709,8 +719,10 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
                     // Clear the alternate buffer
                     for (auto& r : s->grid) for (auto& c : r) c = Cell{' ', DEFAULT_FG, DEFAULT_BG};
                 } else if (code == 25) {
-                    // Show cursor (DECTCEM) - we don't track this but accept it
-                }
+                    // Show cursor (DECTCEM)
+                } else if (code == 1000) { s->mouseMode = true; s->clickMode = true; s->dragMode = false; }
+                else if (code == 1002) { s->mouseMode = true; s->clickMode = true; s->dragMode = true; }
+                else if (code == 1006) { s->sgrMouseMode = true; }
             }
         }
         break;
@@ -726,7 +738,9 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
                     }
                 } else if (code == 25) {
                     // Hide cursor (DECTCEM)
-                }
+                } else if (code == 1000) { s->mouseMode = false; s->clickMode = false; }
+                else if (code == 1002) { s->mouseMode = false; s->dragMode = false; }
+                else if (code == 1006) { s->sgrMouseMode = false; }
             }
         }
         break;
@@ -1236,6 +1250,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
         {
             int x = LOWORD(lParam); int y = HIWORD(lParam);
+            
+            // Mouse Tracking for TUI
+            if (y >= TAB_HEIGHT && g_activeSessionIndex >= 0) {
+                 Session* s = g_sessions[g_activeSessionIndex];
+                 if (s->mouseMode) {
+                     int row, col;
+                     ScreenToCell(x, y, row, col);
+                     int vtCol = col + 1;
+                     int vtRow = row + 1;
+                     
+                     if (s->sgrMouseMode) {
+                         std::string seq = "\033[<0;" + std::to_string(vtCol) + ";" + std::to_string(vtRow) + "M";
+                         WriteFile(s->hPipeIn, seq.c_str(), seq.length(), NULL, NULL);
+                     }
+                     return 0; // Block selection
+                 }
+            }
+
             if (y < TAB_HEIGHT) {
                 int tabWidth = 140;
                 int clickedIndex = x / tabWidth;
@@ -1328,6 +1360,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_LBUTTONUP:
+        if (g_activeSessionIndex >= 0) {
+             Session* s = g_sessions[g_activeSessionIndex];
+             if (s->mouseMode) {
+                 int x = LOWORD(lParam); int y = HIWORD(lParam);
+                 int row, col; ScreenToCell(x, y, row, col);
+                 if (s->sgrMouseMode) {
+                     std::string seq = "\033[<0;" + std::to_string(col+1) + ";" + std::to_string(row+1) + "m";
+                     WriteFile(s->hPipeIn, seq.c_str(), seq.length(), NULL, NULL);
+                 }
+             }
+        }
         if (g_selecting) {
             int x = LOWORD(lParam); int y = HIWORD(lParam);
             ScreenToCell(x, y, g_selEndRow, g_selEndCol);
