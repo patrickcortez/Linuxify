@@ -1,4 +1,4 @@
-// Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
+// Compile: cl /EHsc /std:c++17 main.cpp registry.cpp cmds-src/sesh.cpp /Fe:linuxify.exe
 // Alternate compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
 #include <io.h>
@@ -49,6 +49,7 @@
 #include "cmds-src/system_integrator.hpp"
 #include "cmds-src/glob.hpp"
 #include "cmds-src/child_handler.hpp" // Integrated ChildHandler
+#include "cmds-src/sesh.hpp"
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -78,7 +79,7 @@ class ShellLogic {
         "setup", "alias", "unalias", "source", "read", "test", "true", "false",
         "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
         "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
-        "fuzz"
+        "fuzz", "sesh"
     }; 
 
 
@@ -98,7 +99,6 @@ public:
             ctx.sessionEnv["IS_ADMIN"] = ctx.isAdmin ? "1" : "0";
         }
 
-        // Bind interpreter to shell context variables for shared state
         // Bind interpreter to shell context variables for shared state
         ctx.interpreter.bindVariables(ctx.sessionEnv);
         ctx.interpreter.bindArrays(&ctx.sessionArrayEnv);
@@ -799,6 +799,8 @@ public:
             return;
         }
 
+
+
         for (const auto& dir : dirs) {
             try {
                 std::string fullPath = resolvePath(dir);
@@ -1447,6 +1449,33 @@ public:
 
         for (size_t i = 1; i < args.size(); ++i) {
             ctx.aliasInContext.removeAlias(args[i]);
+        }
+    }
+
+    void cmdSesh(const std::vector<std::string>& args) {
+        if (args.size() < 2) {
+            printError("Usage: sesh <save|load|list> [session_name]");
+            return;
+        }
+
+        std::string action = args[1];
+        
+        if (action == "save") {
+            if (args.size() < 3) {
+                 printError("Usage: sesh save <session_name>");
+                 return;
+            }
+            Sesh::saveSession(ctx, args[2]);
+        } else if (action == "load") {
+            if (args.size() < 3) {
+                 printError("Usage: sesh load <session_name>");
+                 return;
+            }
+            Sesh::loadSession(ctx, args[2]);
+        } else if (action == "list") {
+            Sesh::listSessions();
+        } else {
+            printError("Unknown sesh action: " + action);
         }
     }
 
@@ -8687,6 +8716,12 @@ public:
         if (tokens.empty()) return 0;
         
         std::string cmd = tokens[0];
+
+        // Hook for Sesh
+        if (cmd == "sesh") {
+            cmdSesh(tokens);
+            return ctx.lastExitCode;
+        }
         
         // Implicit AutoNav logic: Check if command exists
         bool isCommand = false;
@@ -9063,6 +9098,9 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "^C\n";
     });
+    
+    // Initialize Session System
+    Sesh::init();
 
     SignalHandler::registerSuspendHandler([]() {
         if (g_procMgr.suspendForeground()) {

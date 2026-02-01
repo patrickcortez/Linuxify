@@ -92,3 +92,7 @@ git add -A
 git commit -m "cleared history"
 git status
 git checkout master
+help
+which linuxify
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+git status

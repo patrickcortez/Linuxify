@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../shell_streams.hpp"
+#include <iostream>
 #include <string>
 #include <vector>
 #include <map>
