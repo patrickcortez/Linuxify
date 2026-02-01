@@ -5,20 +5,23 @@ A native Unix-like shell and development platform for Windows — built on a con
 ## Features
 
 - **Linuxify Shell** with 60+ built-in Linux commands
-- **Lino Text Editor** with syntax highlighting plugins
+- **Lino Text Editor** with user defined syntax highlighting plugins
 - **Lin Package Manager** (winget-powered) with 180+ package aliases
 - **Integrated Bash interpreter** with full lexer, parser, and AST executor
-- **LVC version control** system with SHA-256 content addressing
-- **Node graph file system** with full disk encryption
-- **Nexplore** - GUI file explorer for Node images
+- **Git Awareness** - prompt dynamically changes if in a git repo, prompt also indicates if a repo has untracked or uncommitted changes.
+- **Auto Navigation and Suggestions** - directly type a directory and navigate into it, ghost text suggestions appear as you type based on history, commands, packages or anything in PATH
 - **Windux** - GUI terminal with tabs and ConPTY
-- **Crond daemon** for scheduled tasks
-- **LinMake build system** with incremental builds
-- Shebang (`./`) execution support
+- **Crond daemon** for scheduling of tasks
+- Universal Shebang (`./`) execution - executes any file with its corresponding interpreter as long as the interpreter is indicated in the shebang line e.g: #!python, #!node or #!default
 - Real-time syntax highlighting as you type
 - Frequency-based auto-suggestions
 - Auto-navigation (type a directory path to navigate directly)
-- Signal and crash handlers
+- Signal,Input,I/O,interrupt and crash handlers
+- Arithmetic Handling and pyenv or wrapper for python(I havent solved how to make pythons input work).
+- globbing support: <command> *.<ext>
+- Persistent environment variables: export -p <var>=<Value>, and Arrays: export -arr <arrname>={<val1>,<val2>,<val3>}
+- Nuke - for disabling cmd and powershell, dont use unless you know what you are doing (unnuke to restore cmd and powershell).
+- 
 
 ## Components
 
@@ -448,7 +451,7 @@ A fully functional graph-based virtual file system tool (`node.exe`). It creates
 
 ---
 
-### **Nexplore (GUI File Explorer)**
+### **Nexplore (GUI File Explorer)** 
 
 A Windows GUI application (`nexplore.exe`) for browsing `.node` file system images with an Explorer-style interface.
 
@@ -488,6 +491,9 @@ A modern Windows GUI terminal emulator (`windux.exe`) with tabbed interface and 
 ```bash
 windux              # Launch GUI terminal
 ```
+
+[Status]
+- Buggy: TUI's dont render normally,some colors/texts dont render normally and cwd doesnt resolve to users home dir.
 
 ---
 
@@ -573,9 +579,6 @@ Linuxify/
 ├── input_handler.hpp   # Input handling with auto-suggestions
 ├── signal_handler.hpp  # Signal handling
 ├── crash_handler.hpp   # Crash recovery
-└── toolchain/          # Bundled MinGW-w64
-    └── compiler/
-        └── mingw64/
 ```
 
 ---
