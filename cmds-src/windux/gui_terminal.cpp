@@ -227,9 +227,16 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
     std::string current;
     bool privateMode = (!params.empty() && params[0] == '?');
     
-    for (char c : params) {
-        if (isdigit(c)) current += c;
-        else if (c == ';') { codes.push_back(current.empty() ? 0 : std::stoi(current)); current = ""; }
+    for (size_t i = 0; i < params.length(); i++) {
+        char c = params[i];
+        if (isdigit(c)) {
+            current += c;
+        }
+        else if (c == ';') { 
+            codes.push_back(current.empty() ? 0 : std::stoi(current)); 
+            current = ""; 
+        }
+        // Ignore other chars like '?' so they don't block number parsing
     }
     if (!current.empty()) codes.push_back(std::stoi(current));
     if (codes.empty()) codes.push_back(0);
@@ -643,8 +650,9 @@ void CreateNewSession() {
     
     RECT rc; GetClientRect(g_hwnd, &rc);
     int termHeight = rc.bottom - TAB_HEIGHT;
-    int cols = std::max(1, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
-    int rows = std::max(1, (int)((termHeight - 20) / g_fontHeight));
+    // FIX: Enforce minimum dimensions
+    int cols = std::max(20, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
+    int rows = std::max(5, (int)((termHeight - 20) / g_fontHeight));
     s->Resize(rows, cols);
 
     HANDLE hPTYIn, hPTYOut;
@@ -872,6 +880,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE:
         g_hwnd = hwnd;
         g_hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, 0,0,0, DEFAULT_CHARSET, 0,0,0, FIXED_PITCH, "Fixedsys"); 
+        
+        // FIX: Calculate actual font metrics
+        {
+            HDC hdc = GetDC(hwnd);
+            SelectObject(hdc, g_hFont);
+            TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+            g_fontWidth = tm.tmAveCharWidth;
+            g_fontHeight = tm.tmHeight;
+            ReleaseDC(hwnd, hdc);
+        }
+
         if (!g_pty.Init()) MessageBoxA(NULL, "Failed to init ConPTY", "Error", MB_OK);
         else CreateNewSession();
         return 0;
@@ -881,14 +900,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if (g_pty.ResizePseudoConsole) {
              RECT rc; GetClientRect(hwnd, &rc);
              int termHeight = rc.bottom - TAB_HEIGHT;
-             int cols = std::max(1, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
-             int rows = std::max(1, (int)((termHeight - 20) / g_fontHeight));
+             
+             // FIX: Enforce minimum dimensions to prevent "1 row" collapse
+             int cols = std::max(20, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
+             int rows = std::max(5, (int)((termHeight - 20) / g_fontHeight)); // Minimum 5 rows
+
              for (Session* s : g_sessions) {
                  if (s && s->hPC) {
                      g_pty.ResizePseudoConsole(s->hPC, {(SHORT)cols, (SHORT)rows});
                      s->Resize(rows, cols);
                  }
              }
+
+             // FIX: Update window title with debug info
+             std::string title = std::string(WINDOW_TITLE) + " [" + std::to_string(cols) + "x" + std::to_string(rows) + "]";
+             SetWindowTextA(hwnd, title.c_str());
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;

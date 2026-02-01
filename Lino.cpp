@@ -1820,7 +1820,15 @@ private:
         WORD textAttr = FOREGROUND_RED | FOREGROUND_INTENSITY;
         WORD highlightAttr = BACKGROUND_RED | BACKGROUND_INTENSITY | (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE) | FOREGROUND_INTENSITY;
 
-        bufferFill(0, 0, screenWidth * screenHeight, ' ', bg);
+        // Explicitly clear entire buffer to prevent artifacts
+        CHAR_INFO empty;
+        empty.Char.AsciiChar = ' ';
+        empty.Attributes = bg;
+        std::fill(screenBuffer.begin(), screenBuffer.end(), empty);
+
+        // DEBUG: Update title to show Lino's view of resolution
+        std::string debugTitle = "Lino [" + std::to_string(screenWidth) + "x" + std::to_string(screenHeight) + "]";
+        SetConsoleTitleA(debugTitle.c_str());
         
         int centerY = screenHeight / 3;
         
