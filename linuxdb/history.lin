@@ -86,3 +86,6 @@ atomic
 ./test.exe
 cat test.exe
 clear
+git checkout master
+lino .gitignore
+git add -A
