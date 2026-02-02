@@ -2,7 +2,6 @@
 # Auto-generated - Maps commands to executable paths
 # Stored in: linuxdb/registry.lin
 
-./powershell=C:\WINDOWS\System32\WindowsPowerShell\v1.0\./powershell.exe
 ARP=C:\WINDOWS\system32\ARP.EXE
 ActionsMcpHost=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\ActionsMcpHost.exe
 AggregatorHost=C:\WINDOWS\system32\AggregatorHost.exe
@@ -22,7 +21,6 @@ BioIso=C:\WINDOWS\system32\BioIso.exe
 BitLockerDeviceEncryption=C:\WINDOWS\system32\BitLockerDeviceEncryption.exe
 BitLockerWizardElev=C:\WINDOWS\system32\BitLockerWizardElev.exe
 ByteCodeGenerator=C:\WINDOWS\system32\ByteCodeGenerator.exe
-C:\Users\patri\AppData\Local\Yori\yori.exe=C:\Users\patri\AppData\Local\Yori\yori.exe
 CIDiag=C:\WINDOWS\system32\CIDiag.exe
 CameraSettingsUIHost=C:\WINDOWS\system32\CameraSettingsUIHost.exe
 CastSrv=C:\WINDOWS\system32\CastSrv.exe
@@ -275,7 +273,6 @@ WpcTok=C:\WINDOWS\system32\WpcTok.exe
 XblGameSaveTask=C:\WINDOWS\system32\XblGameSaveTask.exe
 XboxPcAppAdminServer=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\XboxPcAppAdminServer.exe
 XboxPcAppCE=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\XboxPcAppCE.exe
-adb=C:\Users\patri\Downloads\platform-tools-latest-windows\platform-tools\adb.exe
 addr2line=C:\mingw64\mingw64\bin\addr2line.exe
 agentactivationruntimestarter=C:\WINDOWS\system32\agentactivationruntimestarter.exe
 aitstatic=C:\WINDOWS\system32\aitstatic.exe
@@ -536,7 +533,6 @@ launcherrsxruntimeuwp=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\launche
 ld=C:\mingw64\mingw64\bin\ld.exe
 ld.bfd=C:\mingw64\mingw64\bin\ld.bfd.exe
 licensingdiag=C:\WINDOWS\system32\licensingdiag.exe
-lino=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\lino.exe
 linuxify=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\linuxify.exe
 listpedeps=C:\mingw64\mingw64\bin\listpedeps.exe
 lodctr=C:\WINDOWS\system32\lodctr.exe
@@ -867,5 +863,4 @@ xperf=C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\xperf.e
 xwizard=C:\WINDOWS\system32\xwizard.exe
 xxd=C:\Program Files\Neovim\bin\xxd.exe
 yasm=C:\mingw64\mingw64\bin\yasm.exe
-yori=C:\Users\patri\AppData\Local\Yori\yori.exe
 ytasm=C:\mingw64\mingw64\bin\ytasm.exe
