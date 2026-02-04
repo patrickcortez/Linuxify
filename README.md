@@ -43,7 +43,6 @@ Comparable to bash or zsh, it features an integrated Bash interpreter, native sc
 | **Shell** | `history`, `whoami`, `env`, `export`, `which`, `clear`, `exit`, `source`, `alias`, `declare` |
 | **Tools** | `make`, `gdb`, `ar`, `ld`, `objdump`, `nm`, `strip` |
 | **Scheduling** | `crontab`, `crond` |
-| **System** | `nuke`, `unnuke`, `setup` |
 
 **Shell Features:**
 - Syntax highlighting for commands as you type
@@ -226,24 +225,6 @@ print("Hello from Python!")
 
 ---
 
-### **System Integration**
-
-Linuxify provides deep system integration capabilities:
-
-**Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `nuke` | Replace cmd.exe and powershell.exe with Linuxify (requires admin) |
-| `unnuke` | Restore original Windows shells |
-| `setup install` | Register .sh files with Windows for Explorer/cmd/PowerShell execution |
-| `setup uninstall` | Remove .sh file association |
-| `setup status` | Check current file association |
-
-**Warning:** The `nuke` command uses IFEO (Image File Execution Options) injection to redirect shell binaries. Use with caution.
-
----
-
 ### **Lin Package Manager**
 
 A winget-powered package manager with Linux-style syntax. Uses `linuxdb/packages.lin` for 180+ package aliases.
@@ -308,24 +289,27 @@ Bundled plugins: `cpp.nano` (C/C++), `python.nano`
 
 ---
 
-### **Lish (Shell Interpreter)**
+### **Lish (Shell Resolver)**
 
-A native shell script interpreter (`lish.exe`) that runs `.sh` scripts on Windows with bash-like syntax. Features a complete lexer, parser, and AST executor.
+A lightweight shell resolver binary (`lish.exe`) that enables shebang execution and script routing. It locates `linuxify.exe` and delegates command execution appropriately.
+
+**How it works:**
+1. Reads the script's shebang line (`#!`)
+2. If shebang is `#!/bin/bash`, `#!/bin/sh`, `#!/usr/bin/lish`, or `#!/default` → delegates to `linuxify.exe`
+3. If shebang specifies another interpreter (e.g., `#!/usr/bin/python`) → resolves the interpreter via `SearchPath` and executes directly
+4. In interactive mode (`lish` with no args) → launches `linuxify.exe`
 
 **Usage:**
 ```bash
-lish script.sh         # Run a script
-lish -c "echo hello"   # Run inline command
-lish                   # Interactive mode
+lish script.sh         # Run script (routes to linuxify or specified interpreter)
+lish -c "echo hello"   # Pass-through to linuxify
+lish                   # Interactive mode (launches linuxify)
 ```
 
-**Supported Syntax:**
-- Variables: `NAME="value"`, `$NAME`, `${NAME}`
-- Control flow: `if/elif/else/fi`, `for/do/done`, `while/do/done`
-- Test operators: `[ -f file ]`, `[ $a = $b ]`, `[ $a -eq 1 ]`
-- Pipes and redirects: `|`, `>`, `>>`
-- Functions: `function name() { ... }`
-- Command substitution: `$(command)`
+**Supported Shebangs:**
+- `#!/bin/bash`, `#!/bin/sh`, `#!/usr/bin/lish` → Uses linuxify's interpreter
+- `#!/usr/bin/python`, `#!python` → Finds python.exe and runs script
+- Any registered interpreter in the system PATH
 
 ---
 
@@ -428,8 +412,7 @@ Linuxify/
 │   ├── crond.exe       # Cron daemon
 │   ├── curl.exe        # HTTP client
 │   ├── grep.exe        # Pattern search
-│   ├── linmake.exe     # Build system
-│   └── ...             # 20+ additional tools
+│   └── ...             # Additional tools
 ├── cmds-src/           # Source files
 │   ├── interpreter.hpp # Bash interpreter (2700+ lines)
 │   ├── auto-suggest.hpp # Auto-suggestion system
