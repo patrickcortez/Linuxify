@@ -20,8 +20,6 @@ A native Unix-like shell and development platform for Windows — built on a con
 - Arithmetic Handling and pyenv or wrapper for python(I havent solved how to make pythons input work).
 - globbing support: <command> *.<ext>
 - Persistent environment variables: export -p <var>=<Value>, and Arrays: export -arr <arrname>={<val1>,<val2>,<val3>}
-- Nuke - for disabling cmd and powershell, dont use unless you know what you are doing (unnuke to restore cmd and powershell).
-- 
 
 ## Components
 
@@ -353,125 +351,6 @@ The shell includes a fully integrated Bash interpreter (`interpreter.hpp`) with 
 
 ---
 
-### **LVC (Version Control)**
-
-A git-like version control system built into Linuxify with sophisticated algorithms.
-
-**Features:**
-- SHA-256 content-addressable object storage
-- Myers diff algorithm (O(N+M)D optimal)
-- Rolling hash delta compression (rsync-style)
-- Colorized diff output
-
-**Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `lvc init` | Initialize repository |
-| `lvc add <file>` | Stage files |
-| `lvc commit -m "msg"` | Commit changes |
-| `lvc log` | View history |
-| `lvc status` | Show working tree status |
-| `lvc diff` | Show changes |
-| `lvc versions <file>` | List file versions |
-| `lvc show <commit>` | Show commit details |
-
----
-
-### **LinMake (Build System)**
-
-A CMake-like build system (`linmake.exe`) native to Linuxify with simple config files and auto-detection.
-
-**Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `linmake init` | Create LMake config template |
-| `linmake build` | Compile project (incremental) |
-| `linmake build --release` | Optimized build (-O2) |
-| `linmake build --debug` | Debug build with symbols |
-| `linmake run` | Build and execute |
-| `linmake clean` | Remove build artifacts |
-
-**Features:**
-- Auto-detects `.c`/`.cpp` source files
-- Incremental builds (only recompiles changed files)
-- Resolves bundled libraries automatically (z, ssl, curl, png, sqlite3, curses)
-- Colored output with progress indicators
-
-**LMake Config:**
-```ini
-project = myapp
-type = executable
-version = 1.0.0
-
-[sources]
-src/*.cpp
-main.c
-
-[libraries]
-curl
-sqlite3
-z
-
-[flags]
-std = c++17
-optimize = 2
-static = true
-```
-
----
-
-### **Node (Graph File System)**
-
-A fully functional graph-based virtual file system tool (`node.exe`). It creates and manages virtual disk images with a complete directory structure and interactive shell.
-
-**Features:**
-- Graph-based inode structure
-- Virtual disk images stored in `linuxdb/nodes/`
-- **Password protection support (Full Disk Encryption)**
-- SHA-256 key derivation with PBKDF2-style iterations
-- Interactive shell with colored output
-- Full file persistence
-- Block-based storage allocation
-
-**Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `node init <name>` | Create new image in `linuxdb/nodes/` |
-| `node init --password <name>` | Create password-protected image |
-| `node mount <name>` | Mount image from `linuxdb/nodes/` |
-| `node list` | List available file systems |
-| `ls`, `cd`, `pwd` | Directory navigation |
-| `mkdir`, `rmdir` | Directory management |
-| `touch`, `rm`, `cat` | File operations |
-| `Lino`, `echo` | File editing |
-| `exit` | Unmount and exit |
-
----
-
-### **Nexplore (GUI File Explorer)** 
-
-A Windows GUI application (`nexplore.exe`) for browsing `.node` file system images with an Explorer-style interface.
-
-**Features:**
-- Dark-themed modern UI with DWM integration
-- Folder and file icons with visual selection
-- Navigation with back button and breadcrumb path
-- Mouse wheel scrolling support
-- Double-click to open folders or view file contents
-- **Encrypted `.node` file support** with password prompt
-- SHA-256 key derivation for decryption
-
-**Usage:**
-- Launch via `nexplore` command or double-click
-- Use File → Open to browse for `.node` images
-- Navigate folders by double-clicking
-- Click Back button or use history to return
-
----
-
 ### **GUI Terminal (Windux)**
 
 A modern Windows GUI terminal emulator (`windux.exe`) with tabbed interface and ConPTY support.
@@ -545,9 +424,6 @@ Linuxify/
 ├── Lino.exe            # Text editor
 ├── cmds/               # Additional commands
 │   ├── lish.exe        # Shell interpreter
-│   ├── lvc.exe         # Version control
-│   ├── node.exe        # Graph file system
-│   ├── nexplore.exe    # GUI file explorer
 │   ├── windux.exe      # GUI terminal
 │   ├── crond.exe       # Cron daemon
 │   ├── curl.exe        # HTTP client
@@ -558,11 +434,6 @@ Linuxify/
 │   ├── interpreter.hpp # Bash interpreter (2700+ lines)
 │   ├── auto-suggest.hpp # Auto-suggestion system
 │   ├── child_handler.hpp # Process management
-│   ├── system_integrator.hpp # Nuke/unnuke functionality
-│   ├── lish.cpp        # Lish interpreter
-│   ├── lvc.hpp         # LVC implementation
-│   ├── node.hpp        # Node FS implementation
-│   ├── nexplore.cpp    # Nexplore GUI
 │   ├── gui_terminal.cpp # Terminal GUI
 │   └── crond.cpp       # Cron daemon
 ├── linuxdb/            # Database files
@@ -604,15 +475,6 @@ g++ -std=c++17 -O2 -o Lino.exe Lino.cpp
 
 # Build lish
 g++ -std=c++17 -static -o cmds/lish.exe cmds-src/lish.cpp
-
-# Build lvc
-g++ -std=c++17 -static -o cmds/lvc.exe cmds-src/lvc.cpp
-
-# Build node
-g++ -std=c++17 -static -o cmds/node.exe cmds-src/node.cpp
-
-# Build nexplore (GUI)
-g++ -std=c++17 -static -mwindows -o cmds/nexplore.exe cmds-src/nexplore.cpp -lgdi32 -luser32 -lcomdlg32 -ldwmapi -lshell32
 
 # Build GUI terminal (windux)
 g++ -std=c++17 -static -mwindows -o cmds/windux.exe cmds-src/gui_terminal.cpp cmds-src/terminal.res -lgdi32 -luser32 -ldwmapi

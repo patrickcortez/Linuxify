@@ -16,6 +16,7 @@ public:
 
     static int spawn(const std::string& cmdLine, const std::string& workDir, bool wait = true) {
         std::string finalCmdLine = cmdLine;
+        bool isPythonCmd = false;
         
         {
             std::string firstToken;
@@ -35,6 +36,12 @@ public:
                     firstToken = cmdLine;
                     start = cmdLine.length();
                 }
+            }
+            
+            std::string baseName = std::filesystem::path(firstToken).stem().string();
+            for (auto& c : baseName) c = (char)tolower((unsigned char)c);
+            if (baseName == "python" || baseName == "python3" || baseName == "py") {
+                isPythonCmd = true;
             }
             
             std::string ext;
@@ -70,6 +77,47 @@ public:
                 } catch (...) {}
             }
         }
+
+        auto& signalHandler = SignalHandler::InputDispatcher::getInstance();
+        SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, FALSE);
+        signalHandler.restore();
+
+        char cmdBuffer[8192];
+        strncpy_s(cmdBuffer, finalCmdLine.c_str(), sizeof(cmdBuffer) - 1);
+        const char* dir = workDir.empty() ? nullptr : workDir.c_str();
+
+        if (isPythonCmd) {
+            STARTUPINFOA si;
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+            ZeroMemory(&pi, sizeof(pi));
+
+            BOOL success = CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi);
+            
+            if (!success) {
+                SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
+                signalHandler.init();
+                std::cerr << "[ChildHandler] Failed to create process: " << cmdLine << " Error: " << GetLastError() << "\n";
+                return -1;
+            }
+            
+            int exitCode = 0;
+            if (wait) {
+                g_procMgr.setForegroundPid(pi.dwProcessId);
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                g_procMgr.clearForegroundPid();
+                DWORD code;
+                GetExitCodeProcess(pi.hProcess, &code);
+                exitCode = (int)code;
+            }
+
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
+            signalHandler.init();
+            return exitCode;
+        }
  
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -82,19 +130,19 @@ public:
 
         if (hIn == INVALID_HANDLE_VALUE || hOut == INVALID_HANDLE_VALUE) {
              std::cerr << "[ChildHandler] Error: Failed to open console handles. Error: " << GetLastError() << "\n";
+             SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
+             signalHandler.init();
              return -1;
         }
 
-        // 2. Configure Console Input (Standard Cooked Mode - Fixes Keys)
-        // ENABLE_VIRTUAL_TERMINAL_INPUT removed to restore Arrow/Backspace in Cooked Mode.
         DWORD inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
-                          ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE;
+                          ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT;
         if (!SetConsoleMode(hIn, inputMode)) {
-            std::cerr << "[ChildHandler] Warning: SetConsoleMode failed for Stdin. Error: " << GetLastError() << "\n";
+            inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
+                        ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE;
+            SetConsoleMode(hIn, inputMode);
         }
 
-        // 3. Configure Console Output (VT Processing - Fixes Lag)
-        // Enabling VT Processing allows fast ANSI rendering.
         DWORD outputMode = 0;
         if (GetConsoleMode(hOut, &outputMode)) {
             outputMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
@@ -113,19 +161,6 @@ public:
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
 
-        // 3. Remove Shell's signal handler
-        auto& signalHandler = SignalHandler::InputDispatcher::getInstance();
-        SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, FALSE);
-
-        char cmdBuffer[8192];
-        strncpy_s(cmdBuffer, finalCmdLine.c_str(), sizeof(cmdBuffer) - 1);
-
-        const char* dir = workDir.empty() ? nullptr : workDir.c_str();
-
-        // 4. Input Sanitization (Global "Dead Key" Fix) - MOVED TO INDIVIDUAL TOOLS (Lino/Funux)
-        
-        // Native CreateProcess call
-
         BOOL success = CreateProcessA(
             NULL,
             cmdBuffer,
@@ -138,12 +173,11 @@ public:
             &si,
             &pi
         );
-        
-        CloseHandle(hIn);
-        CloseHandle(hOut);
-        CloseHandle(hErr);
 
         if (!success) {
+            CloseHandle(hIn);
+            CloseHandle(hOut);
+            CloseHandle(hErr);
             DWORD err = GetLastError();
             if (err == ERROR_ELEVATION_REQUIRED) {
                 SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
@@ -217,12 +251,14 @@ public:
             exitCode = (int)code;
         }
 
+        CloseHandle(hIn);
+        CloseHandle(hOut);
+        CloseHandle(hErr);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
 
-        // 5. Restore Shell State
         SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
-        signalHandler.init(); // Restore Raw Mode
+        signalHandler.init();
 
         return exitCode;
     }

@@ -343,23 +343,6 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
         return false;
     }
     
-    // BLACKLIST CHECK (Strict Independence)
-    try {
-        std::string filename = fs::path(exePath).filename().string();
-        std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
-        
-        static const std::set<std::string> forbidden = {
-            "powershell.exe", "pwsh.exe", "cmd.exe", "wsl.exe",
-            "bash.exe", "sh.exe", "zsh.exe", "csh.exe", "ksh.exe", "tcsh.exe",
-            "git-bash.exe"
-        };
-        
-        if (forbidden.count(filename)) {
-            LOG_WARNING("Strict Mode: Execution of " + filename + " is prohibited.");
-            return true; // Handled (blocked)
-        }
-    } catch (...) {}
-    
     // Check if it's a shell script (.sh file)
     std::string ext = fs::path(exePath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -494,14 +477,28 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             cmdLine += " \"" + args[i] + "\"";
         }
         
+        std::string baseName = fs::path(command).stem().string();
+        std::transform(baseName.begin(), baseName.end(), baseName.begin(), ::tolower);
+        bool isPythonCmd = (baseName == "python" || baseName == "python3" || baseName == "py");
+        
+        HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD oldConsoleMode = 0;
+        if (isPythonCmd) {
+            GetConsoleMode(hStdIn, &oldConsoleMode);
+            DWORD cookedMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT;
+            SetConsoleMode(hStdIn, cookedMode);
+        }
+        
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        if (!isPythonCmd) {
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        }
         ZeroMemory(&pi, sizeof(pi));
         
         char cmdBuffer[4096];
@@ -512,7 +509,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             cmdBuffer,
             NULL,
             NULL,
-            TRUE,   // Inherit handles for stdin/stdout
+            TRUE,
             0,
             NULL,
             currentDir.c_str(),
@@ -524,9 +521,12 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
+            if (isPythonCmd) SetConsoleMode(hStdIn, oldConsoleMode);
             ErrorHandling::log(ErrorHandling::Level::Error, "Failed to execute command", __FILE__, __LINE__, err);
             return false;
         }
+        
+        if (isPythonCmd) SetConsoleMode(hStdIn, oldConsoleMode);
     }
     
     return true;

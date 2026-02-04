@@ -46,7 +46,6 @@
 #include "input_handler.hpp"
 #include "shell_streams.hpp"
 #include "crash_handler.hpp"
-#include "cmds-src/system_integrator.hpp"
 #include "cmds-src/glob.hpp"
 #include "cmds-src/child_handler.hpp" // Integrated ChildHandler
 #include "error_handling.hpp" // Integrated Verbose Error Handling
@@ -290,36 +289,7 @@ public:
         
         std::string cmd = tokens[0];
         
-        // STRICT INDEPENDENCE: Actively reject delegated shells
-        std::string cmdLower = cmd;
-        std::transform(cmdLower.begin(), cmdLower.end(), cmdLower.begin(), ::tolower);
-        
-        static const std::set<std::string> forbiddenShells = {
-            "powershell", "powershell.exe", "pwsh", "pwsh.exe",
-            "cmd", "cmd.exe",
-            "wsl", "wsl.exe",
-            "bash", "bash.exe", "sh", "sh.exe",
-            "zsh", "zsh.exe", "csh", "csh.exe", "ksh", "ksh.exe", "tcsh", "tcsh.exe",
-            "git-bash.exe", "git-bash" 
-        };
-        
-        if (forbiddenShells.count(cmdLower)) {
-            printError("Strict Mode: Delegation to external shell '" + cmd + "' is prohibited. Linuxify is independent.");
-            return 127; // Command not found / prohibited
-        }
-        
-        // Check if it's an internal command - if so, route to internal handler
 
-        
-        if (cmd == "nuke") {
-            SystemIntegrator::enforceDeepIntegration();
-            return 0;
-        }
-        
-        if (cmd == "unnuke") {
-            SystemIntegrator::restoreSystemShells();
-            return 0;
-        }
 
         {
             fs::path cmdPath(cmd);
@@ -6188,24 +6158,11 @@ public:
         std::cout << "  Special: @reboot @hourly @daily @weekly @monthly @yearly\n";
         
         std::cout << "\n";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::cout << "System Integration:\n";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  nuke";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "          Deep Integration: Replace cmd/powershell with Linuxify\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  unnuke";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "        Restore cmd/powershell\n";
-
-        std::cout << "\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  exit";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "          Exit the shell\n\n";
-        
+
         SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
         std::cout << "Setup:\n";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
@@ -7447,64 +7404,6 @@ public:
             }
         } else if (cmd == "uninstall") {
             cmdUninstall(expandedTokens);
-        } else if (cmd == "nuke") {
-            HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-            HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
-            
-            // Save current states
-            DWORD oldOutMode, oldInMode;
-            UINT oldCP = GetConsoleOutputCP();
-            GetConsoleMode(hOut, &oldOutMode);
-            GetConsoleMode(hIn, &oldInMode);
-            
-            // Enable UTF-8 for the art
-            SetConsoleOutputCP(65001); // CP_UTF8
-            
-            // Enable cooked mode for input
-            SetConsoleMode(hIn, ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-            
-            SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_INTENSITY);
-            
-            std::cout << R"(
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠋⠀⠉⠢⢀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⡁⠀⠀⠀⠀⠀⠑⠠⡀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡏⠑⢄⡀⠀⠀⠀⠀⠈⠑⢄⡀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣇⣀⣰⢉⣦⣄⠀⠀⠀⠀⠀⠈⢢
-⠀⠀⠀⠀⠀⠀⠀⠀⡠⠐⠊⠁⠀⢩⣿⣯⡶⠃⠢⡀⠀⠀⡠⠊
-⠀⠀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⢠⡟⠁⢹⠀⡀⠄⠚⠑⠒⠁⠀
-⠀⠀⠀⢀⠎⠉⠂⢄⠀⠀⠀⠀⠀⠀⠀⢸⠁⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⡰⠁⠀⠀⠀⠀⠁⠢⢀⠀⠀⠀⠀⡆⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⣘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⠀⡀⡘⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠰⠁⠁⠢⡀⠀⠀⠀⠀⠀⠀⠀⠀⢈⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⡇⠀⠀⠀⠀⠑⠄⡀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⢣⠀⠀⠀⠀⠀⠀⠈⠐⠄⢀⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠈⠆⡀⠀⠀⠀⠀⢀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠉⠀⠀⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-)" << std::endl;
-            
-            std::cout << "[Atomic]: Are you sure? This change will diasable cmd and powershell and will redirect them to linuxify? <Y/N>: ";
-            SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-            
-            char c = 0;
-            // Use ReadConsole for reliable reading in this mode mixed with std::cin state
-            char readBuf[16];
-            DWORD readBytes;
-            if (ReadConsoleA(hIn, readBuf, sizeof(readBuf), &readBytes, NULL)) {
-                if (readBytes > 0) c = readBuf[0];
-            }
-            
-            if (c == 'y' || c == 'Y') {
-                 SystemIntegrator::enforceDeepIntegration();
-            } else {
-                 std::cout << "[Atomic]:Nuke aborted.\n";
-            }
-            
-            // Restore states
-            SetConsoleOutputCP(oldCP);
-            SetConsoleMode(hIn, oldInMode);
-        } else if (cmd == "unnuke") {
-            SystemIntegrator::restoreSystemShells();
         } else if (cmd == "sleep") {
             if (expandedTokens.size() > 1) {
                 try {
@@ -7758,7 +7657,7 @@ public:
             "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
             "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt",
             // Admin commands
-            "sudo", "setup", "uninstall", "nuke", "unnuke",
+            "sudo", "setup", "uninstall",
             // Scheduler commands
             "crontab",
             // Utils

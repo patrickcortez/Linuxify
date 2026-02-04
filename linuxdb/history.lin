@@ -30,3 +30,52 @@ echo $LINUXIFY_BUILTINS
 clear
 git status
 git add -A
+git commit -m "Overhauled Linuxify"
+git push turtle master
+ls | grep -n "test.txt"
+Funux
+level_gui
+dwa
+d
+python
+test
+ls
+test.exe
+test.py
+python test.py
+test
+wrapper python test.py
+cat test.py
+python test.py
+test
+python test.py
+test
+test.exe
+cat test.cpp
+python test.py
+test
+wrapper test.exe
+pip
+tets
+test
+python test.py
+test
+py test.py
+test
+py test.py
+yori
+tets
+test
+./test.exe
+..
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+test
+ls
+node test_input.js
+cd
+test
+python test.py
+test
+python test.py
+./test.exe
+exit
