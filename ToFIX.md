@@ -8,3 +8,9 @@
 2. dynamic key bindings
 3. dynamic prompt editing
 4. ~
+
+
+[Multiline_Prompt]
+
+[linuxify@<path>]
+$ <input>

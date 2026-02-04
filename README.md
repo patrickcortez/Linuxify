@@ -6,6 +6,7 @@ A native Unix-like shell and development platform for Windows — built on a con
 
 - **Linuxify Shell** with 60+ built-in Linux commands
 - **Lino Text Editor** with user defined syntax highlighting plugins
+- **Startup Script** (.linuxifyrc) with custom prompt, aliases, environment variables, and more.
 - **Lin Package Manager** (winget-powered) with 180+ package aliases
 - **Integrated Bash interpreter** with full lexer, parser, and AST executor
 - **Git Awareness** - prompt dynamically changes if in a git repo, prompt also indicates if a repo has untracked or uncommitted changes.
@@ -357,6 +358,17 @@ windux              # Launch GUI terminal
 
 [Status]
 - Stable: its stable and works well.
+
+---
+
+###  **Start up script**
+
+A startup script (`~/.linuxifyrc`) is executed when Linuxify starts. It can be used to set up aliases, environment variables, and other shell configurations.
+
+- Prompt customization: Prompt.First("\e[96m"), Prompt.Second("\e[95m") //use ANSI escape codes
+- Aliases: alias ll="ls -la"
+- Environment variables: export EDITOR=lino
+- More Commands...
 
 ---
 

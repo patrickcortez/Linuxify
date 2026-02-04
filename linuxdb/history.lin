@@ -100,3 +100,5 @@ clear
 history
 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
 git add -A
+git commit -m "Added startup script: .linuxifyrc"
+git push turtle master
