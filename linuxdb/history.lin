@@ -123,3 +123,13 @@ git push turtle master
 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
 git a
 git add -A
+git commit -m "renamed mispelled folder XD"
+git push turtle master
+echo params
+echo params(hello)
+func
+func hello(){echo hello;}
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+lino .gitignore
+git push turtle master
+git add -A

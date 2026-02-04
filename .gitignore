@@ -3,3 +3,4 @@ server
 *.img
 linuxdb/nodes
 linuxdb/history.lin
+.agent
