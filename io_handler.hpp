@@ -24,6 +24,14 @@ namespace IO {
 
         Console() {
             hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            
+            // Enable ANSI Escape Codes (Virtual Terminal Processing)
+            DWORD dwMode = 0;
+            if (GetConsoleMode(hOut, &dwMode)) {
+                dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+                SetConsoleMode(hOut, dwMode);
+            }
+            
             updateInfo();
         }
 

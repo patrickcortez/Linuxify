@@ -39,8 +39,10 @@ struct ShellContext {
     std::set<std::string> persistentVars;
     std::set<std::string> persistentArrayVars;
     
-    // Spacing Helper
-    // used by StatePrompt to determine if it should print a newline
+    std::string promptFirstColor = "\033[92m";
+    std::string promptSecondColor = "\033[94m";
+    std::string promptResetColor = "\033[0m";
+    
     bool previousCommandWasEmpty = true; 
 
     ShellContext() {

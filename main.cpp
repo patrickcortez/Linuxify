@@ -1538,6 +1538,65 @@ public:
         }
     }
 
+    std::string parseAnsiEscape(const std::string& raw) {
+        std::string result = raw;
+        size_t pos = 0;
+        while ((pos = result.find("\\e[", pos)) != std::string::npos) {
+            result.replace(pos, 3, "\033[");
+            pos += 2;
+        }
+        pos = 0;
+        while ((pos = result.find("\\033[", pos)) != std::string::npos) {
+            result.replace(pos, 5, "\033[");
+            pos += 2;
+        }
+        return result;
+    }
+
+    void loadLinuxifyRC() {
+        char* userProfile = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&userProfile, &len, "USERPROFILE") != 0 || !userProfile) return;
+        
+        std::string rcPath = std::string(userProfile) + "\\.linuxifyrc";
+        free(userProfile);
+        
+        std::ifstream file(rcPath);
+        if (!file) return;
+        
+        std::string line;
+        std::vector<std::string> commands;
+        
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            
+            line.erase(0, line.find_first_not_of(" \t"));
+            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            
+            if (line.rfind("Prompt:First(", 0) == 0) {
+                size_t start = 13;
+                size_t end = line.find(')', start);
+                if (end != std::string::npos) {
+                    std::string color = line.substr(start, end - start);
+                    PromptConfig::firstColor = parseAnsiEscape(color);
+                }
+            } else if (line.rfind("Prompt:Second(", 0) == 0) {
+                size_t start = 14;
+                size_t end = line.find(')', start);
+                if (end != std::string::npos) {
+                    std::string color = line.substr(start, end - start);
+                    PromptConfig::secondColor = parseAnsiEscape(color);
+                }
+            } else {
+                commands.push_back(line);
+            }
+        }
+        
+        for (const auto& cmd : commands) {
+            ctx.interpreter.runCode(cmd);
+        }
+    }
+
     std::string expandVariables(const std::string& input) {
         std::string text = input;
         size_t pos = 0;
@@ -8837,6 +8896,7 @@ public:
         // Load History (was in run() before)
         logic.loadHistory(); 
         logic.loadPersistentVars(); 
+        logic.loadLinuxifyRC(); 
         
         // Print Tux (was in run() before)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);

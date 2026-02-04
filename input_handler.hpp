@@ -16,6 +16,12 @@
 
 namespace fs = std::filesystem;
 
+namespace PromptConfig {
+    inline std::string firstColor = "\033[92m";
+    inline std::string secondColor = "\033[94m";
+    inline std::string resetColor = "\033[0m";
+}
+
 class InputHandler {
 private:
     std::string currentDir;
@@ -326,38 +332,35 @@ private:
     }
 
     void printPrompt() {
-        IO::get().setColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        IO::get().write(PromptConfig::firstColor);
         IO::get().write("linuxify");
         
-        IO::get().setColor(IO::Console::COLOR_DEFAULT);
+        IO::get().write(PromptConfig::resetColor);
         IO::get().write(":");
         
         std::string branch = getGitBranch();
         if (!branch.empty()) {
-             // Git Repo: Violet (Magenta)
-             IO::get().setColor(FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+             IO::get().write("\033[95m");
              IO::get().write(currentDir);
              
-             IO::get().setColor(IO::Console::COLOR_DEFAULT); // White @
+             IO::get().write(PromptConfig::resetColor);
              IO::get().write("@");
              
-             // Color based on status
-             WORD statusColor = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY; // Default Yellow (Clean)
+             std::string statusColor = "\033[93m";
              if (currentGitStatus == GIT_UNSTAGED) {
-                 statusColor = FOREGROUND_RED | FOREGROUND_INTENSITY; // Red
+                 statusColor = "\033[91m";
              } else if (currentGitStatus == GIT_STAGED) {
-                 statusColor = FOREGROUND_GREEN | FOREGROUND_INTENSITY; // Green
+                 statusColor = "\033[92m";
              }
              
-             IO::get().setColor(statusColor);
+             IO::get().write(statusColor);
              IO::get().write(branch);
         } else {
-             // Normal: Blue
-             IO::get().setColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+             IO::get().write(PromptConfig::secondColor);
              IO::get().write(currentDir);
         }
         
-        IO::get().setColor(IO::Console::COLOR_DEFAULT);
+        IO::get().write(PromptConfig::resetColor);
         if (isAdmin) {
             IO::get().write("# ");
         } else {
