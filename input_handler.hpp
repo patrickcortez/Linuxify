@@ -291,23 +291,51 @@ private:
         selectionAnchor = -1;
     }
 
-    // Helper to get current git branch (if any)
+    std::string getDisplayPath() {
+        char* home = getenv("USERPROFILE");
+        if (!home) return currentDir;
+        
+        std::string homePath = home;
+        std::string dirLower = currentDir;
+        std::string homeLower = homePath;
+        std::transform(dirLower.begin(), dirLower.end(), dirLower.begin(), ::tolower);
+        std::transform(homeLower.begin(), homeLower.end(), homeLower.begin(), ::tolower);
+        
+        if (dirLower == homeLower) {
+            return "~";
+        }
+        
+        if (homeLower.back() != '\\' && homeLower.back() != '/') {
+            homeLower += '\\';
+        }
+        
+        if (dirLower.length() > homeLower.length() && 
+            dirLower.substr(0, homeLower.length()) == homeLower) {
+            std::string relativePath = currentDir.substr(homePath.length());
+            if (relativePath.front() == '\\' || relativePath.front() == '/') {
+                relativePath = relativePath.substr(1);
+            }
+            for (char& c : relativePath) {
+                if (c == '\\') c = '/';
+            }
+            return "~/" + relativePath;
+        }
+        
+        return currentDir;
+    }
+
     std::string getGitBranch() {
-        // Look for .git/HEAD
         namespace fs = std::filesystem;
         try {
             fs::path current(currentDir);
-            // Search up the tree for .git
             while (true) {
                 fs::path gitDir = current / ".git";
                 if (fs::exists(gitDir) && fs::is_directory(gitDir)) {
-                    // Read HEAD
                     fs::path headPath = gitDir / "HEAD";
                     std::ifstream headFile(headPath);
                     if (headFile.is_open()) {
                         std::string line;
                         std::getline(headFile, line);
-                        // format: ref: refs/heads/master
                         if (line.substr(0, 5) == "ref: ") {
                             std::string ref = line.substr(5);
                             size_t lastSlash = ref.find_last_of('/');
@@ -316,7 +344,6 @@ private:
                             }
                             return ref;
                         } else {
-                            // detached HEAD? return short hash
                             return line.substr(0, 7);
                         }
                     }
@@ -332,6 +359,8 @@ private:
     }
 
     void printPrompt() {
+        std::string displayPath = getDisplayPath();
+        
         IO::get().write(PromptConfig::firstColor);
         IO::get().write("linuxify");
         
@@ -341,7 +370,7 @@ private:
         std::string branch = getGitBranch();
         if (!branch.empty()) {
              IO::get().write("\033[95m");
-             IO::get().write(currentDir);
+             IO::get().write(displayPath);
              
              IO::get().write(PromptConfig::resetColor);
              IO::get().write("@");
@@ -357,7 +386,7 @@ private:
              IO::get().write(branch);
         } else {
              IO::get().write(PromptConfig::secondColor);
-             IO::get().write(currentDir);
+             IO::get().write(displayPath);
         }
         
         IO::get().write(PromptConfig::resetColor);
@@ -373,13 +402,12 @@ private:
         int width = io.getWidth();
         int height = io.getHeight();
         
-        // Calculate dimensions
-        int promptLen = 9 + (int)currentDir.length() + 2; 
+        std::string displayPath = getDisplayPath();
+        int promptLen = 9 + (int)displayPath.length() + 2; 
         
-        // Adjust for Git Branch
         std::string branch = getGitBranch();
         if (!branch.empty()) {
-            promptLen += 1 + (int)branch.length(); // +1 for '@'
+            promptLen += 1 + (int)branch.length();
         }
         
         int contentLen = (int)inputBuffer.length();

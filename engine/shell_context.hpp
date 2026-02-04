@@ -6,6 +6,8 @@
 #include <map>
 #include <set>
 #include <filesystem>
+#include <algorithm>
+#include <cstdlib>
 #include "../cmds-src/interpreter.hpp" // For Bash::Interpreter
 #include "../cmds-src/cmds.hpp" // For AliasManager
 
@@ -46,11 +48,20 @@ struct ShellContext {
     bool previousCommandWasEmpty = true; 
 
     ShellContext() {
-        // Initialize CWD to startup directory
         try {
             currentDir = fs::current_path().string();
+            std::string lower = currentDir;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower.find("\\system32") != std::string::npos || 
+                lower.find("\\syswow64") != std::string::npos) {
+                char* home = getenv("USERPROFILE");
+                if (home) {
+                    currentDir = home;
+                }
+            }
         } catch (...) {
-            currentDir = "C:\\";
+            char* home = getenv("USERPROFILE");
+            currentDir = home ? home : "C:\\";
         }
     }
 };

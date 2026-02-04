@@ -153,3 +153,46 @@ upset
 seput
 utpes
 git add -A
+git commit -m "Updated Installer"
+git push turtle master
+./build-installer.ps1
+Hello world
+clear
+git
+git
+clear
+git status
+..
+test
+lino
+exit
+pc status
+clear
+yori /c "edit"
+clear
+exit
+test
+ls | grep -n ".txt"
+ls
+test
+test
+..
+..
+..
+..
+$HOME
+clear
+pwd
+yori /c "edit"
+$date
+env
+date
+clear
+lino3
+lino2
+clear
+which lino2
+lino test.txt
+lino2
+lino
+lino
