@@ -1,0 +1,43 @@
+{
+    "profiles": [
+        {
+            "name": "Linuxify",
+            "commandline": "%PROGRAMFILES%\\Linuxify\\linuxify.exe",
+            "icon": "%PROGRAMFILES%\\Linuxify\\assets\\linux_penguin_animal_9362.ico",
+            "workingDirectory": "%USERPROFILE%",
+            "colorScheme": "Linuxify",
+            "font": {
+                "face": "Minecraftia"
+            },
+            "experimental.retroTerminalEffect": true,
+            "cursorShape": "vintage",
+            "opacity": 95,
+            "useAcrylic": false
+        }
+    ],
+    "schemes": [
+        {
+            "name": "Linuxify",
+            "background": "#000000",
+            "foreground": "#00FF00",
+            "cursorColor": "#00FF00",
+            "selectionBackground": "#004400",
+            "black": "#000000",
+            "red": "#FF073A",
+            "green": "#39FF14",
+            "yellow": "#CCFF00",
+            "blue": "#00F9FF",
+            "purple": "#BC13FE",
+            "cyan": "#00FFFF",
+            "white": "#F0F0F0",
+            "brightBlack": "#333333",
+            "brightRed": "#FF4444",
+            "brightGreen": "#55FF55",
+            "brightYellow": "#FFFF55",
+            "brightBlue": "#5555FF",
+            "brightPurple": "#FF55FF",
+            "brightCyan": "#55FFFF",
+            "brightWhite": "#FFFFFF"
+        }
+    ]
+}

@@ -49,6 +49,8 @@
 #include "cmds-src/system_integrator.hpp"
 #include "cmds-src/glob.hpp"
 #include "cmds-src/child_handler.hpp" // Integrated ChildHandler
+#include "error_handling.hpp" // Integrated Verbose Error Handling
+
 
 // Global process manager instance
 ProcessManager g_procMgr;
@@ -69,7 +71,7 @@ class ShellLogic {
 
     // Internal commands set
     const std::set<std::string> internalCmds = {
-        "echo", "pwd", "cd", "ls", "dir", "cat", "type", "mkdir", "rm", "rmdir",
+        "echo", "pwd", "cd", "ls", "dir", "type", "mkdir", "rm", "rmdir",
         "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
         "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
         "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
@@ -98,8 +100,15 @@ public:
             ctx.sessionEnv["IS_ADMIN"] = ctx.isAdmin ? "1" : "0";
         }
 
-        // Bind interpreter to shell context variables for shared state
-        // Bind interpreter to shell context variables for shared state
+        {
+            std::string builtinsList;
+            for (const auto& cmd : internalCmds) {
+                if (!builtinsList.empty()) builtinsList += ";";
+                builtinsList += cmd;
+            }
+            _putenv_s("LINUXIFY_BUILTINS", builtinsList.c_str());
+        }
+
         ctx.interpreter.bindVariables(ctx.sessionEnv);
         ctx.interpreter.bindArrays(&ctx.sessionArrayEnv);
         // Bind input handler for read command
@@ -176,6 +185,11 @@ public:
                     case Bash::TokenType::LBRACE:  // Block start {
                     case Bash::TokenType::LPAREN:  // Subshell (
                     case Bash::TokenType::SEMICOLON: // Command separation
+                    case Bash::TokenType::PIPE:
+                    case Bash::TokenType::REDIRECT_IN:
+                    case Bash::TokenType::REDIRECT_OUT:
+                    case Bash::TokenType::REDIRECT_APPEND:
+                    case Bash::TokenType::HEREDOC: // <<
                         return true;
                     case Bash::TokenType::WORD:
                         // Check for specific command words that we want interpreter to handle
@@ -237,8 +251,7 @@ public:
     }
 
     void printError(const std::string& message) {
-        ShellIO::serr << ShellIO::Color::LightRed << "Error: " << message 
-                      << ShellIO::Color::Reset << ShellIO::endl;
+        LOG_ERROR(message);
     }
 
     void printSuccess(const std::string& message) {
@@ -308,17 +321,59 @@ public:
             return 0;
         }
 
-        // Check if it's an internal command - if so, route to internal handler
+        {
+            fs::path cmdPath(cmd);
+            std::string ext = cmdPath.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            
+            if (ext == ".ps1") {
+                fs::path scriptPath;
+                if (cmdPath.is_absolute()) {
+                    scriptPath = cmdPath;
+                } else {
+                    scriptPath = fs::path(ctx.currentDir) / cmdPath;
+                }
+                try {
+                    if (fs::exists(scriptPath)) {
+                        scriptPath = fs::canonical(scriptPath);
+                        std::string psCmd = "powershell.exe -ExecutionPolicy Bypass -File \"" + scriptPath.string() + "\"";
+                        for (size_t i = 1; i < tokens.size(); i++) {
+                            psCmd += " \"" + tokens[i] + "\"";
+                        }
+                        const std::string dir = workDir.empty() ? ctx.currentDir : workDir;
+                        return ChildHandler::spawn(psCmd, dir, wait);
+                    }
+                } catch (...) {}
+            }
+            
+            if (ext == ".bat" || ext == ".cmd") {
+                fs::path scriptPath;
+                if (cmdPath.is_absolute()) {
+                    scriptPath = cmdPath;
+                } else {
+                    scriptPath = fs::path(ctx.currentDir) / cmdPath;
+                }
+                try {
+                    if (fs::exists(scriptPath)) {
+                        scriptPath = fs::canonical(scriptPath);
+                        std::string batCmd = "cmd.exe /c \"" + scriptPath.string() + "\"";
+                        for (size_t i = 1; i < tokens.size(); i++) {
+                            batCmd += " \"" + tokens[i] + "\"";
+                        }
+                        const std::string dir = workDir.empty() ? ctx.currentDir : workDir;
+                        return ChildHandler::spawn(batCmd, dir, wait);
+                    }
+                } catch (...) {}
+            }
+        }
+
         if (internalCmds.count(cmd)) {
-            // Execute as internal command via executeAndCapture or directly
-            // Execute as internal command via interpreter's native execution
             std::string output = ctx.interpreter.getExecutor().executeAndCapture(cmdLine);
             std::cout << output;
-            if (!output.empty() && output.back() != '\n') std::cout << "\n"; // Ensure newline loop
+            if (!output.empty() && output.back() != '\n') std::cout << "\n";
             return ctx.lastExitCode; 
         }
         
-        // External command - use ChildHandler for robust spawning
         const std::string dir = workDir.empty() ? ctx.currentDir : workDir;
         return ChildHandler::spawn(cmdLine, dir, wait);
     }
@@ -493,7 +548,7 @@ public:
                 return;
             }
         } else if (args[1] == "-") {
-            printError("Previous directory tracking not implemented");
+            LOG_WARNING("Previous directory tracking not implemented yet");
             return;
         } else if (args[1] == "..") {
             fs::path parent = fs::path(ctx.currentDir).parent_path();
@@ -507,7 +562,7 @@ public:
                 return;
             }
         } else if (args[1] == "...") {
-            printError("cd: ...: No such file or directory");
+            LOG_ERROR("cd: ...: No such file or directory");
             return;
         } else {
             targetDir = resolvePath(args[1]);
@@ -517,10 +572,10 @@ public:
             if (fs::exists(targetDir) && fs::is_directory(targetDir)) {
                 ctx.currentDir = fs::canonical(targetDir).string();
             } else {
-                printError("cd: " + args[1] + ": No such directory");
+                LOG_ERROR("cd: " + args[1] + ": No such directory");
             }
         } catch (const std::exception& e) {
-            printError("cd: " + std::string(e.what()));
+            LOG_ERROR("cd: " + std::string(e.what()));
         }
     }
 
@@ -694,7 +749,7 @@ public:
 
         auto listDir = [&](auto&& self, const std::string& p) -> void {
              if (!fs::exists(p)) {
-                 printError("ls: cannot access '" + p + "': No such file or directory");
+                 LOG_ERROR("ls: cannot access '" + p + "': No such file or directory");
                  return;
              }
              if (!fs::is_directory(p)) {
@@ -718,7 +773,7 @@ public:
                      entries.push_back(entry);
                  }
              } catch (const std::exception& e) {
-                 printError("ls: " + std::string(e.what()));
+                 LOG_ERROR("ls: " + std::string(e.what()));
                  return;
              }
              
@@ -794,8 +849,9 @@ public:
             else if (args[i][0] != '-') dirs.push_back(args[i]);
         }
         
+        
         if (dirs.empty()) {
-            printError("mkdir: missing operand");
+            LOG_ERROR("mkdir: missing operand");
             return;
         }
 
@@ -838,14 +894,14 @@ public:
         }
         
         if (targets.empty()) {
-             printError("rm: missing operand");
+             LOG_ERROR("rm: missing operand");
              return;
         }
 
         for (const auto& target : targets) {
              std::string fullPath = resolvePath(target);
              if (!fs::exists(fullPath)) {
-                 if (!force) printError("rm: cannot remove '" + target + "': No such file or directory");
+                 if (!force) LOG_ERROR("rm: cannot remove '" + target + "': No such file or directory");
                  continue;
              }
              
@@ -857,7 +913,7 @@ public:
              try {
                  if (fs::is_directory(fullPath)) {
                      if (!recursive) {
-                         printError("rm: cannot remove '" + target + "': Is a directory");
+                         LOG_ERROR("rm: cannot remove '" + target + "': Is a directory");
                          continue;
                      }
                      fs::remove_all(fullPath);
@@ -866,8 +922,12 @@ public:
                      fs::remove(fullPath);
                      if (verbose) std::cout << "removed '" << target << "'" << std::endl;
                  }
+             } catch (const fs::filesystem_error& e) {
+                 // Even with force, we report failures to remove EXISTING files (e.g. Permission Denied)
+                 // e.code().value() on Windows matches GetLastError()
+                 ErrorHandling::log(ErrorHandling::Level::Error, "rm: cannot remove '" + target + "'", __FILE__, __LINE__, e.code().value());
              } catch (const std::exception& e) {
-                 if (!force) printError("rm: cannot remove '" + target + "': " + e.what());
+                 LOG_ERROR("rm: cannot remove '" + target + "': " + std::string(e.what()));
              }
         }
     }
@@ -1024,82 +1084,6 @@ public:
          }
     }
 
-    void cmdCat(const std::vector<std::string>& args) {
-        if (args.size() < 2) {
-            printError("cat: missing operand");
-            return;
-        }
-
-        bool showNumbers = false;
-        std::vector<std::string> files;
-
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "-n" || args[i] == "--number") {
-                showNumbers = true;
-            } else {
-                files.push_back(args[i]);
-            }
-        }
-
-        constexpr size_t BUFFER_SIZE = 65536; 
-        std::vector<char> buffer(BUFFER_SIZE);
-
-        for (const auto& file : files) {
-            try {
-                std::string fullPath = resolvePath(file);
-
-                if (!fs::exists(fullPath)) {
-                    printError("cat: " + file + ": No such file or directory");
-                    continue;
-                }
-
-                if (fs::is_directory(fullPath)) {
-                    printError("cat: " + file + ": Is a directory");
-                    continue;
-                }
-
-                std::ifstream ifs(fullPath, std::ios::binary);
-                if (!ifs) {
-                    printError("cat: " + file + ": Cannot open file");
-                    continue;
-                }
-
-                if (!showNumbers) {
-                    while (ifs.read(buffer.data(), BUFFER_SIZE) || ifs.gcount() > 0) {
-                        std::cout.write(buffer.data(), ifs.gcount());
-                        if (!ifs) break; 
-                    }
-                    std::cout.flush();
-                } else {
-                    long long lineNum = 1;
-                    bool newLine = true; 
-
-                    while (ifs.read(buffer.data(), BUFFER_SIZE) || ifs.gcount() > 0) {
-                        std::streamsize count = ifs.gcount();
-                        for (std::streamsize i = 0; i < count; ++i) {
-                            if (newLine) {
-                                std::cout << std::setw(6) << lineNum << "  ";
-                                lineNum++;
-                                newLine = false;
-                            }
-                            char c = buffer[i];
-                            std::cout.put(c);
-                            if (c == '\n') {
-                                newLine = true;
-                            }
-                        }
-                        if (!ifs) break;
-                    }
-                    if (newLine && lineNum > 1) { 
-                    } else if (!newLine) {
-                        std::cout << std::endl; 
-                    }
-                }
-            } catch (const std::exception& e) {
-                printError("cat: " + std::string(e.what()));
-            }
-        }
-    }
 
     void cmdClear(const std::vector<std::string>& args) {
         IO::get().clearScreen();
@@ -2145,7 +2129,7 @@ public:
         
         // Check built-in commands first
         std::vector<std::string> builtins = {
-            "pwd", "cd", "ls", "mkdir", "rm", "mv", "cp", "cat", "touch", 
+            "pwd", "cd", "ls", "mkdir", "rm", "mv", "cp", "touch", 
             "chmod", "chown", "clear", "help", "lino", "lin", "registry",
             "history", "whoami", "echo", "env", "printenv", "export", "which", "exit"
         };
@@ -2571,6 +2555,7 @@ public:
         
         return false;
     }
+
 
     // grep - search for pattern in file or input using buffered reading and regex
     void cmdGrep(const std::vector<std::string>& args, const std::string& pipedInput = "") {
@@ -6999,8 +6984,6 @@ public:
             cmdMv(expandedTokens);
         } else if (cmd == "cp" || cmd == "copy") {
             cmdCp(expandedTokens);
-        } else if (cmd == "cat" || cmd == "type") {
-            cmdCat(expandedTokens);
         } else if (cmd == "touch") {
             cmdTouch(expandedTokens);
         } else if (cmd == "chmod") {
@@ -8857,7 +8840,12 @@ public:
         
         std::stringstream buffer;
         buffer << file.rdbuf();
-        int result = ctx.interpreter.runCode(buffer.str());
+        int result = 0;
+        try {
+            result = ctx.interpreter.runCode(buffer.str());
+        } catch (const Bash::ExitException& e) {
+            result = e.code;
+        }
         
         ctx.interpreter.clearScriptArgs();
         return result;
@@ -9088,7 +9076,11 @@ int main(int argc, char* argv[]) {
     
     // Engine Start
     ShellEngine engine;
-    engine.execute(std::make_unique<StateBoot>(), context);
+    try {
+        engine.execute(std::make_unique<StateBoot>(), context);
+    } catch (const Bash::ExitException& e) {
+        return e.code;
+    }
     
     return 0;
 }

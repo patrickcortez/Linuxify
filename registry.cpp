@@ -3,6 +3,7 @@
 // allowing them to be executed directly from Linuxify shell.
 
 #include "registry.hpp"
+#include "error_handling.hpp"
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -354,7 +355,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
         };
         
         if (forbidden.count(filename)) {
-            ShellIO::serr << "Strict Mode: Execution of " << filename << " is prohibited." << ShellIO::endl;
+            LOG_WARNING("Strict Mode: Execution of " + filename + " is prohibited.");
             return true; // Handled (blocked)
         }
     } catch (...) {}
@@ -393,14 +394,14 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
         
         // Shebang is required
         if (!hasShebang) {
-            ShellIO::serr << "Script missing shebang line: " << exePath << ShellIO::endl;
-            ShellIO::serr << "Add a shebang: #!<interpreter> (registry name or absolute path)" << ShellIO::endl;
-            ShellIO::serr << "Example: #!lish  or  #!C:\\path\\to\\interpreter.exe" << ShellIO::endl;
+            LOG_ERROR("Script missing shebang line: " + exePath);
+            LOG_INFO("Add a shebang: #!<interpreter> (registry name or absolute path)");
+            LOG_INFO("Example: #!lish  or  #!C:\\path\\to\\interpreter.exe");
             return false;
         }
         
         if (interpreterSpec.empty()) {
-            ShellIO::serr << "Invalid shebang - no interpreter specified" << ShellIO::endl;
+            LOG_ERROR("Invalid shebang - no interpreter specified");
             return false;
         }
         
@@ -442,9 +443,9 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
                     // Relative path that exists
                     interpreterPath = fs::absolute(interpreterSpec).string();
                 } else {
-                    ShellIO::serr << "Interpreter not found: " << interpreterSpec << ShellIO::endl;
-                    ShellIO::serr << "Either add it to registry: registry add " << interpreterSpec << " <path>" << ShellIO::endl;
-                    ShellIO::serr << "Or use an absolute path in the shebang" << ShellIO::endl;
+                    LOG_ERROR("Interpreter not found: " + interpreterSpec);
+                    LOG_INFO("Either add it to registry: registry add " + interpreterSpec + " <path>");
+                    LOG_INFO("Or use an absolute path in the shebang");
                     return false;
                 }
             }
@@ -483,7 +484,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
-            ShellIO::serr << "Failed to execute script (error " << err << ")" << ShellIO::endl;
+            ErrorHandling::log(ErrorHandling::Level::Error, "Failed to execute script", __FILE__, __LINE__, err);
             return false;
         }
     } else {
@@ -523,7 +524,7 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
-            ShellIO::serr << "Failed to execute command (error " << err << ")" << ShellIO::endl;
+            ErrorHandling::log(ErrorHandling::Level::Error, "Failed to execute command", __FILE__, __LINE__, err);
             return false;
         }
     }

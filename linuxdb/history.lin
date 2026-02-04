@@ -1,287 +1,32 @@
-git status
-history
-clear
-..
-..
-ls
-LoneShooter
-ls
-git status
-atomic
-atomic
-clear
-exit
-windux
-windux
-windux
-which yori
-windux
-windux
-C:\Users\patri\AppData\Local\Yori\yori.exe
-C:\Users\patri\AppData\Local\Yori
-ls
-cd src
-ls
-yori-source-2.50
-ls
-windux
-windux
-windux
-windux
-windux
-windux
-windux
-widnux
-windux
-windux
-windux
-windux
-lino
-windux
-windux
-winudx
-windux
-test
-ls
-clear
-git status
-git --help
-git branch --help
-git branch create experimental
-git branch create exp
-git branch exp
-git branch list
-git branch -r
-git rev-parse HEAD
-git switch -c master
-git checkout exp
-ls
-lino sample.py
-git add -A
-git commit -m "Unsure Change"
-git checkout master
-git branch -r
-cd ..
-which linuxify
-C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
-ls
-git status
-git add -A
-git commit -m "added mouse events on tuis, todo: fix tuis on window resize events"
-git push turtle master
-git branch exp
-git checkout exp
-ls
-git --help
-git diff master exp
+cp
+alias
+ping 8.8.8.8
+which ping
+Get-Child
+powershell
 yori
-python
-cd rustsrc
-ls
-rust-src
-ls
-atomizer
-ls
-atomic
-./test.exe
-cat test.exe
 clear
-git checkout master
-lino .gitignore
-git add -A
-git commit -m "cleared history"
-git status
-git checkout master
-help
+sdir
+which sdir
 which linuxify
 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
-git status
-sesh
-echo ok
-sesh save first
-sesh list
-sesh load first
-exit
-echo "First off this aint ok"
-git status
-test
-git status
-echo password: 2000
-sesh save second
-exit
-sesh lit
-sesh list
-sesh load second
-oh my lordie
-sesh save
-sesh
-help
-sesh list
-sesh load second
-sesh list
-sesh load second
-echo new: So i am gay
-echo old: i was straight
-..
-curl
-sesh help
-sesh update
-exit
-sesh load second
-echo New Pair of Jeans
-echo Hello World
-ok this is new
-clear
-if i did something
-test
-git status
-git branch -l
-git checkout exp
-git diff master exp
-..
-help
-sesh save third
-exit
-sesh load third
-which sesh
-echo Hello World
-echo I am the charlatam
-sesh help
-ok this is new
-nah chief
-hol up though
-sesh save fourth
-exit
-sesh list
-sesh load fourth
-sesh load fourth
-sesh
-clear
-WdfPerfEnhancedVerifier
-bin
-minishell.exe
-./minishell.exe
-./minish.exe
-.\minish.exe
-ls
-./minsh.exe
-bin\minish.exe
-..
-bin\minish.exe
-ls bin
-bin\minsh.exe
-.\bin\minsh.exe
-.\bin\minsh.exe
-.\bin\minsh.exe
-./bin\minsh.exe
-./bin/minsh.exe
-./bin/minsh.exe
-./bin/minsh
-./bin/minsh
-.\bin\minsh
-.\bin\minsh.exe
-bin
-minsh.exe
-minsh.exe
-g++ -Wall -std=c++17 src/main.cpp src/Shell.cpp src/Sessions.cpp -o bin/minsh
-..
-g++ -Wall -std=c++17 src/main.cpp src/Shell.cpp src/Sessions.cpp -o bin/minsh.exe
-bin/minsh.exe
-bin
-minsh.exe
-minsh.exe
-minsh.exe
-minsh.exe
-registry refresh
-make
-Make
-cmake
-cd ..
-git init
-git add -A
-git commit -m "MinSh Base commit"
-git remote -v
-git remote add origin https://github.com/patrickcortez/MinSh.git
-git remote -v
-git add -A
-git commit -m "Added License"
-git
-git status
-git add -A
-git commit -m "Updated Readme"
-git push turtle master
-git push origin master
-git status
-git add -A
-git commit -m "Updated Readme"
-git push origin master
-git add -A
-git commit -m "Updated Readme"
-git push origin master
-bin
-minsh.exe
-clear
-minsh.exe
-clear
-clear
-sesh
-clear
-minsh.exe
-minsh.exe
-bin
-minsh.exe
-clear
-minsh.exe
-minsh.exe
-OneDrive
-Document
-Documents
-Projects
-ls
-MiniShell
-git status
-git add -A
-git commit -m "Implemented multiplexing to the shell"
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell\bin
-minsh.exe
-git add -A
-git commit -m "Updated Readme and structure"
-git push origin master
-which linuxify
-clear
-which linuxify
+./build-installer.ps1
+yori
+pwsh -Command {Get-WinEvent -LogName Security}
+powershell -Command {Get-WinEvent -LogName Security}
 C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
-..
-MiniShell
-bin\minish.exe
-bin\minsh.exe
-.\bin\minsh.exe
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-cmake --build build
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
-C:\Users\patri\OneDrive\Documents\Projects\MiniShell
-./bin/minsh.exe
+./build-installer.ps1
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+./build-installer.ps1
+ls
+./cmds/LoneMaker.exe
+cmds/LoneMaker.exe
+./build-installer.ps1
+cmds/LoneMaker.exe
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+./build-installer.ps1
+echo $LINUXIFY_BUILTIN
+echo $LINUXIFY_BUILTINS
+clear
+git status
+git add -A

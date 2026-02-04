@@ -117,6 +117,7 @@ enum class TokenType {
     REDIRECT_IN,
     REDIRECT_STDERR,
     REDIRECT_FD,
+    HEREDOC, // <<
     AND,
     OR,
     SEMICOLON,
@@ -171,6 +172,7 @@ struct Token {
             case TokenType::REDIRECT_OUT: return "REDIRECT_OUT";
             case TokenType::REDIRECT_APPEND: return "REDIRECT_APPEND";
             case TokenType::REDIRECT_IN: return "REDIRECT_IN";
+            case TokenType::HEREDOC: return "HEREDOC";
             case TokenType::AND: return "AND";
             case TokenType::OR: return "OR";
             case TokenType::SEMICOLON: return "SEMICOLON";
@@ -547,7 +549,12 @@ public:
             
             if (current() == '<') {
                 advance();
-                tokens.push_back(Token(TokenType::REDIRECT_IN, "<", startLine, startCol));
+                if (current() == '<') {
+                    advance();
+                    tokens.push_back(Token(TokenType::HEREDOC, "<<", startLine, startCol));
+                } else {
+                    tokens.push_back(Token(TokenType::REDIRECT_IN, "<", startLine, startCol));
+                }
                 continue;
             }
             
@@ -609,6 +616,7 @@ struct ASTNode {
 struct CommandNode : ASTNode {
     std::vector<std::string> args;  // First element is the command name
     std::vector<std::pair<std::string, std::string>> redirects;  // type, target
+    std::string hereDocContent; // Content for << redirect
     bool background = false;
     
     std::string type() const override { return "Command"; }
@@ -678,6 +686,11 @@ struct CaseNode : ASTNode {
     std::string type() const override { return "Case"; }
 };
 
+struct BlockNode : ASTNode {
+    std::vector<std::shared_ptr<ASTNode>> statements;
+    std::string type() const override { return "Block"; }
+};
+
 struct ErrorBlockNode : ASTNode {
     std::shared_ptr<ASTNode> command;
     std::vector<std::shared_ptr<ASTNode>> errorHandler;
@@ -739,6 +752,12 @@ public:
     ReturnException(int v = 0) : value(v) {}
 };
 
+class ExitException : public std::exception {
+public:
+    int code;
+    ExitException(int c) : code(c) {}
+};
+
 // ============================================================================
 // PARSER - Builds AST from tokens
 // ============================================================================
@@ -752,6 +771,8 @@ private:
     std::chrono::steady_clock::time_point startTime;
     static constexpr int TIMEOUT_SECONDS = 10;
     
+    std::function<std::string(std::string, bool)> inputCallback;
+
     void checkLimits() {
         if (++iterations > MAX_ITERATIONS) {
             throw std::runtime_error("Parser: exceeded maximum iterations (possible infinite loop)");
@@ -831,7 +852,31 @@ private:
                !check(TokenType::KW_IF) && !check(TokenType::RBRACE) && !check(TokenType::LBRACE) &&
                !check(TokenType::KW_ESAC) && !check(TokenType::KW_IN) && !check(TokenType::KW_CASE)) {
             
-            if (check(TokenType::REDIRECT_OUT) || check(TokenType::REDIRECT_APPEND) ||
+            if (check(TokenType::HEREDOC)) {
+                // Handle << DELIM
+                advance(); // consume <<
+                if (check(TokenType::WORD) || check(TokenType::STRING)) {
+                     std::string delimiter = current().value;
+                     advance();
+                     
+                     // Read Here-Doc content using input callback
+                     std::string content;
+                     if (inputCallback) {
+                         while (true) {
+                             std::string line = inputCallback("> ", false);
+                             if (line == delimiter) break;
+                             content += line + "\n";
+                             
+                             // Reset timeout timer during interactive input to prevent timeout while user is typing
+                             startTime = std::chrono::steady_clock::now();
+                         }
+                     }
+                     cmd->hereDocContent = content;
+                } else {
+                     Token tok = current();
+                     throw ParseError("Expected delimiter after '<<'", source, tok.line, tok.column);
+                }
+            } else if (check(TokenType::REDIRECT_OUT) || check(TokenType::REDIRECT_APPEND) ||
                 check(TokenType::REDIRECT_STDERR) || check(TokenType::REDIRECT_FD)) {
                 std::string redirType = current().value;
                 advance();
@@ -916,8 +961,20 @@ private:
             if (check(TokenType::KW_FI) || check(TokenType::KW_ELSE) || 
                 check(TokenType::KW_ELIF) || check(TokenType::END_OF_FILE)) break;
             
+            size_t posBefore = pos;
             auto stmt = parseStatement();
-            if (stmt) node->thenBody.push_back(stmt);
+            if (stmt) {
+                node->thenBody.push_back(stmt);
+            } else if (pos == posBefore) {
+                 // Prevent infinite loop if we didn't match anything but didn't hit a terminator
+                 if (!check(TokenType::END_OF_FILE)) {
+                    // Try blindly advancing or throw error
+                     Token tok = current();
+                     throw ParseError("Unexpected token in 'if' block: " + tok.value, source, tok.line, tok.column);
+                 } else {
+                     break;
+                 }
+            }
             
             while (check(TokenType::SEMICOLON) || check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
                 advance();
@@ -935,8 +992,18 @@ private:
                 
                 if (check(TokenType::KW_FI) || check(TokenType::END_OF_FILE)) break;
                 
+                size_t posBefore = pos;
                 auto stmt = parseStatement();
-                if (stmt) node->elseBody.push_back(stmt);
+                if (stmt) {
+                    node->elseBody.push_back(stmt);
+                } else if (pos == posBefore) {
+                     if (!check(TokenType::END_OF_FILE)) {
+                         Token tok = current();
+                         throw ParseError("Unexpected token in 'else' block: " + tok.value, source, tok.line, tok.column);
+                     } else {
+                         break;
+                     }
+                }
                 
                 while (check(TokenType::SEMICOLON) || check(TokenType::NEWLINE) || check(TokenType::COMMENT)) {
                     advance();
@@ -1174,17 +1241,27 @@ private:
         return node;
     }
     
-    std::vector<std::shared_ptr<ASTNode>> parseBlock() {
-        std::vector<std::shared_ptr<ASTNode>> body;
+    std::shared_ptr<BlockNode> parseBlock() {
+        auto node = std::make_shared<BlockNode>();
         
         if (!match(TokenType::LBRACE)) {
-            return body;
+            return node;
         }
         skipNewlines();
         
         while (!check(TokenType::RBRACE) && !check(TokenType::END_OF_FILE)) {
+            size_t posBefore = pos;
             auto stmt = parseStatement();
-            if (stmt) body.push_back(stmt);
+            if (stmt) {
+                node->statements.push_back(stmt);
+            } else if (pos == posBefore) {
+                 if (!check(TokenType::END_OF_FILE)) {
+                     Token tok = current();
+                     throw ParseError("Unexpected token in block: " + tok.value, source, tok.line, tok.column);
+                 } else {
+                     break;
+                 }
+            }
             
             while (check(TokenType::NEWLINE) || check(TokenType::SEMICOLON) || check(TokenType::COMMENT)) {
                 advance();
@@ -1192,7 +1269,7 @@ private:
         }
         
         match(TokenType::RBRACE);
-        return body;
+        return node;
     }
     
     std::shared_ptr<ASTNode> parseChainExpr() {
@@ -1211,7 +1288,9 @@ private:
             if (op == TokenType::OR && check(TokenType::LBRACE)) {
                 auto errBlock = std::make_shared<ErrorBlockNode>();
                 errBlock->command = result;
-                errBlock->errorHandler = parseBlock();
+                auto blockNode = parseBlock();
+                // Copy statements from BlockNode to ErrorBlockNode vector
+                errBlock->errorHandler = blockNode->statements;
                 result = errBlock;
             } else {
                 auto right = parsePipeline();
@@ -1343,12 +1422,16 @@ private:
             return nullptr;
         }
         
+        if (check(TokenType::LBRACE)) {
+            return parseBlock();
+        }
+
         return parseChainExpr();
     }
 
 public:
-    Parser(const std::vector<Token>& toks, const std::string& src)
-        : tokens(toks), source(src), startTime(std::chrono::steady_clock::now()) {}
+    Parser(const std::vector<Token>& toks, const std::string& src, std::function<std::string(std::string, bool)> inputCb = nullptr)
+        : tokens(toks), source(src), startTime(std::chrono::steady_clock::now()), inputCallback(inputCb) {}
     
     std::vector<std::shared_ptr<ASTNode>> parse() {
         std::vector<std::shared_ptr<ASTNode>> program;
@@ -1547,7 +1630,7 @@ private:
         
         builtins["exit"] = [](const std::vector<std::string>& args) {
             int code = args.size() > 1 ? std::stoi(args[1]) : 0;
-            exit(code);
+            throw ExitException(code);
             return code;
         };
         
@@ -2177,13 +2260,31 @@ private:
     }
     
     int executeExternalWithRedirects(const std::vector<std::string>& args, 
-                                     const std::vector<std::pair<std::string, std::string>>& redirects) {
+                                     const std::vector<std::pair<std::string, std::string>>& redirects,
+                                     const std::string& hereDocContent = "") {
         if (args.empty()) return 0;
+
+        std::string cmdName = args[0];
+        // Check if command exists in 'cmds' folder relative to current executable
+        char selfExePath[MAX_PATH];
+        GetModuleFileNameA(NULL, selfExePath, MAX_PATH);
+        std::string exeDir = std::filesystem::path(selfExePath).parent_path().string();
+        std::string cmdsPath = exeDir + "\\cmds\\" + cmdName + ".exe";
         
+        if (std::filesystem::exists(cmdsPath)) {
+             cmdName = cmdsPath; // Use absolute path to cmds/binary
+        }
+
         std::string cmdLine;
-        for (const auto& arg : args) {
-            if (!cmdLine.empty()) cmdLine += " ";
-            std::string expanded = expandVariables(arg);
+        // Reconstruct command line
+        if (cmdLine.empty()) {
+             if (cmdName.find(' ') != std::string::npos) cmdLine += "\"" + cmdName + "\"";
+             else cmdLine += cmdName;
+        }
+
+        for (size_t i = 1; i < args.size(); ++i) {
+            cmdLine += " ";
+            std::string expanded = expandVariables(args[i]);
             if (expanded.find(' ') != std::string::npos) {
                 cmdLine += "\"" + expanded + "\"";
             } else {
@@ -2204,6 +2305,9 @@ private:
         HANDLE hInputFile = NULL;
         HANDLE hOutputFile = NULL;
         HANDLE hErrorFile = NULL;
+        
+        HANDLE hHereDocRead = NULL;
+        HANDLE hHereDocWrite = NULL;
 
         // Process redirects - this supports simple redirection natively
         for (const auto& redir : redirects) {
@@ -2245,6 +2349,26 @@ private:
                 }
             }
         }
+        
+        if (!hereDocContent.empty()) {
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+            sa.bInheritHandle = TRUE;
+            sa.lpSecurityDescriptor = NULL;
+            
+            if (CreatePipe(&hHereDocRead, &hHereDocWrite, &sa, 0)) {
+                // Ensure write handle is not inherited
+                SetHandleInformation(hHereDocWrite, HANDLE_FLAG_INHERIT, 0);
+
+                // Write content
+                DWORD written;
+                WriteFile(hHereDocWrite, hereDocContent.c_str(), hereDocContent.length(), &written, NULL);
+                CloseHandle(hHereDocWrite); // Close write end so child sees EOF
+                hHereDocWrite = NULL;
+                
+                si.hStdInput = hHereDocRead;
+            }
+        }
 
         ZeroMemory(&pi, sizeof(pi));
         
@@ -2263,11 +2387,37 @@ private:
             &si,
             &pi
         )) {
-            std::cerr << "\033[31mError: Command not found: " << args[0] << ". Type 'help' for available commands.\033[0m\n";
-            if (hInputFile) CloseHandle(hInputFile);
-            if (hOutputFile) CloseHandle(hOutputFile);
-            if (hErrorFile) CloseHandle(hErrorFile);
-            return 127;
+            // FALLBACK: Try to run as internal command via "linuxify.exe -c"
+            // This is necessary for internal commands (cat, ls, etc.) to work with pipes/redirection
+            // because they need to run in a child process to inherit the pipe handles.
+            
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            
+            std::string fallbackCmd = std::string("\"") + exePath + "\" -c \"" + cmdLine + "\"";
+            
+            char fallbackBuffer[8192];
+            strncpy_s(fallbackBuffer, fallbackCmd.c_str(), sizeof(fallbackBuffer) - 1);
+            
+            if (!CreateProcessA(
+                NULL,
+                fallbackBuffer,
+                NULL,
+                NULL,
+                TRUE,
+                0,
+                NULL,
+                currentDir.c_str(),
+                &si,
+                &pi
+            )) {
+                std::cerr << "\033[31mError: Command not found: " << args[0] << ". Type 'help' for available commands.\033[0m\n";
+                if (hInputFile) CloseHandle(hInputFile);
+                if (hOutputFile) CloseHandle(hOutputFile);
+                if (hErrorFile) CloseHandle(hErrorFile);
+                if (hHereDocRead) CloseHandle(hHereDocRead);
+                return 127;
+            }
         }
         
         WaitForSingleObject(pi.hProcess, INFINITE);
@@ -2280,6 +2430,7 @@ private:
         if (hInputFile) CloseHandle(hInputFile);
         if (hOutputFile) CloseHandle(hOutputFile);
         if (hErrorFile) CloseHandle(hErrorFile);
+        if (hHereDocRead) CloseHandle(hHereDocRead);
         
         return (int)exitCode;
     }
@@ -2333,6 +2484,10 @@ public:
 
     void bindInputHandler(std::function<std::string(std::string, bool)> callback) {
         _inputCallback = callback;
+    }
+    
+    std::function<std::string(std::string, bool)> getInputCallback() const {
+        return _inputCallback;
     }
     
     bool hasFunction(const std::string& name) const {
@@ -2400,6 +2555,15 @@ public:
             return 0;
         }
         
+        // Block
+        if (auto block = std::dynamic_pointer_cast<BlockNode>(node)) {
+            int ret = 0;
+            for (const auto& stmt : block->statements) {
+                ret = execute(stmt);
+            }
+            return lastExitCode = ret;
+        }
+
         // Command
         if (auto cmd = std::dynamic_pointer_cast<CommandNode>(node)) {
             if (cmd->args.empty()) return 0;
@@ -2500,7 +2664,7 @@ public:
                         positionalArgsStack.pop_back();
                     } else {
                         std::vector<std::pair<std::string, std::string>> emptyRedirects;
-                        lastExitCode = executeExternalWithRedirects(iterArgs, emptyRedirects);
+                        lastExitCode = executeExternalWithRedirects(iterArgs, emptyRedirects, cmd->hereDocContent);
                     }
                 }
                 return lastExitCode;
@@ -2594,7 +2758,7 @@ public:
             }
             
             // External command - apply redirections to command line
-            lastExitCode = executeExternalWithRedirects(expandedArgs, cmd->redirects);
+            lastExitCode = executeExternalWithRedirects(expandedArgs, cmd->redirects, cmd->hereDocContent);
             return lastExitCode;
         }
         
@@ -2908,7 +3072,7 @@ public:
                 }
             }
             
-            Parser parser(tokens, code);
+            Parser parser(tokens, code, executor.getInputCallback());
             auto program = parser.parse();
             
             if (debugMode) {
@@ -2916,6 +3080,17 @@ public:
             }
             
             return executor.run(program);
+        } catch (const BreakException&) {
+            std::cerr << "bash: break: only meaningful in a 'for', 'while', or 'until' loop\n";
+            return 1;
+        } catch (const ContinueException&) {
+            std::cerr << "bash: continue: only meaningful in a 'for', 'while', or 'until' loop\n";
+            return 1;
+        } catch (const ReturnException&) {
+            std::cerr << "bash: return: can only 'return' from a function or sourced script\n";
+            return 1;
+        } catch (const ExitException&) {
+            throw; // Propagate exit request to main
         } catch (const ScriptError& e) {
             std::cerr << e.what();
             return 1;

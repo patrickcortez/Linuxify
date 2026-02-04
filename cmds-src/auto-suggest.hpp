@@ -17,19 +17,16 @@ class AutoSuggest {
 public:
     static const std::vector<std::string>& getBuiltinCommands() {
         static std::vector<std::string> commands = {
-            "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy",
-            "cat", "type", "touch", "chmod", "chown", "clear", "help",
-            "lino", "lin", "registry", "history", "whoami", "echo", "env",
-            "printenv", "export", "which", "where", "ps", "kill", "top", "htop", "jobs", "fg",
-            "grep", "head", "tail", "wc", "sort", "uniq", "find",
-            "less", "more", "cut", "tr", "sed", "awk", "diff", "tee", "xargs", "rev",
-            "ln", "stat", "file", "readlink", "realpath", "basename", "dirname", "tree", "du",
-            "lsmem", "free", "lscpu", "lshw", "sysinfo", "lsmount", "lsblk", "df",
-            "lsusb", "lsnet", "lsof", "ip", "ping", "traceroute", "tracert",
-            "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig",
-            "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
-            "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt",
-            "sudo", "setup", "uninstall", "crontab", "exit", "declare", "unset"
+            "echo", "pwd", "cd", "ls", "dir", "type", "mkdir", "rm", "rmdir",
+            "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
+            "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
+            "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
+            "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
+            "tree", "du", "lin", "top", "jobs", "fg", "bg", "less", "more", "uninstall",
+            "setup", "alias", "unalias", "source", "read", "test", "true", "false",
+            "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
+            "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
+            "fuzz"
         };
         return commands;
     }

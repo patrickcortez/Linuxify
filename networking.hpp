@@ -13,6 +13,7 @@
 #include <icmpapi.h>
 #include <windows.h>
 #include <wininet.h>
+#include "error_handling.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -31,11 +32,9 @@
 
 class Networking {
 private:
+    // printError replaced by LOG_ERROR at call sites, but keeping wrapper for any missed calls
     static void printError(const std::string& msg) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::cerr << "Error: " << msg << std::endl;
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        LOG_ERROR(msg);
     }
     
     static void printSuccess(const std::string& msg) {
@@ -93,7 +92,7 @@ public:
 
         pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufLen);
         if (pAddresses == NULL) {
-            printError("Memory allocation failed");
+            LOG_ERROR("Memory allocation failed");
             return;
         }
 
@@ -102,14 +101,14 @@ public:
             free(pAddresses);
             pAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufLen);
             if (pAddresses == NULL) {
-                printError("Memory allocation failed");
+                LOG_ERROR("Memory allocation failed");
                 return;
             }
             ret = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, pAddresses, &bufLen);
         }
 
         if (ret != NO_ERROR) {
-            printError("GetAdaptersAddresses failed");
+            LOG_SYS_ERROR("GetAdaptersAddresses failed");
             free(pAddresses);
             return;
         }
@@ -179,7 +178,7 @@ public:
 
         MIB_IF_TABLE2* pIfTable = NULL;
         if (GetIfTable2(&pIfTable) != NO_ERROR) {
-            printError("Failed to get interface table");
+            LOG_SYS_ERROR("Failed to get interface table");
             return;
         }
 
@@ -234,12 +233,12 @@ public:
         GetIpForwardTable(NULL, &size, FALSE);
         pTable = (MIB_IPFORWARDTABLE*)malloc(size);
         if (pTable == NULL) {
-            printError("Memory allocation failed");
+            LOG_ERROR("Memory allocation failed");
             return;
         }
 
         if (GetIpForwardTable(pTable, &size, TRUE) != NO_ERROR) {
-            printError("Failed to get routing table");
+            LOG_SYS_ERROR("Failed to get routing table");
             free(pTable);
             return;
         }
@@ -276,7 +275,7 @@ public:
 
     static void ping(const std::vector<std::string>& args) {
         if (args.size() < 2) {
-            printError("ping: missing host");
+            LOG_ERROR("ping: missing host");
             std::cout << "Usage: ping <host> [-c count] [-w timeout]" << std::endl;
             return;
         }
@@ -367,7 +366,7 @@ public:
 
     static void traceroute(const std::vector<std::string>& args) {
         if (args.size() < 2) {
-            printError("traceroute: missing host");
+            LOG_ERROR("traceroute: missing host");
             std::cout << "Usage: traceroute <host> [-m max_hops]" << std::endl;
             return;
         }
@@ -390,7 +389,7 @@ public:
         struct addrinfo hints = {0}, *result = NULL;
         hints.ai_family = AF_INET;
         if (getaddrinfo(host.c_str(), NULL, &hints, &result) != 0) {
-            printError("Could not resolve hostname: " + host);
+            LOG_ERROR("Could not resolve hostname: " + host);
             return;
         }
 
@@ -445,7 +444,7 @@ public:
 
     static void nslookup(const std::vector<std::string>& args) {
         if (args.size() < 2) {
-            printError("nslookup: missing host");
+            LOG_ERROR("nslookup: missing host");
             std::cout << "Usage: nslookup <host>" << std::endl;
             return;
         }

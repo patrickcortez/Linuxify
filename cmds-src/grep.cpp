@@ -1,5 +1,7 @@
 
 #include "../shell_streams.hpp"
+#include "../error_handling.hpp"
+
 #include <string>
 #include <vector>
 #include <deque>
@@ -31,7 +33,7 @@ struct GrepOptions {
 GrepOptions opts;
 
 void printError(const std::string& msg) {
-    ShellIO::serr << ShellIO::Color::LightRed << "grep: " << msg << ShellIO::Color::Reset << ShellIO::endl;
+    LOG_ERROR(msg);
 }
 
 bool isBinaryData(const std::string& s) {

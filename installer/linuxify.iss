@@ -73,6 +73,12 @@ Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.cpp"; DestDir: "{app}\wsl_proxy
 Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.def"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
 Source: "{#SourcePath}\cmds-src\wsl_proxy\lxss_kernel.hpp"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
 
+; Install Fonts
+Source: "{#SourcePath}\fonts\Minecraftia-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Minecraftia"; Flags: onlyifdoesntexist uninsneveruninstall
+
+; Windows Terminal Fragment (Enterprise Theme)
+Source: "{#SourcePath}\assets\linuxify_fragment.json"; DestDir: "{localappdata}\Microsoft\Windows Terminal\Fragments\Linuxify"; DestName: "linuxify.json"; Flags: ignoreversion
+
 [Dirs]
 Name: "{app}\cmds"
 Name: "{app}\linuxdb"
@@ -80,6 +86,7 @@ Name: "{app}\linuxdb\nodes"
 Name: "{app}\toolchain"
 Name: "{app}\toolchain\compiler"
 Name: "{app}\plugins"
+Name: "{localappdata}\Microsoft\Windows Terminal\Fragments\Linuxify"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\linux_penguin_animal_9362.ico"

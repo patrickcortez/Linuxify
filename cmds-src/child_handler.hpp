@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <filesystem>
 #include "../signal_handler.hpp"
 #include "../process_manager.hpp"
 
@@ -14,6 +15,61 @@ class ChildHandler {
 public:
 
     static int spawn(const std::string& cmdLine, const std::string& workDir, bool wait = true) {
+        std::string finalCmdLine = cmdLine;
+        
+        {
+            std::string firstToken;
+            size_t start = 0;
+            if (!cmdLine.empty() && cmdLine[0] == '"') {
+                size_t end = cmdLine.find('"', 1);
+                if (end != std::string::npos) {
+                    firstToken = cmdLine.substr(1, end - 1);
+                    start = end + 1;
+                }
+            } else {
+                size_t space = cmdLine.find(' ');
+                if (space != std::string::npos) {
+                    firstToken = cmdLine.substr(0, space);
+                    start = space;
+                } else {
+                    firstToken = cmdLine;
+                    start = cmdLine.length();
+                }
+            }
+            
+            std::string ext;
+            size_t dotPos = firstToken.rfind('.');
+            if (dotPos != std::string::npos) {
+                ext = firstToken.substr(dotPos);
+                for (auto& c : ext) c = (char)tolower((unsigned char)c);
+            }
+            
+            std::string args = (start < cmdLine.length()) ? cmdLine.substr(start) : "";
+            
+            if (ext == ".ps1") {
+                std::filesystem::path scriptPath(firstToken);
+                if (!scriptPath.is_absolute() && !workDir.empty()) {
+                    scriptPath = std::filesystem::path(workDir) / scriptPath;
+                }
+                try {
+                    if (std::filesystem::exists(scriptPath)) {
+                        scriptPath = std::filesystem::canonical(scriptPath);
+                        finalCmdLine = "powershell.exe -ExecutionPolicy Bypass -File \"" + scriptPath.string() + "\"" + args;
+                    }
+                } catch (...) {}
+            } else if (ext == ".bat" || ext == ".cmd") {
+                std::filesystem::path scriptPath(firstToken);
+                if (!scriptPath.is_absolute() && !workDir.empty()) {
+                    scriptPath = std::filesystem::path(workDir) / scriptPath;
+                }
+                try {
+                    if (std::filesystem::exists(scriptPath)) {
+                        scriptPath = std::filesystem::canonical(scriptPath);
+                        finalCmdLine = "cmd.exe /c \"" + scriptPath.string() + "\"" + args;
+                    }
+                } catch (...) {}
+            }
+        }
  
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -62,7 +118,7 @@ public:
         SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, FALSE);
 
         char cmdBuffer[8192];
-        strncpy_s(cmdBuffer, cmdLine.c_str(), sizeof(cmdBuffer) - 1);
+        strncpy_s(cmdBuffer, finalCmdLine.c_str(), sizeof(cmdBuffer) - 1);
 
         const char* dir = workDir.empty() ? nullptr : workDir.c_str();
 
