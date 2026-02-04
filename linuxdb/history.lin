@@ -118,3 +118,8 @@ lino info.md
 cat info.md
 clear
 git add -A
+git commit -m "moved unessential files to .deprecated"
+git push turtle master
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+git a
+git add -A
