@@ -1,0 +1,51 @@
+# ============================================================
+# Linuxify Startup Configuration (~/.linuxifyrc)
+# ============================================================
+# This file is executed when Linuxify starts.
+# Lines starting with # are comments and are ignored.
+#
+# ============================================================
+# PROMPT CUSTOMIZATION
+# ============================================================
+# Use Prompt:First() to set the color of "linuxify" text
+# Use Prompt:Second() to set the color of the path
+#
+# ANSI Color Codes:
+#   \e[30m - Black       \e[90m - Bright Black (Gray)
+#   \e[31m - Red         \e[91m - Bright Red
+#   \e[32m - Green       \e[92m - Bright Green
+#   \e[33m - Yellow      \e[93m - Bright Yellow
+#   \e[34m - Blue        \e[94m - Bright Blue
+#   \e[35m - Magenta     \e[95m - Bright Magenta
+#   \e[36m - Cyan        \e[96m - Bright Cyan
+#   \e[37m - White       \e[97m - Bright White
+#
+# 256-color: \e[38;5;Nm where N is 0-255
+# RGB:       \e[38;2;R;G;Bm where R,G,B are 0-255
+#
+# Examples:
+# Prompt:First(\e[92m)
+# Prompt:Second(\e[94m)
+#
+# ============================================================
+# ALIASES
+# ============================================================
+# Create shortcuts for common commands:
+# alias ll="ls -la"
+# alias gs="git status"
+# alias ..="cd .."
+#
+# ============================================================
+# ENVIRONMENT VARIABLES
+# ============================================================
+# Set environment variables with export:
+# export EDITOR=lino
+# export PATH="$PATH;C:\my\custom\path"
+#
+# ============================================================
+# STARTUP COMMANDS
+# ============================================================
+# Any shell command here will run on startup:
+# echo -e "\e[92mWelcome to Linuxify!\e[0m"
+# date
+#

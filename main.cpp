@@ -1561,6 +1561,36 @@ public:
         std::string rcPath = std::string(userProfile) + "\\.linuxifyrc";
         free(userProfile);
         
+        if (!fs::exists(rcPath)) {
+            std::ofstream newRc(rcPath);
+            if (newRc) {
+                newRc << "# ============================================================\n";
+                newRc << "# Linuxify Startup Configuration (~/.linuxifyrc)\n";
+                newRc << "# ============================================================\n";
+                newRc << "# This file is executed when Linuxify starts.\n";
+                newRc << "# Lines starting with # are comments and are ignored.\n";
+                newRc << "#\n";
+                newRc << "# PROMPT CUSTOMIZATION:\n";
+                newRc << "#   Prompt:First(\\e[92m)   - Color for 'linuxify' text\n";
+                newRc << "#   Prompt:Second(\\e[94m)  - Color for path\n";
+                newRc << "#\n";
+                newRc << "# ANSI Colors: \\e[91m=Red \\e[92m=Green \\e[93m=Yellow\n";
+                newRc << "#              \\e[94m=Blue \\e[95m=Magenta \\e[96m=Cyan\n";
+                newRc << "#\n";
+                newRc << "# ALIASES:\n";
+                newRc << "#   alias ll=\"ls -la\"\n";
+                newRc << "#   alias gs=\"git status\"\n";
+                newRc << "#\n";
+                newRc << "# ENVIRONMENT:\n";
+                newRc << "#   export EDITOR=lino\n";
+                newRc << "#\n";
+                newRc << "# STARTUP COMMANDS:\n";
+                newRc << "#   echo -e \"\\e[92mWelcome!\\e[0m\"\n";
+                newRc << "#\n";
+                newRc.close();
+            }
+        }
+        
         std::ifstream file(rcPath);
         if (!file) return;
         
@@ -8896,7 +8926,6 @@ public:
         // Load History (was in run() before)
         logic.loadHistory(); 
         logic.loadPersistentVars(); 
-        logic.loadLinuxifyRC(); 
         
         // Print Tux (was in run() before)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -8950,6 +8979,8 @@ public:
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
         std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
+        
+        logic.loadLinuxifyRC();
 
         // Note: Crond starting logic was also in run(). 
         // We can replicate it here or move it to a shared helper. 

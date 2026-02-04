@@ -1517,7 +1517,6 @@ private:
                 std::string text = expandVariables(args[i]);
                 
                 if (interpret) {
-                    // Handle escape sequences
                     std::string out;
                     for (size_t j = 0; j < text.size(); j++) {
                         if (text[j] == '\\' && j + 1 < text.size()) {
@@ -1526,10 +1525,13 @@ private:
                             else if (next == 't') { out += '\t'; j++; }
                             else if (next == 'r') { out += '\r'; j++; }
                             else if (next == '\\') { out += '\\'; j++; }
-                            else if (next == '0' && j + 4 < text.size() && text[j+2] == '3' && text[j+3] == '3' && text[j+4] == '[') {
-                                // Handle \033[ ANSI escape - convert to actual ESC
+                            else if (next == 'e' && j + 2 < text.size() && text[j + 2] == '[') {
                                 out += '\033';
-                                j += 3;  // Skip \033
+                                j++;
+                            }
+                            else if (next == '0' && j + 4 < text.size() && text[j+2] == '3' && text[j+3] == '3' && text[j+4] == '[') {
+                                out += '\033';
+                                j += 3;
                             }
                             else out += text[j];
                         } else {

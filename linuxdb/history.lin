@@ -133,3 +133,17 @@ C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
 lino .gitignore
 git push turtle master
 git add -A
+git commit -m "Updated readme"
+git push turtle master --force
+git status
+clear
+exi
+exit
+help
+clear
+lel
+huh?
+exit
+hello() { echo hello; }
+hello
+clear
