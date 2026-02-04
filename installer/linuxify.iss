@@ -35,6 +35,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add Linuxify to system PATH"; GroupDescription: "System Integration:"
 Name: "addtoterminal"; Description: "Add Linuxify to Windows Terminal"; GroupDescription: "System Integration:"
+Name: "addtovscode"; Description: "Add Linuxify to VS Code terminal profiles"; GroupDescription: "System Integration:"; Check: VSCodeExists
 Name: "installcron"; Description: "Install Cron Daemon (task scheduler)"; GroupDescription: "System Integration:"
 Name: "installwslproxy"; Description: "Install WSL Kernel Proxy (enables extended kernel access)"; GroupDescription: "System Integration:"
 Name: "defaultshell"; Description: "Set Linuxify as default system shell (replaces CMD)"; GroupDescription: "System Integration:"; Flags: unchecked
@@ -51,8 +52,7 @@ Source: "{#SourcePath}\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion 
 ; Database files - all .lin files
 Source: "{#SourcePath}\linuxdb\*"; DestDir: "{app}\linuxdb"; Flags: ignoreversion
 
-; Custom commands (lvc, etc.)
-Source: "{#SourcePath}\cmds\snode.exe"; DestDir: "{app}\cmds"; Flags: ignoreversion
+; Custom commands
 Source: "{#SourcePath}\cmds\*"; DestDir: "{app}\cmds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Lino syntax highlighting plugins
@@ -232,6 +232,72 @@ begin
   end;
 end;
 
+function VSCodeExists(): boolean;
+var
+  UserSettings: string;
+begin
+  UserSettings := ExpandConstant('{userappdata}\Code\User\settings.json');
+  Result := FileExists(UserSettings) or DirExists(ExpandConstant('{userappdata}\Code'));
+end;
+
+procedure AddVSCodeProfile();
+var
+  SettingsPath: string;
+  SettingsContent: AnsiString;
+  ProfilesKey: string;
+  LinuxifyProfile: string;
+  AppPath: string;
+  InsertPos: Integer;
+  EndBracePos: Integer;
+begin
+  SettingsPath := ExpandConstant('{userappdata}\Code\User\settings.json');
+  AppPath := ExpandConstant('{app}');
+  StringChangeEx(AppPath, '\', '\\', True);
+  
+  ProfilesKey := '"terminal.integrated.profiles.windows"';
+  LinuxifyProfile := '"Linuxify": {' + #13#10 +
+    '            "path": "' + AppPath + '\\linuxify.exe",' + #13#10 +
+    '            "icon": "terminal-linux"' + #13#10 +
+    '        }';
+  
+  if FileExists(SettingsPath) then
+  begin
+    if LoadStringFromFile(SettingsPath, SettingsContent) then
+    begin
+      if Pos('Linuxify', SettingsContent) = 0 then
+      begin
+        InsertPos := Pos(ProfilesKey, SettingsContent);
+        if InsertPos > 0 then
+        begin
+          InsertPos := Pos('{', Copy(SettingsContent, InsertPos, Length(SettingsContent))) + InsertPos;
+          Insert(#13#10 + '        ' + LinuxifyProfile + ',', SettingsContent, InsertPos);
+          SaveStringToFile(SettingsPath, SettingsContent, False);
+        end
+        else
+        begin
+          EndBracePos := Length(SettingsContent);
+          while (EndBracePos > 0) and (SettingsContent[EndBracePos] <> '}') do
+            Dec(EndBracePos);
+          if EndBracePos > 0 then
+          begin
+            Insert(',' + #13#10 + '    ' + ProfilesKey + ': {' + #13#10 +
+              '        ' + LinuxifyProfile + #13#10 + '    }', SettingsContent, EndBracePos);
+            SaveStringToFile(SettingsPath, SettingsContent, False);
+          end;
+        end;
+      end;
+    end;
+  end
+  else if DirExists(ExpandConstant('{userappdata}\Code\User')) then
+  begin
+    SettingsContent := '{' + #13#10 +
+      '    ' + ProfilesKey + ': {' + #13#10 +
+      '        ' + LinuxifyProfile + #13#10 +
+      '    }' + #13#10 + '}';
+    SaveStringToFile(SettingsPath, SettingsContent, False);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ProxyDll, OrigDll, BackupDll: string;
@@ -241,6 +307,9 @@ begin
   begin
     if IsTaskSelected('addtoterminal') then
       AddWindowsTerminalProfile();
+    
+    if IsTaskSelected('addtovscode') then
+      AddVSCodeProfile();
     
     // Install WSL Kernel Proxy
     if IsTaskSelected('installwslproxy') then
