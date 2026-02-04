@@ -147,3 +147,9 @@ exit
 hello() { echo hello; }
 hello
 clear
+Hello
+setup
+upset
+seput
+utpes
+git add -A

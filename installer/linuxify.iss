@@ -74,7 +74,7 @@ Source: "{#SourcePath}\cmds-src\wsl_proxy\wslapi.def"; DestDir: "{app}\wsl_proxy
 Source: "{#SourcePath}\cmds-src\wsl_proxy\lxss_kernel.hpp"; DestDir: "{app}\wsl_proxy"; Flags: ignoreversion
 
 ; Install Fonts
-Source: "{#SourcePath}\fonts\Minecraftia-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Minecraftia"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "{#SourcePath}\fonts\Perfect DOS VGA 437.ttf"; DestDir: "{autofonts}"; FontInstall: "Perfect DOS VGA 437"; Flags: onlyifdoesntexist uninsneveruninstall
 
 ; Windows Terminal Fragment (Enterprise Theme)
 Source: "{#SourcePath}\assets\linuxify_fragment.json"; DestDir: "{localappdata}\Microsoft\Windows Terminal\Fragments\Linuxify"; DestName: "linuxify.json"; Flags: ignoreversion

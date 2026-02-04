@@ -7,7 +7,7 @@
             "workingDirectory": "%USERPROFILE%",
             "colorScheme": "Linuxify",
             "font": {
-                "face": "Minecraftia"
+                "face": "Perfect DOS VGA 437"
             },
             "experimental.retroTerminalEffect": true,
             "cursorShape": "vintage",
