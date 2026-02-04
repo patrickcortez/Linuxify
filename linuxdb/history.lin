@@ -85,3 +85,6 @@ git commit -m "Updated Installer to add vscode profile upon installing"
 git push turtle master
 nuke
 git add -A
+git commit -m "Updated Readme"
+git push turtle master
+git add -A

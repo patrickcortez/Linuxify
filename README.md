@@ -356,7 +356,7 @@ windux              # Launch GUI terminal
 ```
 
 [Status]
-- Buggy: TUI's dont render normally,some colors/texts dont render normally and cwd doesnt resolve to users home dir.
+- Stable: its stable and works well.
 
 ---
 
