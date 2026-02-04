@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include "link_handler.hpp"
 
 namespace ShellIO {
 
@@ -86,25 +87,31 @@ namespace ShellIO {
             std::lock_guard<std::mutex> lock(outputMutex);
             if (content.empty()) return;
 
-            // 1. Clear Line (only if console and prompt active)
             if (isConsole && isPromptActive && redrawCallback) {
                 clearLine();
             }
 
-            // 2. Set Color
             if (isErrorStream) {
                 setAttributes(FOREGROUND_RED | FOREGROUND_INTENSITY);
             }
 
-            // 3. Write
+            CONSOLE_SCREEN_BUFFER_INFO csbi;
+            int startRow = 0, startCol = 0;
+            if (isConsole && GetConsoleScreenBufferInfo(hOut, &csbi)) {
+                startRow = csbi.dwCursorPosition.Y;
+                startCol = csbi.dwCursorPosition.X;
+            }
+
             writeRaw(content.c_str(), (DWORD)content.length());
 
-            // 4. Reset Color
+            if (isConsole && !isErrorStream) {
+                LinkHandler::get().detectUrls(content, startRow, startCol);
+            }
+
             if (isErrorStream) {
                 resetAttributes();
             }
 
-            // 5. Restore Prompt
             if (isConsole && isPromptActive && redrawCallback) {
                 if (content.back() != '\n') {
                     writeRaw("\n", 1);

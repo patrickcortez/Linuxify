@@ -42,11 +42,13 @@ namespace SignalHandler {
     class InputDispatcher {
     private:
         std::map<KeyCombo, std::function<void()>> keyHandlers;
+        std::function<void(int, int, int)> mouseCallback;
         std::queue<INPUT_RECORD> inputBuffer;
         std::mutex bufferMutex;
         HANDLE hStdin;
         DWORD originalMode;
         bool initialized = false;
+        bool mouseEnabled = false;
     public:
         static InputDispatcher& getInstance() {
             static InputDispatcher instance;
@@ -60,21 +62,27 @@ namespace SignalHandler {
             }
             enableRawMode();
         }
-        void enableRawMode() {
-            if (!initialized) return;
-            // Enable QuickEdit/Insert for mouse selection, disable MouseInput to avoid consuming events.
-            DWORD newMode = ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE; 
-            SetConsoleMode(hStdin, newMode);
+        void enableRawMode() { 
+            if (!initialized) return;  
+            DWORD newMode = ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT;
+            SetConsoleMode(hStdin, newMode);  
+        }  
+        void enableMouse(bool enable) {
+            mouseEnabled = enable;
+            if (initialized) enableRawMode();
         }
         void restore() {
             if (initialized) {
-                // Force cooked mode flags to ensure child processes work
                 DWORD cookedMode = originalMode | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
                 SetConsoleMode(hStdin, cookedMode);
             }
         }
         void registerKeyHandler(WORD vk, bool ctrl, bool alt, bool shift, std::function<void()> callback) {
             keyHandlers[{vk, ctrl, alt, shift}] = callback;
+        }
+        void registerMouseHandler(std::function<void(int, int, int)> callback) {
+            mouseCallback = callback;
+            enableMouse(true);
         }
         bool poll() {
             DWORD eventsAvailable = 0;
@@ -90,6 +98,20 @@ namespace SignalHandler {
             if (ReadConsoleInput(hStdin, buffer.data(), eventsAvailable, &eventsRead)) {
                 for (DWORD i = 0; i < eventsRead; i++) {
                     INPUT_RECORD& record = buffer[i];
+                    if (record.EventType == MOUSE_EVENT && mouseCallback) {
+                        auto& m = record.Event.MouseEvent;
+                        int evType = -1;
+                        bool ctrlHeld = (m.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+                        if (m.dwEventFlags == 0 && (m.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) && ctrlHeld) {
+                            evType = 1;
+                        } else if (m.dwEventFlags == MOUSE_MOVED) {
+                            evType = 0;
+                        }
+                        if (evType >= 0) {
+                            mouseCallback(m.dwMousePosition.X, m.dwMousePosition.Y, evType);
+                        }
+                        if (evType == 1) continue;
+                    }
                     if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
                         bool ctrl = (record.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
                         bool alt = (record.Event.KeyEvent.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;

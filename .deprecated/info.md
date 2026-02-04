@@ -21,3 +21,6 @@ Feel free to use them.
 **pacman** - pac man game
 
 **wrapper and pyenv** - former python solutions because input didn't work back then, now its solved so they're obsolete
+
+**lino.exe** - old lino TUI
+

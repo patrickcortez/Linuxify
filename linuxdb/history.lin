@@ -196,3 +196,31 @@ lino test.txt
 lino2
 lino
 lino
+lino
+ls Documents | grep -n "HelloWorld.txt"
+ls Documents | grep -n "Helloworld.txt"
+clear
+exit
+lino
+yori /c "edit"
+nuke
+echo https://theuselessweb.com/
+echo https://theuselessweb.com/
+echo https://theuselessweb.com/
+clear
+lino .linuxifyrc
+exit
+test
+..
+lino .linuxifyrc
+conhost
+which shutdown
+which ls
+which grep
+type grep
+type bitpainter
+type cat
+type curl
+curl -H "Accept: application/json" \
+https://api.github.com/repos/octocat/hello-world
+curl -H "Accept: application/json" https://api.github.com/repos/octocat/hello-world

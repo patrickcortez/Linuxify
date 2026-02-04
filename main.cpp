@@ -47,8 +47,9 @@
 #include "shell_streams.hpp"
 #include "crash_handler.hpp"
 #include "cmds-src/glob.hpp"
-#include "cmds-src/child_handler.hpp" // Integrated ChildHandler
-#include "error_handling.hpp" // Integrated Verbose Error Handling
+#include "cmds-src/child_handler.hpp"
+#include "error_handling.hpp"
+#include "link_handler.hpp"
 
 
 // Global process manager instance
@@ -9046,6 +9047,10 @@ int main(int argc, char* argv[]) {
         if (g_procMgr.suspendForeground()) {
             std::cout << "[Suspended]\n";
         }
+    });
+
+    SignalHandler::InputDispatcher::getInstance().registerMouseHandler([](int x, int y, int evType) {
+        LinkHandler::get().onMouseEvent(x, y, evType);
     });
     
     ShellContext context;
