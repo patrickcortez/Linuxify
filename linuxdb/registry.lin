@@ -4,6 +4,7 @@
 
 ./build-installer.ps1=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\./build-installer.ps1
 ./cmds/LoneMaker.exe=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\./cmds/LoneMaker.exe
+./count_loc.ps1=C:\Users\patri\OneDrive\Documents\Projects\Linuxify\./count_loc.ps1
 ARP=C:\WINDOWS\system32\ARP.EXE
 ActionsMcpHost=C:\Users\patri\AppData\Local\Microsoft\WindowsApps\ActionsMcpHost.exe
 AggregatorHost=C:\WINDOWS\system32\AggregatorHost.exe

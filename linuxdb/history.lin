@@ -102,3 +102,19 @@ C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
 git add -A
 git commit -m "Added startup script: .linuxifyrc"
 git push turtle master
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+./build-installer.ps1
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+./count_loc.ps1
+Lino
+cat filer.txt
+rm filer.txt
+cat filer.txt
+clear
+lino info.md
+C:\Users\patri\OneDrive\Documents\Projects\Linuxify\
+.deperacated/
+lino info.md
+cat info.md
+clear
+git add -A
