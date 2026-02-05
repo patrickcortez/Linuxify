@@ -14,3 +14,5 @@
 
 [linuxify@<path>]
 $ <input>
+
+curl -H "Accept: application/json" https://api.github.com/repos/octocat/hello-world

@@ -2829,11 +2829,23 @@ public:
 
         for (size_t i = 1; i < args.size(); ++i) {
             std::string arg = args[i];
-            if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
+            if (arg == "--help") {
+                std::cout << "Usage: head [OPTION]... [FILE]...\n";
+                std::cout << "Print the first 10 lines of each FILE to standard output.\n\n";
+                std::cout << "Options:\n";
+                std::cout << "  -n NUM        Print the first NUM lines instead of 10\n";
+                std::cout << "  -c NUM        Print the first NUM bytes\n";
+                std::cout << "  -q, --quiet   Never print headers giving file names\n";
+                std::cout << "  -v, --verbose Always print headers giving file names\n";
+                std::cout << "  -NUM          Shorthand for -n NUM\n";
+                std::cout << "      --help    Display this help and exit\n";
+                return;
+            }
+            else if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
             else if (arg == "-c" && i + 1 < args.size()) { count = std::stoll(args[++i]); useBytes = true; }
             else if (arg == "-q" || arg == "--quiet" || arg == "--silent") quiet = true;
             else if (arg == "-v" || arg == "--verbose") verbose = true;
-            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg)); // handle -5
+            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg));
             else files.push_back(arg);
         }
 
@@ -2865,7 +2877,7 @@ public:
             std::istringstream iss(pipedInput);
             process(iss, "", false);
         } else if (files.empty()) {
-             printError("head: missing file operand");
+            process(std::cin, "", false);
         } else {
              bool showHeader = (files.size() > 1 && !quiet) || verbose;
              for (const auto& file : files) {
@@ -2875,7 +2887,7 @@ public:
                      continue;
                  }
                  process(ifs, file, showHeader);
-                 showHeader = (files.size() > 1 && !quiet); // Show separator for subsequent
+                 showHeader = (files.size() > 1 && !quiet);
              }
         }
     }
@@ -2888,16 +2900,30 @@ public:
         bool quiet = false;
         bool verbose = false;
         std::vector<std::string> files;
-        int sleepInterval = 1000; // ms
+        int sleepInterval = 1000;
 
         for (size_t i = 1; i < args.size(); ++i) {
             std::string arg = args[i];
-            if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
+            if (arg == "--help") {
+                std::cout << "Usage: tail [OPTION]... [FILE]...\n";
+                std::cout << "Print the last 10 lines of each FILE to standard output.\n\n";
+                std::cout << "Options:\n";
+                std::cout << "  -n NUM        Print the last NUM lines instead of 10\n";
+                std::cout << "  -c NUM        Print the last NUM bytes\n";
+                std::cout << "  -f, --follow  Output appended data as the file grows\n";
+                std::cout << "  -s NUM        Sleep for NUM seconds between follow iterations\n";
+                std::cout << "  -q            Never print headers giving file names\n";
+                std::cout << "  -v            Always print headers giving file names\n";
+                std::cout << "  -NUM          Shorthand for -n NUM\n";
+                std::cout << "      --help    Display this help and exit\n";
+                return;
+            }
+            else if (arg == "-n" && i + 1 < args.size()) count = std::stoll(args[++i]);
             else if (arg == "-c" && i + 1 < args.size()) { count = std::stoll(args[++i]); useBytes = true; }
             else if (arg == "-f" || arg == "--follow") follow = true;
             else if (arg == "-q") quiet = true;
             else if (arg == "-v") verbose = true;
-            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg)); 
+            else if (arg[0] == '-' && isdigit(arg[1])) count = std::abs(std::stoll(arg));
             else if (arg == "-s" && i + 1 < args.size()) sleepInterval = std::stoi(args[++i]) * 1000;
             else files.push_back(arg);
         }
@@ -3025,7 +3051,13 @@ public:
                 showHeader = (files.size() > 1);
             }
         } else {
-             printError("tail: missing file operand");
+            std::deque<std::string> ring;
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                ring.push_back(line);
+                if (ring.size() > count) ring.pop_front();
+            }
+            for (const auto& l : ring) std::cout << l << "\n";
         }
     }
 
@@ -9000,7 +9032,55 @@ int main(int argc, char* argv[]) {
     // Enterprise System Initialization
     Interrupt::init();
     
-    // Handle -c flag (Before SignalHandler to preserve pipes)
+    // Handle /c flag - Delegate to cmd.exe (Compatibility Mode)
+    // Many external tools (npx, python, etc.) hardcode using 'cmd.exe /c' style flags.
+    // We delegate these directly to cmd.exe to ensure full compatibility.
+    if (argc >= 2) {
+        std::string arg1 = argv[1];
+        if (arg1 == "/c" || arg1 == "/C") {
+            // Construct command line: cmd.exe <all args>
+            // We use GetCommandLineA() and skip the first token (our exe name) to preserve exact formatting
+            std::string cmdLine = GetCommandLineA();
+            
+            // Skip the current executable part
+            bool inQuote = false;
+            size_t i = 0;
+            while (i < cmdLine.length()) {
+                if (cmdLine[i] == '"') inQuote = !inQuote;
+                else if (cmdLine[i] == ' ' && !inQuote) break;
+                i++;
+            }
+            // Skip spaces
+            while (i < cmdLine.length() && cmdLine[i] == ' ') i++;
+            
+            // Construct new command line
+            std::string newCmdLine = "cmd.exe " + cmdLine.substr(i);
+            
+            STARTUPINFOA si;
+            PROCESS_INFORMATION pi;
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(si);
+            ZeroMemory(&pi, sizeof(pi));
+            
+            // Inherit handles so pipes/redirects work
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+            if (CreateProcessA(NULL, (LPSTR)newCmdLine.c_str(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                DWORD exitCode = 0;
+                GetExitCodeProcess(pi.hProcess, &exitCode);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                return exitCode;
+            }
+            return 1;
+        }
+    }
+
+    // Handle -c flag (Internal Execution)
     if (argc >= 3 && std::string(argv[1]) == "-c") {
         std::string command;
         for (int i = 2; i < argc; i++) {
