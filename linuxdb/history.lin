@@ -8,3 +8,28 @@ npx @google/gemini-cli
 npx @google/gemini-cli
 test
 test.exe
+ls
+ls > test.txt
+ls | grep -n ".txt"
+cat test.txt
+ls | grep -n ".txt" > test.txt
+cat test.txt
+clear
+mkdir test
+ls
+mkdir testerino
+exit
+ls | grep -n ".txt" > test.txt
+cat test.txt
+git apply patch.diff
+g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
+exit
+ls | grep -n ".txt" > test.txt
+exit
+ls | grep -n ".txt" > test.txt
+exit
+ls | grep -n ".txt" > test.txt
+exit
+ls | grep -n ".txt" > test.txt
+cat test.txt
+git add -A

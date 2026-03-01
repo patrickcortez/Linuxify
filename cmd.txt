@@ -1,0 +1,49 @@
+Batch 1 (File/System/Nav):
+void cmdFile(
+void cmdReadlink(
+void cmdRealpath(
+void cmdBasename(
+void cmdDirname(
+void cmdTree(
+void cmdDu(
+
+Batch 2 (Text/Data/Process):
+void cmdHead(
+void cmdTail(
+void cmdWc(
+void cmdSort(
+void cmdUniq(
+void cmdCut(
+void cmdTr(
+void cmdSed(
+void cmdAwk(
+void cmdDiff(
+void cmdTee(
+void cmdXargs(
+void cmdRev(
+
+Batch 3 (System/Process/Network):
+void cmdWhoami(
+void cmdPs(
+void cmdKill(
+void cmdTop(
+void cmdGrep(  <-- Important: implemented via piped input in text batch but sits near batch 3.
+void cmdDate(  <-- Handled inline in date.cpp
+void cmdCal(   <-- Handled inline in cal.cpp
+void cmdUname(
+void cmdHostname( <-- Handled inline/systeminfo internally
+void cmdUptime(   <-- Handled inline
+void cmdFree(     <-- Handled natively via SystemInfo::listMemory
+void cmdDf(       <-- Handled natively via SystemInfo::listMounts
+void cmdMount(    <-- Handled inline 
+void cmdUmount(   <-- Handled inline
+void cmdSleep(    <-- Handled inline
+void cmdPrintf(   <-- Handled inline
+void cmdSeq(      <-- Handled inline
+void cmdYes(      <-- Handled inline
+void showIP(      <-- Used in ip.cpp
+
+Note: Many Batch 3 commands (like sleep, yes, uname) were written inline inside `executeCommand` parsing logic rather than having dedicated `void cmdSleep(...)` functions. 
+
+You need to search `main.cpp` for these specific string blocks and delete them.
+For the inline ones (like `else if (cmd == "sleep") { ... }`), you just need to delete that specific block from the `executeCommand` if block series.

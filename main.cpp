@@ -71,16 +71,10 @@ class ShellLogic {
 
     // Internal commands set
     const std::set<std::string> internalCmds = {
-        "echo", "pwd", "cd", "ls", "dir", "type", "mkdir", "rm", "rmdir",
-        "mv", "cp", "touch", "chmod", "chown", "clear", "env", "export",
-        "which", "whoami", "ps", "kill", "history", "grep", "head", "tail", "wc",
-        "sort", "uniq", "find", "cut", "tr", "sed", "awk", "diff", "tee", "xargs",
-        "rev", "ln", "stat", "file", "readlink", "realpath", "basename", "dirname",
-        "tree", "du", "lin", "top", "jobs", "fg", "bg", "less", "more", "uninstall",
+        "echo", "pwd", "cd", "type", "clear", "env", "export",
+        "which", "history", "lin", "jobs", "fg", "bg", "uninstall",
         "setup", "alias", "unalias", "source", "read", "test", "true", "false",
-        "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
-        "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
-        "fuzz"
+        "exit", "help", "man", "fuzz"
     }; 
 
 
@@ -184,12 +178,7 @@ public:
                     case Bash::TokenType::KW_FUNCTION:
                     case Bash::TokenType::LBRACE:  // Block start {
                     case Bash::TokenType::LPAREN:  // Subshell (
-                    case Bash::TokenType::SEMICOLON: // Command separation
-                    case Bash::TokenType::PIPE:
-                    case Bash::TokenType::REDIRECT_IN:
-                    case Bash::TokenType::REDIRECT_OUT:
-                    case Bash::TokenType::REDIRECT_APPEND:
-                    case Bash::TokenType::HEREDOC: // <<
+                    case Bash::TokenType::SEMICOLON:
                         return true;
                     case Bash::TokenType::WORD:
                         // Check for specific command words that we want interpreter to handle
@@ -7053,22 +7042,7 @@ public:
             cmdPwd(expandedTokens);
         } else if (cmd == "cd") {
             cmdCd(expandedTokens);
-        } else if (cmd == "ls" || cmd == "dir") {
-            cmdLs(expandedTokens);
-        } else if (cmd == "mkdir") {
-            cmdMkdir(expandedTokens);
-        } else if (cmd == "rm" || cmd == "rmdir") {
-            cmdRm(expandedTokens);
-        } else if (cmd == "mv") {
-            cmdMv(expandedTokens);
-        } else if (cmd == "cp" || cmd == "copy") {
-            cmdCp(expandedTokens);
-        } else if (cmd == "touch") {
-            cmdTouch(expandedTokens);
-        } else if (cmd == "chmod") {
-            cmdChmod(expandedTokens);
-        } else if (cmd == "chown") {
-            cmdChown(expandedTokens);
+
         } else if (cmd == "clear") {
             cmdClear(expandedTokens);
         } else if (cmd == "help") {
@@ -7205,8 +7179,7 @@ public:
             }
         } else if (cmd == "history") {
             cmdHistory(expandedTokens);
-        } else if (cmd == "whoami") {
-            cmdWhoami(expandedTokens);
+
         } else if (cmd == "echo") {
             cmdEcho(expandedTokens);
         } else if (cmd == "env" || cmd == "printenv") {
@@ -7215,84 +7188,26 @@ public:
             cmdExport(expandedTokens);
         } else if (cmd == "which" || cmd == "where") {
             cmdWhich(expandedTokens);
-        } else if (cmd == "ps") {
-            cmdPs(expandedTokens);
-        } else if (cmd == "kill") {
-            cmdKill(expandedTokens);
-        } else if (cmd == "top" || cmd == "htop") {
-            cmdTop(expandedTokens);
+
         } else if (cmd == "jobs") {
             cmdJobs(expandedTokens);
         } else if (cmd == "fg") {
             cmdFg(expandedTokens);
         } else if (cmd == "bg") {
             cmdBg(expandedTokens);
-        } else if (cmd == "grep") {
-            cmdGrep(expandedTokens);
-        } else if (cmd == "head") {
-            cmdHead(expandedTokens);
-        } else if (cmd == "tail") {
-            cmdTail(expandedTokens);
-        } else if (cmd == "wc") {
-            cmdWc(expandedTokens);
-        } else if (cmd == "sort") {
-            cmdSort(expandedTokens);
-        } else if (cmd == "uniq") {
-            cmdUniq(expandedTokens);
-        } else if (cmd == "find") {
-            cmdFind(expandedTokens);
-        } else if (cmd == "less" || cmd == "more") {
-            cmdLess(expandedTokens);
-        } else if (cmd == "cut") {
-            cmdCut(expandedTokens);
-        } else if (cmd == "tr") {
-            cmdTr(expandedTokens);
-        } else if (cmd == "sed") {
-            cmdSed(expandedTokens);
-        } else if (cmd == "awk") {
-            cmdAwk(expandedTokens);
-        } else if (cmd == "diff") {
-            cmdDiff(expandedTokens);
-        } else if (cmd == "tee") {
-            cmdTee(expandedTokens);
-        } else if (cmd == "xargs") {
-            cmdXargs(expandedTokens);
-        } else if (cmd == "rev") {
-            cmdRev(expandedTokens);
-        } else if (cmd == "ln") {
-            cmdLn(expandedTokens);
-        } else if (cmd == "stat") {
-            cmdStat(expandedTokens);
-        } else if (cmd == "file") {
-            cmdFile(expandedTokens);
-        } else if (cmd == "readlink") {
-            cmdReadlink(expandedTokens);
-        } else if (cmd == "realpath") {
-            cmdRealpath(expandedTokens);
-        } else if (cmd == "basename") {
-            cmdBasename(expandedTokens);
-        } else if (cmd == "dirname") {
-            cmdDirname(expandedTokens);
-        } else if (cmd == "tree") {
-            cmdTree(expandedTokens);
-        } else if (cmd == "du") {
-            cmdDu(expandedTokens);
-        } else if (cmd == "lsmem" || cmd == "free") {
-            SystemInfo::listMemory();
+
         } else if (cmd == "lscpu") {
             SystemInfo::listCPU();
         } else if (cmd == "lshw" || cmd == "sysinfo") {
             SystemInfo::listHardware();
-        } else if (cmd == "lsmount" || cmd == "lsblk" || cmd == "df") {
-            SystemInfo::listMounts();
+
         } else if (cmd == "lsusb") {
             SystemInfo::listUSB();
         } else if (cmd == "lsnet") {
             SystemInfo::listNetwork();
         } else if (cmd == "lsof") {
             SystemInfo::listOpenFiles();
-        } else if (cmd == "ip") {
-            Networking::showIP(expandedTokens);
+
         } else if (cmd == "ping") {
             Networking::ping(expandedTokens);
         } else if (cmd == "traceroute" || cmd == "tracert") {
@@ -7311,8 +7226,7 @@ public:
             Networking::ifconfig(expandedTokens);
         } else if (cmd == "ss") {
             Networking::ss(expandedTokens);
-        } else if (cmd == "hostname") {
-            Networking::hostname(expandedTokens);
+
         } else if (cmd == "arp") {
             Networking::arp(expandedTokens);
         } else if (cmd == "nc" || cmd == "netcat") {
@@ -7526,30 +7440,7 @@ public:
             }
         } else if (cmd == "uninstall") {
             cmdUninstall(expandedTokens);
-        } else if (cmd == "sleep") {
-            if (expandedTokens.size() > 1) {
-                try {
-                	double seconds = std::stod(expandedTokens[1]);
-                    Sleep((DWORD)(seconds * 1000));
-                } catch (...) {
-                    printError("Invalid time interval '" + expandedTokens[1] + "'");
-                }
-            } else {
-                printError("missing operand");
-            }
-        } else if (cmd == "uname") {
-            bool all = false;
-            if (expandedTokens.size() > 1 && expandedTokens[1] == "-a") all = true;
-            if (all) std::cout << "Windows_NT " << "Linuxify-Shell" << " 1.0 " << "x86_64 " << "MS/Windows" << std::endl;
-            else std::cout << "Windows_NT" << std::endl;
-        } else if (cmd == "yes") {
-            std::string text = "y";
-            if (expandedTokens.size() > 1) text = expandedTokens[1];
-            while (ctx.running) {
-                std::cout << text << std::endl;
-                if (SignalHandler::g_signalsBlocked.load()) break; // Rudimentary check, rely on CTRL+C
-                Sleep(1); // Avoid 100% CPU
-            }
+
         } else if (cmd == "exit" || cmd == "quit") {
             ctx.running = false;
         } else {
@@ -7763,27 +7654,13 @@ public:
     // Check if a command is a built-in Linuxify command
     bool isBuiltinCommand(const std::string& cmd) {
         static std::vector<std::string> builtins = {
-            "pwd", "cd", "ls", "dir", "mkdir", "rm", "rmdir", "mv", "cp", "copy", 
-            "cat", "type", "touch", "chmod", "chown", "clear", "help", 
-            "lino", "lin", "registry", "history", "whoami", "echo", "env", 
-            "printenv", "export", "which", "ps", "kill", "top", "htop", "jobs", "fg",
-            "grep", "head", "tail", "wc", "sort", "uniq", "find",
-            // Text processing commands
-            "less", "more", "cut", "tr", "sed", "awk", "diff", "tee", "xargs", "rev",
-            // File operations commands
-            "ln", "stat", "file", "readlink", "realpath", "basename", "dirname", "tree", "du",
-            "lsmem", "free", "lscpu", "lshw", "sysinfo", "lsmount", "lsblk", "df",
-            "lsusb", "lsnet", "lsof", "ip", "ping", "traceroute", "tracert",
-            "nslookup", "dig", "host", "curl", "wget", "net", "netstat", "ifconfig", "ipconfig",
-            // Toolchain commands
-            "gcc", "g++", "cc", "c++", "make", "gdb", "ar", "ld", "objdump", "objcopy",
-            "strip", "windres", "as", "nm", "ranlib", "size", "strings", "addr2line", "c++filt",
+            "pwd", "cd", "type", "clear", "help", 
+            "lino", "lin", "registry", "history", "echo", "env", 
+            "printenv", "export", "which", "jobs", "fg", "bg",
             // Admin commands
             "sudo", "setup", "uninstall",
             // Scheduler commands
-            "crontab",
-            // Utils
-            "sleep", "printf", "seq", "yes", "uname"
+            "crontab"
         };
         for (const auto& builtin : builtins) {
             if (cmd == builtin) return true;
@@ -7806,31 +7683,31 @@ public:
         
         std::string cmd = tokens[0];
         
-        // For built-in commands, capture output internally
-        if (isBuiltinCommand(cmd)) {
-            std::ostringstream oss;
-            std::streambuf* oldCout = std::cout.rdbuf();
-            std::cout.rdbuf(oss.rdbuf());
-            
-            executeCommand(tokens);
-            
-            std::cout.rdbuf(oldCout);
-            capturedOutput = oss.str();
-            
-            // Write to file if specified
-            if (!stdoutFile.empty()) {
-                std::ofstream file;
-                if (append) {
-                    file.open(stdoutFile, std::ios::app);
-                } else {
-                    file.open(stdoutFile, std::ios::out);
-                }
-                if (file) {
-                    file << capturedOutput;
-                }
+        // For remaining internal commands, capture output internally
+    if (isBuiltinCommand(cmd)) {
+        std::ostringstream oss;
+        std::streambuf* oldCout = std::cout.rdbuf();
+        std::cout.rdbuf(oss.rdbuf());
+        
+        executeCommand(tokens);
+        
+        std::cout.rdbuf(oldCout);
+        capturedOutput = oss.str();
+        
+        // Write to file if specified
+        if (!stdoutFile.empty()) {
+            std::ofstream file;
+            if (append) {
+                file.open(stdoutFile, std::ios::app);
+            } else {
+                file.open(stdoutFile, std::ios::out);
             }
-            return capturedOutput;
+            if (file) {
+                file << capturedOutput;
+            }
         }
+        return capturedOutput;
+    }
         
         // External command - find executable
         std::string execPath;
@@ -8146,30 +8023,18 @@ public:
         
         std::string cmd = tokens[0];
         
-        // For built-in commands, use internal handling with stdin
-        if (isBuiltinCommand(cmd)) {
-            // Built-in command - just execute with the stdin content
-            // Most built-ins that need stdin (grep, wc, etc.) already handle it via pipedInput
-            std::ostringstream capturedOutput;
-            std::streambuf* oldCout = std::cout.rdbuf();
-            std::cout.rdbuf(capturedOutput.rdbuf());
-            
-            // Call the command with stdin content as piped input
-            if (cmd == "grep") cmdGrep(tokens, stdinContent);
-            else if (cmd == "wc") cmdWc(tokens, stdinContent);
-            else if (cmd == "head") cmdHead(tokens, stdinContent);
-            else if (cmd == "tail") cmdTail(tokens, stdinContent);
-            else if (cmd == "sort") cmdSort(tokens, stdinContent);
-            else if (cmd == "uniq") cmdUniq(tokens, stdinContent);
-            else if (cmd == "cut") cmdCut(tokens, stdinContent);
-            else if (cmd == "tr") cmdTr(tokens, stdinContent);
-            else if (cmd == "cat") std::cout << stdinContent;
-            else executeCommand(tokens);
-            
-            std::cout.rdbuf(oldCout);
-            std::cout << capturedOutput.str();
-            return 0;
-        }
+        // For remaining built-in commands, use internal handling with stdin
+    if (isBuiltinCommand(cmd)) {
+        std::ostringstream capturedOutput;
+        std::streambuf* oldCout = std::cout.rdbuf();
+        std::cout.rdbuf(capturedOutput.rdbuf());
+        
+        executeCommand(tokens);
+        
+        std::cout.rdbuf(oldCout);
+        std::cout << capturedOutput.str();
+        return 0;
+    }
         
         // External command - find executable
         std::string execPath;
@@ -8384,20 +8249,9 @@ public:
                 std::ostringstream capturedOutput;
                 std::streambuf* oldCout = std::cout.rdbuf();
                 std::cout.rdbuf(capturedOutput.rdbuf());
-                
-                if (cmd == "grep") cmdGrep(tokens, stringPart);
-                else if (cmd == "wc") cmdWc(tokens, stringPart);
-                else if (cmd == "head") cmdHead(tokens, stringPart);
-                else if (cmd == "tail") cmdTail(tokens, stringPart);
-                else if (cmd == "sort") cmdSort(tokens, stringPart);
-                else if (cmd == "uniq") cmdUniq(tokens, stringPart);
-                else if (cmd == "cut") cmdCut(tokens, stringPart);
-                else if (cmd == "tr") cmdTr(tokens, stringPart);
-                else if (cmd == "cat") {
-                    std::cout << stringPart;
-                    if (!stringPart.empty() && stringPart.back() != '\n') std::cout << '\n';
-                }
-                else {
+                if (isBuiltinCommand(cmd)) {
+                    executeCommand(tokens);
+                } else {
                     std::cout.rdbuf(oldCout);
                     ctx.lastExitCode = executeWithStdin(cmdPart, stringPart + "\n");
                     return true;
@@ -8427,13 +8281,9 @@ public:
             std::vector<std::string> tokens = tokenize(cmdPart);
             if (!tokens.empty()) {
                 std::string& cmd = tokens[0];
-                
-                if (cmd == "grep") cmdGrep(tokens, heredocContent);
-                else if (cmd == "wc") cmdWc(tokens, heredocContent);
-                else if (cmd == "cat") {
-                    std::cout << heredocContent;
-                }
-                else {
+                if (isBuiltinCommand(cmd)) {
+                    executeCommand(tokens);
+                } else {
                     ctx.lastExitCode = executeWithStdin(cmdPart, heredocContent);
                 }
             }
@@ -8564,8 +8414,7 @@ public:
             }
         }
         
-        // Handle output redirection (simple case without pipes before it)
-        if (appendPos != std::string::npos || (writePos != std::string::npos && (appendPos == std::string::npos || writePos < appendPos))) {
+        if (appendPos != std::string::npos || writePos != std::string::npos) {
             bool append = (appendPos != std::string::npos && (writePos == std::string::npos || appendPos <= writePos));
             size_t pos = append ? appendPos : writePos;
             size_t skip = append ? 2 : 1;
@@ -8573,7 +8422,6 @@ public:
             std::string cmdPart = processedInput.substr(0, pos);
             std::string filePart = processedInput.substr(pos + skip);
             
-            // Trim
             cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
             filePart.erase(0, filePart.find_first_not_of(" \t"));
             filePart.erase(filePart.find_last_not_of(" \t") + 1);
@@ -8585,26 +8433,6 @@ public:
             
             std::string outputFile = resolvePath(filePart);
             
-            // (Previous bogus pipe check removed)
-
-        // Just output redirection
-        size_t redirPos = input.find('>');
-        if (redirPos != std::string::npos) {
-            bool append = false;
-            std::string cmdPart = input.substr(0, redirPos);
-            std::string outputFile = input.substr(redirPos + 1);
-            
-            if (outputFile.length() > 0 && outputFile[0] == '>') {
-                append = true;
-                outputFile = outputFile.substr(1);
-            }
-            
-            cmdPart.erase(0, cmdPart.find_first_not_of(" \t"));
-            cmdPart.erase(cmdPart.find_last_not_of(" \t") + 1);
-            outputFile.erase(0, outputFile.find_first_not_of(" \t"));
-            outputFile.erase(outputFile.find_last_not_of(" \t") + 1);
-            
-            // Handle combined pipe and redirection (ls | grep > file)
             std::vector<std::string> commands;
             size_t pPos = 0;
             std::string tempCmd = cmdPart;
@@ -8619,7 +8447,6 @@ public:
             tempCmd.erase(tempCmd.find_last_not_of(" \t") + 1);
             commands.push_back(tempCmd);
             
-            // Create Inheritable Handle
             SECURITY_ATTRIBUTES sa;
             sa.nLength = sizeof(SECURITY_ATTRIBUTES);
             sa.bInheritHandle = TRUE;
@@ -8627,7 +8454,6 @@ public:
 
             HANDLE hFile = CreateFileA(outputFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
                                        append ? OPEN_ALWAYS : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                                       
             if (hFile == INVALID_HANDLE_VALUE) {
                  printError("Cannot open output file: " + outputFile);
                  return true;
@@ -8637,9 +8463,6 @@ public:
             ctx.lastExitCode = executePipeline(commands, hFile);
             CloseHandle(hFile);
             return true;
-        }
-// Output Redirection handled above
-        
         }
         return false;
     }
