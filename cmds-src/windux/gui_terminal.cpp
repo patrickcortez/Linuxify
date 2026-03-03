@@ -279,6 +279,7 @@ bool g_hoverPlus = false;
 bool g_hoverDown = false;
 HWND g_hMenuWnd = NULL;
 int g_menuHoverIndex = -1;
+std::string g_startDir;
 
 // Custom Menu Window
 LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -936,7 +937,6 @@ void CreateNewSession(const ShellProfile* prof) {
 
     if (prof) {
         cmd = prof->path;
-        // If relative path like "linuxify.exe", resolve it
         if (cmd.find(':') == std::string::npos && cmd.find('/') == std::string::npos && cmd.find('\\') == std::string::npos) {
              char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
              fs::path exeDir = fs::path(exePath).parent_path();
@@ -944,13 +944,14 @@ void CreateNewSession(const ShellProfile* prof) {
              cmd = (exeDir / cmd).string();
         }
         
-        // Resolve Starting Directory
-        if (!prof->sdir.empty()) {
+        if (!g_startDir.empty()) {
+            cwd = g_startDir;
+            g_startDir.clear();
+        } else if (!prof->sdir.empty()) {
             if (prof->sdir == "home") {
                 const char* home = getenv("USERPROFILE");
                 if (home) cwd = std::string(home);
             } else {
-                 // Expand environment variables if needed
                  char expandBuf[MAX_PATH];
                  ExpandEnvironmentStringsA(prof->sdir.c_str(), expandBuf, MAX_PATH);
                  cwd = std::string(expandBuf);
@@ -1552,6 +1553,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    if (lpCmdLine && lpCmdLine[0]) {
+        g_startDir = lpCmdLine;
+        if (g_startDir.size() >= 2 && g_startDir.front() == '"' && g_startDir.back() == '"') {
+            g_startDir = g_startDir.substr(1, g_startDir.size() - 2);
+        }
+        if (!g_startDir.empty() && !fs::is_directory(g_startDir)) {
+            g_startDir.clear();
+        }
+    }
+
     WNDCLASSEXA wc = {0};
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.lpfnWndProc = WndProc;
