@@ -8,21 +8,27 @@
 #include <map>
 #include <vector>
 #include <filesystem>
+#include <iostream>
 #include <windows.h>
 
 namespace fs = std::filesystem;
 
 std::string getVarFilePath() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    fs::path exeDir = fs::path(exePath).parent_path().parent_path();
-    fs::path varPath = exeDir / "linuxdb" / "var.lin";
-    
-    if (!fs::exists(varPath.parent_path())) {
-        fs::create_directories(varPath.parent_path());
+    const char* appdata = std::getenv("APPDATA");
+    fs::path linuxdbDir;
+    if (appdata) {
+        linuxdbDir = fs::path(appdata) / "Linuxify" / "linuxdb";
+    } else {
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        linuxdbDir = fs::path(exePath).parent_path().parent_path() / "linuxdb";
     }
     
-    return varPath.string();
+    if (!fs::exists(linuxdbDir)) {
+        fs::create_directories(linuxdbDir);
+    }
+    
+    return (linuxdbDir / "var.lin").string();
 }
 
 struct VarStore {

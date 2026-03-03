@@ -58,6 +58,10 @@ class EditWidget : public Widget {
 public:
     Document* doc = nullptr;
     int lineNumWidth = 5;
+    std::string searchTerm;
+    
+    void setSearchTerm(const std::string& term) { searchTerm = term; }
+    void clearSearch() { searchTerm.clear(); }
     
     void draw(Buffer& buf) override {
         if (!doc) return;
@@ -78,6 +82,21 @@ public:
             int start = doc->scrollX;
             std::string visible = (start < (int)line.size()) ? line.substr(start, viewWidth) : "";
             buf.write(bounds.x + lineNumWidth, bounds.y + i, visible, Colors::EDIT_AREA);
+            
+            if (!searchTerm.empty() && !line.empty()) {
+                size_t searchLen = searchTerm.size();
+                size_t pos = 0;
+                while ((pos = line.find(searchTerm, pos)) != std::string::npos) {
+                    for (size_t c = 0; c < searchLen; c++) {
+                        int screenCol = (int)(pos + c) - doc->scrollX;
+                        if (screenCol >= 0 && screenCol < viewWidth) {
+                            buf.set(bounds.x + lineNumWidth + screenCol, bounds.y + i,
+                                    line[pos + c], Colors::SEARCH_HIGHLIGHT);
+                        }
+                    }
+                    pos++;
+                }
+            }
         }
         
         int cursorScreenX = bounds.x + lineNumWidth + (doc->cursorX - doc->scrollX);
@@ -234,6 +253,7 @@ class LinoApp {
     int width, height;
     bool running = true;
     std::string statusMsg;
+    std::string lastSearchTerm;
     
 public:
     LinoApp() {
@@ -279,6 +299,7 @@ public:
         
         menuBar->addMenu("Search", {
             {"Find", "Ctrl+F", [this]() { showSearch(); }},
+            {"Find Next", "F3", [this]() { findNext(); }},
             {"Go to Line", "Ctrl+G", [this]() { gotoLine(); }}
         });
         
@@ -349,11 +370,97 @@ public:
         }
     }
     
+    void findFirst(const std::string& term) {
+        if (term.empty()) return;
+        lastSearchTerm = term;
+        editor->setSearchTerm(term);
+        for (int i = 0; i < doc.lineCount(); i++) {
+            size_t pos = doc.lines[i].find(term, 0);
+            if (pos != std::string::npos) {
+                doc.cursorY = i;
+                doc.cursorX = pos;
+                statusMsg = "Found";
+                editor->ensureVisible();
+                return;
+            }
+        }
+        statusMsg = "Not found";
+    }
+    
+    void findNext(bool skipCurrent = true) {
+        if (lastSearchTerm.empty()) return;
+        editor->setSearchTerm(lastSearchTerm);
+        bool found = false;
+        int startOffset = skipCurrent ? 1 : 0;
+        for (int i = doc.cursorY; i < doc.lineCount() && !found; i++) {
+            size_t startPos = (i == doc.cursorY) ? doc.cursorX + startOffset : 0;
+            size_t pos = doc.lines[i].find(lastSearchTerm, startPos);
+            if (pos != std::string::npos) {
+                doc.cursorY = i;
+                doc.cursorX = pos;
+                found = true;
+            }
+        }
+        if (!found) {
+            for (int i = 0; i < doc.lineCount() && !found; i++) {
+                size_t pos = doc.lines[i].find(lastSearchTerm, 0);
+                if (pos != std::string::npos) {
+                    doc.cursorY = i;
+                    doc.cursorX = pos;
+                    found = true;
+                }
+            }
+        }
+        statusMsg = found ? "Found" : "Not found";
+        editor->ensureVisible();
+    }
+    
     void showSearch() {
         menuBar->closeMenu();
         auto dlg = std::make_shared<SearchDialog>();
         dlg->center(width, height);
+        dlg->syncBounds();
         activeDialog = dlg;
+        
+        dlg->onFind = [this](const std::string& term) {
+            findFirst(term);
+        };
+        
+        dlg->onReplace = [this](const std::string& term, const std::string& rep) {
+            for (int i = 0; i < doc.lineCount(); i++) {
+                size_t pos = doc.lines[i].find(term, 0);
+                if (pos != std::string::npos) {
+                    doc.lines[i].erase(pos, term.size());
+                    doc.lines[i].insert(pos, rep);
+                    doc.cursorY = i;
+                    doc.cursorX = pos;
+                    doc.modified = true;
+                    statusMsg = "Replaced";
+                    editor->ensureVisible();
+                    lastSearchTerm = term;
+                    editor->setSearchTerm(term);
+                    return;
+                }
+            }
+            statusMsg = "Not found";
+        };
+        
+        dlg->onReplaceAll = [this](const std::string& term, const std::string& rep) {
+            int count = 0;
+            for (int i = 0; i < doc.lineCount(); i++) {
+                size_t pos = 0;
+                while ((pos = doc.lines[i].find(term, pos)) != std::string::npos) {
+                    doc.lines[i].erase(pos, term.size());
+                    doc.lines[i].insert(pos, rep);
+                    pos += rep.size();
+                    count++;
+                }
+            }
+            if (count > 0) doc.modified = true;
+            statusMsg = "Replaced " + std::to_string(count) + " occurrence(s)";
+            editor->clearSearch();
+            lastSearchTerm.clear();
+        };
         
         while (!dlg->closed) {
             render();
@@ -361,18 +468,8 @@ public:
         }
         activeDialog = nullptr;
         
-        if (dlg->result && dlg->action == 1) {
-            bool found = false;
-            for (int i = doc.cursorY; i < doc.lineCount() && !found; i++) {
-                size_t pos = doc.line(i).find(dlg->searchTerm, (i == doc.cursorY) ? doc.cursorX + 1 : 0);
-                if (pos != std::string::npos) {
-                    doc.cursorY = i;
-                    doc.cursorX = pos;
-                    found = true;
-                }
-            }
-            statusMsg = found ? "Found" : "Not found";
-            editor->ensureVisible();
+        if (!dlg->result) {
+            editor->clearSearch();
         }
     }
     
@@ -463,6 +560,11 @@ public:
         if (activeDialog) {
             if (key.key) activeDialog->onKey(key);
             if (mouse.evType != MouseEvent::M_NONE) activeDialog->onMouse(mouse);
+            return;
+        }
+        
+        if (!key.ctrl && !key.alt && key.key == 256 + VK_F3) {
+            findNext();
             return;
         }
         

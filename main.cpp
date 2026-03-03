@@ -1395,17 +1395,24 @@ public:
     }
 
     // Get history file path
-    std::string getHistoryFilePath() {
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(NULL, exePath, MAX_PATH);
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path linuxdbDir = exeDir / "linuxdb";
-        
+    std::string getLinuxdbPath() {
+        const char* appdata = std::getenv("APPDATA");
+        fs::path linuxdbDir;
+        if (appdata) {
+            linuxdbDir = fs::path(appdata) / "Linuxify" / "linuxdb";
+        } else {
+            char exePath[MAX_PATH];
+            GetModuleFileNameA(NULL, exePath, MAX_PATH);
+            linuxdbDir = fs::path(exePath).parent_path() / "linuxdb";
+        }
         if (!fs::exists(linuxdbDir)) {
             fs::create_directories(linuxdbDir);
         }
-        
-        return (linuxdbDir / "history.lin").string();
+        return linuxdbDir.string();
+    }
+    
+    std::string getHistoryFilePath() {
+        return (fs::path(getLinuxdbPath()) / "history.lin").string();
     }
 
     // Load history from file
@@ -1445,16 +1452,7 @@ public:
     }
 
     std::string getVarFilePath() {
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(NULL, exePath, MAX_PATH);
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path linuxdbDir = exeDir / "linuxdb";
-        
-        if (!fs::exists(linuxdbDir)) {
-            fs::create_directories(linuxdbDir);
-        }
-        
-        return (linuxdbDir / "var.lin").string();
+        return (fs::path(getLinuxdbPath()) / "var.lin").string();
     }
 
     void loadPersistentVars() {
@@ -5521,17 +5519,7 @@ public:
     }
 
     std::string getPackagesFilePath() {
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(NULL, exePath, MAX_PATH);
-        fs::path exeDir = fs::path(exePath).parent_path();
-        fs::path linuxdbDir = exeDir / "linuxdb";
-        
-        // Create linuxdb directory if it doesn't exist
-        if (!fs::exists(linuxdbDir)) {
-            fs::create_directories(linuxdbDir);
-        }
-        
-        return (linuxdbDir / "packages.lin").string();
+        return (fs::path(getLinuxdbPath()) / "packages.lin").string();
     }
 
     std::map<std::string, std::string> loadPackageAliases() {
@@ -6608,11 +6596,10 @@ public:
             // Setup/verify cron daemon
             std::cout << "Checking cron daemon configuration...\n\n";
             
-            // Get paths
             char exePath[MAX_PATH];
             GetModuleFileNameA(NULL, exePath, MAX_PATH);
             fs::path crondPath = fs::path(exePath).parent_path() / "cmds" / "crond.exe";
-            fs::path crontabPath = fs::path(exePath).parent_path() / "linuxdb" / "crontab";
+            fs::path crontabPath = fs::path(getLinuxdbPath()) / "crontab";
             
             bool allGood = true;
             
@@ -7341,10 +7328,8 @@ public:
                 return result;
             };
             
-            auto getCrontabPath = []() -> std::string {
-                char exePath[MAX_PATH];
-                GetModuleFileNameA(NULL, exePath, MAX_PATH);
-                return (fs::path(exePath).parent_path() / "linuxdb" / "crontab").string();
+            auto getCrontabPath = [this]() -> std::string {
+                return (fs::path(getLinuxdbPath()) / "crontab").string();
             };
             
             if (expandedTokens.size() < 2) {

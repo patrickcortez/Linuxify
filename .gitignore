@@ -1,6 +1,6 @@
 installer/output
-server
 *.img
-linuxdb/nodes
 linuxdb/history.lin
 .agent
+cmds
+*.exe

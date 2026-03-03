@@ -66,11 +66,19 @@ HANDLE g_mutex = NULL;
 // ============================================================================
 
 std::string getLinuxdbPath() {
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata) {
+        fs::path dbPath = fs::path(appdata) / "Linuxify" / "linuxdb";
+        if (!fs::exists(dbPath)) {
+            fs::create_directories(dbPath);
+        }
+        return dbPath.string();
+    }
+    
     char exePath[MAX_PATH];
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     fs::path exeDir = fs::path(exePath).parent_path();
     
-    // If in cmds folder, go up one level
     if (exeDir.filename() == "cmds") {
         exeDir = exeDir.parent_path();
     }

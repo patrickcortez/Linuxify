@@ -61,12 +61,16 @@ LinuxifyRegistry::LinuxifyRegistry() {
 }
 
 std::string LinuxifyRegistry::getLinuxdbPath() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    fs::path exeDir = fs::path(exePath).parent_path();
-    fs::path dbPath = exeDir / "linuxdb";
+    const char* appdata = std::getenv("APPDATA");
+    fs::path dbPath;
+    if (appdata) {
+        dbPath = fs::path(appdata) / "Linuxify" / "linuxdb";
+    } else {
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        dbPath = fs::path(exePath).parent_path() / "linuxdb";
+    }
     
-    // Create directory if it doesn't exist
     if (!fs::exists(dbPath)) {
         fs::create_directories(dbPath);
     }

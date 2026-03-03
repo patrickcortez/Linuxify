@@ -2,11 +2,11 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Linuxify"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.3"
 #define MyAppPublisher "Cortez"
 #define MyAppURL "https://github.com/cortez/linuxify"
 #define MyAppExeName "linuxify.exe"
-#define SourcePath "C:\Users\patri\OneDrive\Documents\Projects\Linuxify"
+#define SourcePath ".."
 
 [Setup]
 AppId={{A8B9C0D1-E2F3-4567-8901-234567890ABC}

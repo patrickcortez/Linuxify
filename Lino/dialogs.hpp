@@ -240,6 +240,10 @@ public:
     std::string replaceTerm;
     int action = 0;
     
+    std::function<void(const std::string&)> onFind;
+    std::function<void(const std::string&, const std::string&)> onReplace;
+    std::function<void(const std::string&, const std::string&)> onReplaceAll;
+    
     SearchDialog() : Dialog("Search & Replace", 70, 10) {
         searchBox = std::make_shared<TextBox>();
         searchBox->bounds = {bounds.x + 12, bounds.y + 2, 50, 1};
@@ -255,7 +259,7 @@ public:
         findBtn->onClick = [this]() { 
             searchTerm = searchBox->text;
             replaceTerm = replaceBox->text;
-            action = 1; closed = true; result = 1; 
+            if (onFind && !searchTerm.empty()) onFind(searchTerm);
         };
         addChild(findBtn);
         
@@ -264,7 +268,7 @@ public:
         replaceBtn->onClick = [this]() {
             searchTerm = searchBox->text;
             replaceTerm = replaceBox->text;
-            action = 2; closed = true; result = 1;
+            if (onReplace && !searchTerm.empty()) onReplace(searchTerm, replaceTerm);
         };
         addChild(replaceBtn);
         
@@ -273,7 +277,10 @@ public:
         replaceAllBtn->onClick = [this]() {
             searchTerm = searchBox->text;
             replaceTerm = replaceBox->text;
-            action = 3; closed = true; result = 1;
+            if (onReplaceAll && !searchTerm.empty()) {
+                onReplaceAll(searchTerm, replaceTerm);
+                closed = true; result = 1; action = 3;
+            }
         };
         addChild(replaceAllBtn);
         
@@ -283,23 +290,35 @@ public:
         addChild(cancelBtn);
     }
     
+    void syncBounds() {
+        searchBox->bounds = {bounds.x + 12, bounds.y + 2, 50, 1};
+        replaceBox->bounds = {bounds.x + 12, bounds.y + 4, 50, 1};
+        findBtn->bounds = {bounds.x + 3, bounds.y + 7, 10, 1};
+        replaceBtn->bounds = {bounds.x + 15, bounds.y + 7, 12, 1};
+        replaceAllBtn->bounds = {bounds.x + 29, bounds.y + 7, 15, 1};
+        cancelBtn->bounds = {bounds.x + 50, bounds.y + 7, 10, 1};
+    }
+    
+    bool onKey(const KeyEvent& e) override {
+        if (e.key == 13 && (searchBox->focused || replaceBox->focused)) {
+            searchTerm = searchBox->text;
+            replaceTerm = replaceBox->text;
+            if (onFind && !searchTerm.empty()) onFind(searchTerm);
+            return true;
+        }
+        return Dialog::onKey(e);
+    }
+    
+    bool onMouse(const MouseEvent& e) override {
+        syncBounds();
+        return Dialog::onMouse(e);
+    }
+    
     void draw(Buffer& buf) override {
+        syncBounds();
         Dialog::draw(buf);
         buf.write(bounds.x + 3, bounds.y + 2, "Search:", Colors::BG_NORMAL | Colors::FG_TEXT);
         buf.write(bounds.x + 3, bounds.y + 4, "Replace:", Colors::BG_NORMAL | Colors::FG_TEXT);
-        
-        searchBox->bounds.x = bounds.x + 12;
-        searchBox->bounds.y = bounds.y + 2;
-        replaceBox->bounds.x = bounds.x + 12;
-        replaceBox->bounds.y = bounds.y + 4;
-        findBtn->bounds.x = bounds.x + 3;
-        findBtn->bounds.y = bounds.y + 7;
-        replaceBtn->bounds.x = bounds.x + 15;
-        replaceBtn->bounds.y = bounds.y + 7;
-        replaceAllBtn->bounds.x = bounds.x + 29;
-        replaceAllBtn->bounds.y = bounds.y + 7;
-        cancelBtn->bounds.x = bounds.x + 50;
-        cancelBtn->bounds.y = bounds.y + 7;
     }
 };
 
