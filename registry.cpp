@@ -87,14 +87,11 @@ std::string LinuxifyRegistry::getDbPath() {
 }
 
 std::string LinuxifyRegistry::findInPath(const std::string& command) {
-    char* pathEnv = nullptr;
-    size_t pathLen = 0;
-    _dupenv_s(&pathEnv, &pathLen, "PATH");
+    const char* pathEnv = getenv("PATH");
     
     if (!pathEnv) return "";
     
     std::string pathStr(pathEnv);
-    free(pathEnv);
     
     std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ".ps1", ".com", ""};
     std::stringstream ss(pathStr);
@@ -122,18 +119,11 @@ std::string LinuxifyRegistry::findInCommonDirs(const std::string& command) {
     std::vector<std::string> commonDirs;
     
     // Get environment variables for common paths
-    char* programFiles = nullptr;
-    char* programFilesX86 = nullptr;
-    char* localAppData = nullptr;
-    char* appData = nullptr;
-    char* userProfile = nullptr;
-    size_t len;
-    
-    _dupenv_s(&programFiles, &len, "ProgramFiles");
-    _dupenv_s(&programFilesX86, &len, "ProgramFiles(x86)");
-    _dupenv_s(&localAppData, &len, "LOCALAPPDATA");
-    _dupenv_s(&appData, &len, "APPDATA");
-    _dupenv_s(&userProfile, &len, "USERPROFILE");
+    const char* programFiles = getenv("ProgramFiles");
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    const char* localAppData = getenv("LOCALAPPDATA");
+    const char* appData = getenv("APPDATA");
+    const char* userProfile = getenv("USERPROFILE");
     
     if (programFiles) {
         commonDirs.push_back(std::string(programFiles) + "\\Git\\bin");
@@ -145,32 +135,27 @@ std::string LinuxifyRegistry::findInCommonDirs(const std::string& command) {
         commonDirs.push_back(std::string(programFiles) + "\\Python312");
         commonDirs.push_back(std::string(programFiles) + "\\Python311");
         commonDirs.push_back(std::string(programFiles) + "\\Python310");
-        free(programFiles);
     }
     
     if (programFilesX86) {
         commonDirs.push_back(std::string(programFilesX86) + "\\Git\\bin");
-        free(programFilesX86);
     }
     
     if (localAppData) {
         commonDirs.push_back(std::string(localAppData) + "\\Programs\\Git\\bin");
         commonDirs.push_back(std::string(localAppData) + "\\Programs\\Python\\Python312");
         commonDirs.push_back(std::string(localAppData) + "\\Programs\\Microsoft VS Code\\bin");
-        free(localAppData);
     }
     
     if (appData) {
         commonDirs.push_back(std::string(appData) + "\\npm");
         commonDirs.push_back(std::string(appData) + "\\Python\\Python312\\Scripts");
-        free(appData);
     }
     
     if (userProfile) {
         commonDirs.push_back(std::string(userProfile) + "\\.cargo\\bin");
         commonDirs.push_back(std::string(userProfile) + "\\go\\bin");
         commonDirs.push_back(std::string(userProfile) + "\\scoop\\shims");
-        free(userProfile);
     }
     
     std::vector<std::string> extensions = {".exe", ".cmd", ".bat", ""};
@@ -238,13 +223,10 @@ int LinuxifyRegistry::refreshRegistry() {
     int foundCount = 0;
     
     // 1. Scan PATH environment variable dynamically
-    char* pathEnv = nullptr;
-    size_t pathLen = 0;
-    _dupenv_s(&pathEnv, &pathLen, "PATH");
+    const char* pathEnv = getenv("PATH");
     
     if (pathEnv) {
         std::string pathStr(pathEnv);
-        free(pathEnv);
         
         std::stringstream ss(pathStr);
         std::string pathDir;
@@ -475,34 +457,26 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             return false;
         }
     } else {
-        // Regular executable - use CreateProcessA for better performance
         cmdLine = "\"" + exePath + "\"";
         for (size_t i = 1; i < args.size(); i++) {
             cmdLine += " \"" + args[i] + "\"";
         }
         
-        std::string baseName = fs::path(command).stem().string();
-        std::transform(baseName.begin(), baseName.end(), baseName.begin(), ::tolower);
-        bool isPythonCmd = (baseName == "python" || baseName == "python3" || baseName == "py");
-        
         HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
-        DWORD oldConsoleMode = 0;
-        if (isPythonCmd) {
-            GetConsoleMode(hStdIn, &oldConsoleMode);
-            DWORD cookedMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT;
-            SetConsoleMode(hStdIn, cookedMode);
-        }
+        HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD oldInputMode = 0, oldOutputMode = 0;
+        GetConsoleMode(hStdIn, &oldInputMode);
+        GetConsoleMode(hStdOut, &oldOutputMode);
+        
+        DWORD cookedMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
+                           ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE;
+        SetConsoleMode(hStdIn, cookedMode);
+        FlushConsoleInputBuffer(hStdIn);
         
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
-        if (!isPythonCmd) {
-            si.dwFlags = STARTF_USESTDHANDLES;
-            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        }
         ZeroMemory(&pi, sizeof(pi));
         
         char cmdBuffer[4096];
@@ -525,12 +499,14 @@ bool LinuxifyRegistry::executeRegisteredCommand(const std::string& command, cons
             CloseHandle(pi.hThread);
         } else {
             DWORD err = GetLastError();
-            if (isPythonCmd) SetConsoleMode(hStdIn, oldConsoleMode);
+            SetConsoleMode(hStdIn, oldInputMode);
+            SetConsoleMode(hStdOut, oldOutputMode);
             ErrorHandling::log(ErrorHandling::Level::Error, "Failed to execute command", __FILE__, __LINE__, err);
             return false;
         }
         
-        if (isPythonCmd) SetConsoleMode(hStdIn, oldConsoleMode);
+        SetConsoleMode(hStdIn, oldInputMode);
+        SetConsoleMode(hStdOut, oldOutputMode);
     }
     
     return true;

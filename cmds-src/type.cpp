@@ -18,11 +18,9 @@ namespace fs = std::filesystem;
 // Dynamic Builtin Lookup - Single Source of Truth via Environment
 std::set<std::string> getBuiltins() {
     std::set<std::string> builtins;
-    char* envBuf = nullptr;
-    size_t sz = 0;
-    if (_dupenv_s(&envBuf, &sz, "LINUXIFY_BUILTINS") == 0 && envBuf != nullptr) {
+    const char* envBuf = getenv("LINUXIFY_BUILTINS");
+    if (envBuf) {
         std::string s(envBuf);
-        free(envBuf);
         
         std::string delimiter = ";"; 
         if (s.find(',') != std::string::npos) delimiter = ",";
@@ -69,11 +67,9 @@ std::string getExecutablePath() {
 std::vector<std::string> findAllInPath(const std::string& cmd) {
     std::vector<std::string> results;
     std::string pathEnv_ = "";
-    char* pathBuf = nullptr;
-    size_t sz = 0;
-    if (_dupenv_s(&pathBuf, &sz, "PATH") == 0 && pathBuf != nullptr) {
+    const char* pathBuf = getenv("PATH");
+    if (pathBuf) {
         pathEnv_ = pathBuf;
-        free(pathBuf);
     }
 
     std::string pathEnv = pathEnv_;

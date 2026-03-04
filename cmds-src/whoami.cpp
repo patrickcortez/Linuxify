@@ -39,11 +39,9 @@ int main(int argc, char* argv[]) {
         return 0;
     } else {
         // Fallback to environment variable
-        char* envUsername = nullptr;
-        size_t len = 0;
-        if (_dupenv_s(&envUsername, &len, "USERNAME") == 0 && envUsername != nullptr) {
+        const char* envUsername = getenv("USERNAME");
+        if (envUsername) {
             std::cout << envUsername << "\n";
-            free(envUsername);
             return 0;
         } else {
             printError("whoami: cannot find name for user ID");

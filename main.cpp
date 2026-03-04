@@ -1542,12 +1542,10 @@ public:
     }
 
     void loadLinuxifyRC() {
-        char* userProfile = nullptr;
-        size_t len = 0;
-        if (_dupenv_s(&userProfile, &len, "USERPROFILE") != 0 || !userProfile) return;
+        const char* userProfile = getenv("USERPROFILE");
+        if (!userProfile) return;
         
         std::string rcPath = std::string(userProfile) + "\\.linuxifyrc";
-        free(userProfile);
         
         if (!fs::exists(rcPath)) {
             std::ofstream newRc(rcPath);
@@ -1669,12 +1667,9 @@ public:
                         if (it != ctx.sessionEnv.end()) {
                             value = it->second;
                         } else {
-                            char* envVal = nullptr;
-                            size_t len;
-                            _dupenv_s(&envVal, &len, inner.c_str());
+                            const char* envVal = getenv(inner.c_str());
                             if (envVal) { 
                                 value = envVal; 
-                                free(envVal); 
                             } else {
                                 // Try as arithmetic expression first
                                 if (Arith::isArithmeticExpression(inner)) {
@@ -1730,10 +1725,8 @@ public:
                     if (it != ctx.sessionEnv.end()) {
                         value = it->second;
                     } else {
-                        char* envVal = nullptr;
-                        size_t len;
-                        _dupenv_s(&envVal, &len, varName.c_str());
-                        if (envVal) { value = envVal; free(envVal); }
+                        const char* envVal = getenv(varName.c_str());
+                        if (envVal) { value = envVal; }
                     }
                     text = text.substr(0, pos) + value + text.substr(close + 1);
                     continue;
@@ -1772,10 +1765,8 @@ public:
                 if (it != ctx.sessionEnv.end()) {
                     value = it->second;
                 } else {
-                    char* envVal = nullptr;
-                    size_t len;
-                    _dupenv_s(&envVal, &len, varName.c_str());
-                    if (envVal) { value = envVal; free(envVal); }
+                    const char* envVal = getenv(varName.c_str());
+                    if (envVal) { value = envVal; }
                 }
                 text = text.substr(0, pos) + value + text.substr(end);
                 continue;
@@ -1858,12 +1849,9 @@ public:
             std::cout << username << std::endl;
         } else {
             // Fallback to environment variable
-            char* user = nullptr;
-            size_t len;
-            _dupenv_s(&user, &len, "USERNAME");
+            const char* user = getenv("USERNAME");
             if (user) {
                 std::cout << user << std::endl;
-                free(user);
             } else {
                 printError("whoami: cannot determine username");
             }
@@ -1961,10 +1949,8 @@ public:
                             if (it != ctx.sessionEnv.end()) {
                                 value = it->second;
                             } else {
-                                char* envVal = nullptr;
-                                size_t len;
-                                _dupenv_s(&envVal, &len, inner.c_str());
-                                if (envVal) { value = envVal; free(envVal); }
+                                const char* envVal = getenv(inner.c_str());
+                                if (envVal) { value = envVal; }
                             }
                         }
                         text = text.substr(0, pos) + value + text.substr(close + 1);
@@ -1979,10 +1965,8 @@ public:
                         if (it != ctx.sessionEnv.end()) {
                             value = it->second;
                         } else {
-                            char* envVal = nullptr;
-                            size_t len;
-                            _dupenv_s(&envVal, &len, varName.c_str());
-                            if (envVal) { value = envVal; free(envVal); }
+                            const char* envVal = getenv(varName.c_str());
+                            if (envVal) { value = envVal; }
                         }
                         text = text.substr(0, pos) + value + text.substr(close + 1);
                         continue;
@@ -1997,10 +1981,8 @@ public:
                     if (it != ctx.sessionEnv.end()) {
                         value = it->second;
                     } else {
-                        char* envVal = nullptr;
-                        size_t len;
-                        _dupenv_s(&envVal, &len, varName.c_str());
-                        if (envVal) { value = envVal; free(envVal); }
+                        const char* envVal = getenv(varName.c_str());
+                        if (envVal) { value = envVal; }
                     }
                     text = text.substr(0, pos) + value + text.substr(end);
                     continue;
@@ -2032,12 +2014,9 @@ public:
                 return;
             }
             
-            char* value = nullptr;
-            size_t len;
-            _dupenv_s(&value, &len, varName.c_str());
+            const char* value = getenv(varName.c_str());
             if (value) {
                 std::cout << value << std::endl;
-                free(value);
             }
             return;
         }
@@ -6380,9 +6359,7 @@ public:
             std::cout << "Adding .SH to PATHEXT for PowerShell...\n";
             
             // Check if .SH is already in PATHEXT
-            char* pathext = nullptr;
-            size_t pathextLen = 0;
-            _dupenv_s(&pathext, &pathextLen, "PATHEXT");
+            const char* pathext = getenv("PATHEXT");
             
             bool needsPathext = true;
             if (pathext) {
@@ -6392,7 +6369,6 @@ public:
                     needsPathext = false;
                     std::cout << ".SH and .LIN already in PATHEXT\n";
                 }
-                free(pathext);
             }
             
             int result3 = 0;
