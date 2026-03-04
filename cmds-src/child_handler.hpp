@@ -16,7 +16,6 @@ public:
 
     static int spawn(const std::string& cmdLine, const std::string& workDir, bool wait = true) {
         std::string finalCmdLine = cmdLine;
-        bool isPythonCmd = false;
         
         {
             std::string firstToken;
@@ -38,11 +37,6 @@ public:
                 }
             }
             
-            std::string baseName = std::filesystem::path(firstToken).stem().string();
-            for (auto& c : baseName) c = (char)tolower((unsigned char)c);
-            if (baseName == "python" || baseName == "python3" || baseName == "py") {
-                isPythonCmd = true;
-            }
             
             std::string ext;
             size_t dotPos = firstToken.rfind('.');
@@ -86,103 +80,38 @@ public:
         strncpy_s(cmdBuffer, finalCmdLine.c_str(), sizeof(cmdBuffer) - 1);
         const char* dir = workDir.empty() ? nullptr : workDir.c_str();
 
-        if (isPythonCmd) {
-            STARTUPINFOA si;
-            PROCESS_INFORMATION pi;
-            ZeroMemory(&si, sizeof(si));
-            si.cb = sizeof(si);
-            ZeroMemory(&pi, sizeof(pi));
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
 
-            BOOL success = CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi);
-            
-            if (!success) {
-                SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
-                signalHandler.init();
-                std::cerr << "[ChildHandler] Failed to create process: " << cmdLine << " Error: " << GetLastError() << "\n";
-                return -1;
-            }
-            
-            int exitCode = 0;
-            if (wait) {
-                g_procMgr.setForegroundPid(pi.dwProcessId);
-                WaitForSingleObject(pi.hProcess, INFINITE);
-                g_procMgr.clearForegroundPid();
-                DWORD code;
-                GetExitCodeProcess(pi.hProcess, &code);
-                exitCode = (int)code;
-            }
-
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
-            signalHandler.init();
-            return exitCode;
-        }
- 
-        SECURITY_ATTRIBUTES sa;
-        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-        sa.bInheritHandle = TRUE;
-        sa.lpSecurityDescriptor = NULL;
-
-        HANDLE hIn = CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-        HANDLE hOut = CreateFileA("CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-        HANDLE hErr = CreateFileA("CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-
-        if (hIn == INVALID_HANDLE_VALUE || hOut == INVALID_HANDLE_VALUE) {
-             std::cerr << "[ChildHandler] Error: Failed to open console handles. Error: " << GetLastError() << "\n";
-             SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
-             signalHandler.init();
-             return -1;
-        }
-
-        DWORD inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
+        DWORD inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
                           ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT;
-        if (!SetConsoleMode(hIn, inputMode)) {
-            inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | 
+        if (!SetConsoleMode(hStdin, inputMode)) {
+            inputMode = ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
                         ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE;
-            SetConsoleMode(hIn, inputMode);
+            SetConsoleMode(hStdin, inputMode);
         }
 
         DWORD outputMode = 0;
-        if (GetConsoleMode(hOut, &outputMode)) {
+        if (GetConsoleMode(hStdout, &outputMode)) {
             outputMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
-            SetConsoleMode(hOut, outputMode);
+            SetConsoleMode(hStdout, outputMode);
         }
-        FlushConsoleInputBuffer(hIn);
+        FlushConsoleInputBuffer(hStdin);
 
         STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = hIn;
-        si.hStdOutput = hOut;
-        si.hStdError = hErr;
-
-        PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
 
-        BOOL success = CreateProcessA(
-            NULL,
-            cmdBuffer,
-            NULL,
-            NULL,
-            TRUE,
-            0,
-            NULL,
-            dir,
-            &si,
-            &pi
-        );
+        BOOL success = CreateProcessA(NULL, cmdBuffer, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi);
 
         if (!success) {
-            CloseHandle(hIn);
-            CloseHandle(hOut);
-            CloseHandle(hErr);
             DWORD err = GetLastError();
             if (err == ERROR_ELEVATION_REQUIRED) {
                 SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
                 signalHandler.init();
-                
+
                 std::string executable;
                 std::string arguments;
                 if (!cmdLine.empty() && cmdLine[0] == '"') {
@@ -210,7 +139,7 @@ public:
                         executable = cmdLine;
                     }
                 }
-                
+
                 SHELLEXECUTEINFOA sei = {0};
                 sei.cbSize = sizeof(sei);
                 sei.fMask = SEE_MASK_NOCLOSEPROCESS;
@@ -219,7 +148,7 @@ public:
                 sei.lpParameters = arguments.empty() ? NULL : arguments.c_str();
                 sei.lpDirectory = dir;
                 sei.nShow = SW_SHOWNORMAL;
-                
+
                 if (ShellExecuteExA(&sei)) {
                     if (wait && sei.hProcess) {
                         WaitForSingleObject(sei.hProcess, INFINITE);
@@ -236,27 +165,22 @@ public:
             }
             std::cerr << "[ChildHandler] Failed to create process: " << cmdLine << " Error: " << err << "\n";
             SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
-            signalHandler.init(); 
+            signalHandler.init();
             return -1;
         }
-        
+
         int exitCode = 0;
         if (wait) {
             g_procMgr.setForegroundPid(pi.dwProcessId);
             WaitForSingleObject(pi.hProcess, INFINITE);
             g_procMgr.clearForegroundPid();
-
             DWORD code;
             GetExitCodeProcess(pi.hProcess, &code);
             exitCode = (int)code;
         }
 
-        CloseHandle(hIn);
-        CloseHandle(hOut);
-        CloseHandle(hErr);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-
         SetConsoleCtrlHandler(SignalHandler::ConsoleCtrlHandler, TRUE);
         signalHandler.init();
 
