@@ -1,5 +1,3 @@
-// LinPTY - Custom Pseudo-Terminal Implementation for Linuxify
-
 #ifndef LINPTY_HPP
 #define LINPTY_HPP
 

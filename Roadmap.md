@@ -51,16 +51,6 @@ Windows kernel with linux syntax for its commands.
 - [X] Shell Scripting: implement all shell syntaxes and features,
 - [X] Implement source,test, function and alias.
 
-## Phase 6: Bundled C++ Toolchain
-
-- [X] Bundle MinGW-w64 GCC 15.x (UCRT, POSIX threads)
-- [X] Compiler commands: gcc, g++, cc, c++
-- [X] Build tools: make, ar, ld, as, ranlib
-- [X] Debug tools: gdb, objdump, addr2line
-- [X] Utility tools: strip, size, strings, nm, c++filt
-- [X] Auto-configure PATH on install
-- [X] Set CC/CXX environment variables for IDE auto-detection
-
 ## Phase 7 Integrating Linux commands and utilities
 
 - [X] Integrate the rest of the Linux commands and utilities

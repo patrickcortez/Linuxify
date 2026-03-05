@@ -1637,6 +1637,42 @@ public:
                     std::string inner = text.substr(end + 1, close - end - 1);
                     std::string value;
                     
+                    if (inner == "RANDOM" || inner.rfind("RANDOM ", 0) == 0 || inner.rfind("RANDOM%", 0) == 0) {
+                        int maxVal = 32768;
+                        size_t pct = inner.find('%');
+                        if (pct != std::string::npos) {
+                            try { maxVal = std::stoi(inner.substr(pct + 1)); } catch (...) {}
+                            if (maxVal == 0) maxVal = 32768;
+                        }
+                        int offset = 0;
+                        size_t replaceEnd = close + 1;
+                        if (replaceEnd < text.length() && (text[replaceEnd] == '+' || text[replaceEnd] == '-')) {
+                            bool neg = (text[replaceEnd] == '-');
+                            size_t numStart = replaceEnd + 1;
+                            size_t numEnd = numStart;
+                            if (numEnd < text.length() && (text[numEnd] == '+' || text[numEnd] == '-')) numEnd++;
+                            while (numEnd < text.length() && std::isdigit(text[numEnd])) numEnd++;
+                            if (numEnd > numStart) {
+                                try { offset = std::stoi(text.substr(numStart, numEnd - numStart)); } catch (...) {}
+                                if (neg) offset = -offset;
+                                replaceEnd = numEnd;
+                            }
+                        }
+                        int raw = 0;
+                        if (pct != std::string::npos) {
+                            int high = std::max(maxVal, offset);
+                            int low = std::min(maxVal, offset);
+                            int range = high - low + 1;
+                            if (range <= 0) range = 1;
+                            raw = (rand() % range) + low;
+                        } else {
+                            raw = (rand() % 32768) + offset;
+                        }
+                        value = std::to_string(raw);
+                        text = text.substr(0, pos) + value + text.substr(replaceEnd);
+                        continue;
+                    }
+                    
                     // Check if this is array access $(arr[idx])
                     size_t bracket = inner.find('[');
                     if (bracket != std::string::npos && inner.back() == ']') {
@@ -1659,43 +1695,39 @@ public:
                             }
                         }
                     } 
-                    // Check if this is a simple variable $(VAR) - no spaces, known as variable
                     else if (inner.find(' ') == std::string::npos && 
                              inner.find('\t') == std::string::npos) {
-                        // First try as variable
-                        auto it = ctx.sessionEnv.find(inner);
-                        if (it != ctx.sessionEnv.end()) {
-                            value = it->second;
+                        if (inner == "RANDOM") {
+                            value = std::to_string(rand() % 32768);
                         } else {
-                            const char* envVal = getenv(inner.c_str());
-                            if (envVal) { 
-                                value = envVal; 
+                            auto it = ctx.sessionEnv.find(inner);
+                            if (it != ctx.sessionEnv.end()) {
+                                value = it->second;
                             } else {
-                                // Try as arithmetic expression first
-                                if (Arith::isArithmeticExpression(inner)) {
-                                    try {
-                                        value = Arith::evaluate(inner);
-                                    } catch (...) {
-                                        // Not valid arithmetic - treat as command substitution
+                                const char* envVal = getenv(inner.c_str());
+                                if (envVal) { 
+                                    value = envVal; 
+                                } else {
+                                    if (Arith::isArithmeticExpression(inner)) {
+                                        try {
+                                            value = Arith::evaluate(inner);
+                                        } catch (...) {
+                                            value = executeAndCapture(inner);
+                                            while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+                                                value.pop_back();
+                                            }
+                                        }
+                                    } else {
                                         value = executeAndCapture(inner);
                                         while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
                                             value.pop_back();
                                         }
                                     }
-                                } else {
-                                    // Not a known variable - treat as command substitution
-                                    value = executeAndCapture(inner);
-                                    // Trim trailing newlines from command output
-                                    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
-                                        value.pop_back();
-                                    }
                                 }
                             }
                         }
                     }
-                    // Contains spaces - check for arithmetic first, then command substitution
                     else {
-                        // Try as arithmetic expression first
                         if (Arith::isArithmeticExpression(inner)) {
                             try {
                                 value = Arith::evaluate(inner);
@@ -1707,7 +1739,6 @@ public:
                             }
                         } else {
                             value = executeAndCapture(inner);
-                            // Trim trailing newlines from command output
                             while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
                                 value.pop_back();
                             }
@@ -1721,12 +1752,16 @@ public:
                 if (close != std::string::npos) {
                     std::string varName = text.substr(end + 1, close - end - 1);
                     std::string value;
-                    auto it = ctx.sessionEnv.find(varName);
-                    if (it != ctx.sessionEnv.end()) {
-                        value = it->second;
+                    if (varName == "RANDOM") {
+                        value = std::to_string(rand() % 32768);
                     } else {
-                        const char* envVal = getenv(varName.c_str());
-                        if (envVal) { value = envVal; }
+                        auto it = ctx.sessionEnv.find(varName);
+                        if (it != ctx.sessionEnv.end()) {
+                            value = it->second;
+                        } else {
+                            const char* envVal = getenv(varName.c_str());
+                            if (envVal) { value = envVal; }
+                        }
                     }
                     text = text.substr(0, pos) + value + text.substr(close + 1);
                     continue;
@@ -1761,12 +1796,16 @@ public:
 
                 std::string varName = text.substr(pos + 1, end - pos - 1);
                 std::string value;
-                auto it = ctx.sessionEnv.find(varName);
-                if (it != ctx.sessionEnv.end()) {
-                    value = it->second;
+                if (varName == "RANDOM") {
+                    value = std::to_string(rand() % 32768);
                 } else {
-                    const char* envVal = getenv(varName.c_str());
-                    if (envVal) { value = envVal; }
+                    auto it = ctx.sessionEnv.find(varName);
+                    if (it != ctx.sessionEnv.end()) {
+                        value = it->second;
+                    } else {
+                        const char* envVal = getenv(varName.c_str());
+                        if (envVal) { value = envVal; }
+                    }
                 }
                 text = text.substr(0, pos) + value + text.substr(end);
                 continue;
@@ -1931,6 +1970,42 @@ public:
                         std::string inner = text.substr(end + 1, close - end - 1);
                         std::string value;
                         
+                        if (inner == "RANDOM" || inner.rfind("RANDOM ", 0) == 0 || inner.rfind("RANDOM%", 0) == 0) {
+                            int maxVal = 32768;
+                            size_t pct = inner.find('%');
+                            if (pct != std::string::npos) {
+                                try { maxVal = std::stoi(inner.substr(pct + 1)); } catch (...) {}
+                                if (maxVal == 0) maxVal = 32768;
+                            }
+                            int offset = 0;
+                            size_t replaceEnd = close + 1;
+                            if (replaceEnd < text.length() && (text[replaceEnd] == '+' || text[replaceEnd] == '-')) {
+                                bool neg = (text[replaceEnd] == '-');
+                                size_t numStart = replaceEnd + 1;
+                                size_t numEnd = numStart;
+                                if (numEnd < text.length() && (text[numEnd] == '+' || text[numEnd] == '-')) numEnd++;
+                                while (numEnd < text.length() && std::isdigit(text[numEnd])) numEnd++;
+                                if (numEnd > numStart) {
+                                    try { offset = std::stoi(text.substr(numStart, numEnd - numStart)); } catch (...) {}
+                                    if (neg) offset = -offset;
+                                    replaceEnd = numEnd;
+                                }
+                            }
+                            int raw = 0;
+                            if (pct != std::string::npos) {
+                                int high = std::max(maxVal, offset);
+                                int low = std::min(maxVal, offset);
+                                int range = high - low + 1;
+                                if (range <= 0) range = 1;
+                                raw = (rand() % range) + low;
+                            } else {
+                                raw = (rand() % 32768) + offset;
+                            }
+                            value = std::to_string(raw);
+                            text = text.substr(0, pos) + value + text.substr(replaceEnd);
+                            continue;
+                        }
+                        
                         size_t bracket = inner.find('[');
                         if (bracket != std::string::npos && inner.back() == ']') {
                             std::string arrName = inner.substr(0, bracket);
@@ -1945,12 +2020,16 @@ public:
                                 } catch (...) {}
                             }
                         } else {
-                            auto it = ctx.sessionEnv.find(inner);
-                            if (it != ctx.sessionEnv.end()) {
-                                value = it->second;
+                            if (inner == "RANDOM") {
+                                value = std::to_string(rand() % 32768);
                             } else {
-                                const char* envVal = getenv(inner.c_str());
-                                if (envVal) { value = envVal; }
+                                auto it = ctx.sessionEnv.find(inner);
+                                if (it != ctx.sessionEnv.end()) {
+                                    value = it->second;
+                                } else {
+                                    const char* envVal = getenv(inner.c_str());
+                                    if (envVal) { value = envVal; }
+                                }
                             }
                         }
                         text = text.substr(0, pos) + value + text.substr(close + 1);
@@ -1961,12 +2040,16 @@ public:
                     if (close != std::string::npos) {
                         std::string varName = text.substr(end + 1, close - end - 1);
                         std::string value;
-                        auto it = ctx.sessionEnv.find(varName);
-                        if (it != ctx.sessionEnv.end()) {
-                            value = it->second;
+                        if (varName == "RANDOM") {
+                            value = std::to_string(rand() % 32768);
                         } else {
-                            const char* envVal = getenv(varName.c_str());
-                            if (envVal) { value = envVal; }
+                            auto it = ctx.sessionEnv.find(varName);
+                            if (it != ctx.sessionEnv.end()) {
+                                value = it->second;
+                            } else {
+                                const char* envVal = getenv(varName.c_str());
+                                if (envVal) { value = envVal; }
+                            }
                         }
                         text = text.substr(0, pos) + value + text.substr(close + 1);
                         continue;
@@ -1977,12 +2060,16 @@ public:
                     }
                     std::string varName = text.substr(pos + 1, end - pos - 1);
                     std::string value;
-                    auto it = ctx.sessionEnv.find(varName);
-                    if (it != ctx.sessionEnv.end()) {
-                        value = it->second;
+                    if (varName == "RANDOM") {
+                        value = std::to_string(rand() % 32768);
                     } else {
-                        const char* envVal = getenv(varName.c_str());
-                        if (envVal) { value = envVal; }
+                        auto it = ctx.sessionEnv.find(varName);
+                        if (it != ctx.sessionEnv.end()) {
+                            value = it->second;
+                        } else {
+                            const char* envVal = getenv(varName.c_str());
+                            if (envVal) { value = envVal; }
+                        }
                     }
                     text = text.substr(0, pos) + value + text.substr(end);
                     continue;
@@ -8812,6 +8899,7 @@ public:
 int main(int argc, char* argv[]) {
     // 1. Initialize Crash Handler immediately
     CrashHandler::init();
+    srand((unsigned int)time(nullptr));
     
     // Enterprise System Initialization
     Interrupt::init();

@@ -1938,6 +1938,43 @@ private:
             if (depth == 0) {
                 std::string inner = result.substr(start + 2, end - start - 3);
                 
+                if (inner == "RANDOM" || inner.rfind("RANDOM ", 0) == 0 || inner.rfind("RANDOM%", 0) == 0) {
+                    int maxVal = 32768;
+                    size_t pct = inner.find('%');
+                    if (pct != std::string::npos) {
+                        try { maxVal = std::stoi(inner.substr(pct + 1)); } catch (...) {}
+                        if (maxVal == 0) maxVal = 32768;
+                    }
+                    int offset = 0;
+                    size_t replaceEnd = end;
+                    if (replaceEnd < result.size() && (result[replaceEnd] == '+' || result[replaceEnd] == '-')) {
+                        bool neg = (result[replaceEnd] == '-');
+                        size_t numStart = replaceEnd + 1;
+                        size_t numEnd = numStart;
+                        if (numEnd < result.size() && (result[numEnd] == '+' || result[numEnd] == '-')) numEnd++;
+                        while (numEnd < result.size() && std::isdigit(result[numEnd])) numEnd++;
+                        if (numEnd > numStart) {
+                            try { offset = std::stoi(result.substr(numStart, numEnd - numStart)); } catch (...) {}
+                            if (neg) offset = -offset;
+                            replaceEnd = numEnd;
+                        }
+                    }
+                    int raw = 0;
+                    if (pct != std::string::npos) {
+                        int high = std::max(maxVal, offset);
+                        int low = std::min(maxVal, offset);
+                        int range = high - low + 1;
+                        if (range <= 0) range = 1;
+                        raw = (rand() % range) + low;
+                    } else {
+                        raw = (rand() % 32768) + offset;
+                    }
+                    std::string value = std::to_string(raw);
+                    result.replace(start, replaceEnd - start, value);
+                    start += value.length();
+                    continue;
+                }
+                
                 size_t bracketPos = inner.find('[');
                 if (bracketPos != std::string::npos && inner.back() == ']') {
                     std::string arrName = inner.substr(0, bracketPos);
@@ -2094,7 +2131,9 @@ private:
             std::string varName = match[1];
             std::string varValue;
             
-            if (_variableMap->count(varName)) {
+            if (varName == "RANDOM") {
+                varValue = std::to_string(rand() % 32768);
+            } else if (_variableMap->count(varName)) {
                 varValue = (*_variableMap)[varName];
             } else {
                 char* envVal = getenv(varName.c_str());

@@ -6,12 +6,42 @@
 
 namespace TUI {
 
+struct LineDiff {
+    enum Type { MODIFY, INSERT, REMOVE };
+    Type type;
+    int lineIdx;
+    std::string oldContent;
+};
+
+struct UndoEntry {
+    std::vector<LineDiff> diffs;
+    int cursorX, cursorY;
+};
+
+struct UndoManager {
+    std::deque<UndoEntry> undoStack;
+    std::deque<UndoEntry> redoStack;
+    static const int MAX_HISTORY = 512;
+
+    void record(UndoEntry entry) {
+        if (undoStack.size() >= MAX_HISTORY) undoStack.pop_front();
+        undoStack.push_back(std::move(entry));
+        redoStack.clear();
+    }
+
+    void clear() {
+        undoStack.clear();
+        redoStack.clear();
+    }
+};
+
 struct Document {
     std::vector<std::string> lines;
     std::string filename;
     bool modified = false;
     int cursorX = 0, cursorY = 0;
     int scrollX = 0, scrollY = 0;
+    UndoManager undoMgr;
     
     Document() { lines.push_back(""); }
     
@@ -28,6 +58,7 @@ struct Document {
         filename = path;
         modified = false;
         cursorX = cursorY = scrollX = scrollY = 0;
+        undoMgr.clear();
         return true;
     }
     
@@ -113,6 +144,10 @@ public:
         if (!doc) return false;
         
         if (e.key >= 32 && e.key < 127 && !e.ctrl && !e.alt) {
+            UndoEntry ue;
+            ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+            ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+            doc->undoMgr.record(std::move(ue));
             doc->line(doc->cursorY).insert(doc->cursorX, 1, (char)e.key);
             doc->cursorX++;
             doc->modified = true;
@@ -122,10 +157,15 @@ public:
         
         switch (e.key) {
             case 13: {
+                UndoEntry ue;
+                ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
                 std::string& cur = doc->line(doc->cursorY);
                 std::string rest = cur.substr(doc->cursorX);
                 cur = cur.substr(0, doc->cursorX);
                 doc->lines.insert(doc->lines.begin() + doc->cursorY + 1, rest);
+                ue.diffs.push_back({LineDiff::INSERT, doc->cursorY + 1, ""});
+                doc->undoMgr.record(std::move(ue));
                 doc->cursorY++;
                 doc->cursorX = 0;
                 doc->modified = true;
@@ -134,10 +174,19 @@ public:
             }
             case 8:
                 if (doc->cursorX > 0) {
+                    UndoEntry ue;
+                    ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                    doc->undoMgr.record(std::move(ue));
                     doc->line(doc->cursorY).erase(doc->cursorX - 1, 1);
                     doc->cursorX--;
                     doc->modified = true;
                 } else if (doc->cursorY > 0) {
+                    UndoEntry ue;
+                    ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY - 1, doc->line(doc->cursorY - 1)});
+                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY, doc->line(doc->cursorY)});
+                    doc->undoMgr.record(std::move(ue));
                     doc->cursorX = doc->line(doc->cursorY - 1).size();
                     doc->line(doc->cursorY - 1) += doc->line(doc->cursorY);
                     doc->lines.erase(doc->lines.begin() + doc->cursorY);
@@ -146,11 +195,16 @@ public:
                 }
                 ensureVisible();
                 return true;
-            case 9:
+            case 9: {
+                UndoEntry ue;
+                ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                doc->undoMgr.record(std::move(ue));
                 doc->line(doc->cursorY).insert(doc->cursorX, "    ");
                 doc->cursorX += 4;
                 doc->modified = true;
                 return true;
+            }
             case 256 + VK_UP:
                 if (doc->cursorY > 0) doc->cursorY--;
                 doc->cursorX = std::min(doc->cursorX, (int)doc->line(doc->cursorY).size());
@@ -191,9 +245,18 @@ public:
                 return true;
             case 256 + VK_DELETE:
                 if (doc->cursorX < (int)doc->line(doc->cursorY).size()) {
+                    UndoEntry ue;
+                    ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                    doc->undoMgr.record(std::move(ue));
                     doc->line(doc->cursorY).erase(doc->cursorX, 1);
                     doc->modified = true;
                 } else if (doc->cursorY < doc->lineCount() - 1) {
+                    UndoEntry ue;
+                    ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY + 1, doc->line(doc->cursorY + 1)});
+                    doc->undoMgr.record(std::move(ue));
                     doc->line(doc->cursorY) += doc->line(doc->cursorY + 1);
                     doc->lines.erase(doc->lines.begin() + doc->cursorY + 1);
                     doc->modified = true;
@@ -292,6 +355,67 @@ public:
         });
         
         menuBar->addMenu("Edit", {
+            {"Undo", "Ctrl+Z", [this]() {
+                if (doc.undoMgr.undoStack.empty()) { statusMsg = "Nothing to undo"; return; }
+                UndoEntry& entry = doc.undoMgr.undoStack.back();
+                UndoEntry redo;
+                redo.cursorX = doc.cursorX; redo.cursorY = doc.cursorY;
+                for (int i = (int)entry.diffs.size() - 1; i >= 0; i--) {
+                    LineDiff& d = entry.diffs[i];
+                    switch (d.type) {
+                        case LineDiff::MODIFY:
+                            redo.diffs.push_back({LineDiff::MODIFY, d.lineIdx, doc.lines[d.lineIdx]});
+                            doc.lines[d.lineIdx] = d.oldContent;
+                            break;
+                        case LineDiff::INSERT:
+                            redo.diffs.push_back({LineDiff::REMOVE, d.lineIdx, doc.lines[d.lineIdx]});
+                            doc.lines.erase(doc.lines.begin() + d.lineIdx);
+                            break;
+                        case LineDiff::REMOVE:
+                            doc.lines.insert(doc.lines.begin() + d.lineIdx, d.oldContent);
+                            redo.diffs.push_back({LineDiff::INSERT, d.lineIdx, ""});
+                            break;
+                    }
+                }
+                doc.cursorX = entry.cursorX; doc.cursorY = entry.cursorY;
+                doc.undoMgr.undoStack.pop_back();
+                if (doc.undoMgr.redoStack.size() >= UndoManager::MAX_HISTORY) doc.undoMgr.redoStack.pop_front();
+                doc.undoMgr.redoStack.push_back(std::move(redo));
+                doc.modified = true;
+                editor->ensureVisible();
+                statusMsg = "Undo";
+            }},
+            {"Redo", "Ctrl+Y", [this]() {
+                if (doc.undoMgr.redoStack.empty()) { statusMsg = "Nothing to redo"; return; }
+                UndoEntry& entry = doc.undoMgr.redoStack.back();
+                UndoEntry undo;
+                undo.cursorX = doc.cursorX; undo.cursorY = doc.cursorY;
+                for (int i = (int)entry.diffs.size() - 1; i >= 0; i--) {
+                    LineDiff& d = entry.diffs[i];
+                    switch (d.type) {
+                        case LineDiff::MODIFY:
+                            undo.diffs.push_back({LineDiff::MODIFY, d.lineIdx, doc.lines[d.lineIdx]});
+                            doc.lines[d.lineIdx] = d.oldContent;
+                            break;
+                        case LineDiff::INSERT:
+                            undo.diffs.push_back({LineDiff::REMOVE, d.lineIdx, doc.lines[d.lineIdx]});
+                            doc.lines.erase(doc.lines.begin() + d.lineIdx);
+                            break;
+                        case LineDiff::REMOVE:
+                            doc.lines.insert(doc.lines.begin() + d.lineIdx, d.oldContent);
+                            undo.diffs.push_back({LineDiff::INSERT, d.lineIdx, ""});
+                            break;
+                    }
+                }
+                doc.cursorX = entry.cursorX; doc.cursorY = entry.cursorY;
+                doc.undoMgr.redoStack.pop_back();
+                if (doc.undoMgr.undoStack.size() >= UndoManager::MAX_HISTORY) doc.undoMgr.undoStack.pop_front();
+                doc.undoMgr.undoStack.push_back(std::move(undo));
+                doc.modified = true;
+                editor->ensureVisible();
+                statusMsg = "Redo";
+            }},
+            {"", "", nullptr, true},
             {"Cut", "Ctrl+X", [this]() { statusMsg = "Cut"; }},
             {"Copy", "Ctrl+C", [this]() { statusMsg = "Copy"; }},
             {"Paste", "Ctrl+V", [this]() { statusMsg = "Paste"; }}
@@ -319,6 +443,7 @@ public:
     
     void newFile() {
         doc = Document();
+        doc.undoMgr.clear();
         statusMsg = "New file";
         menuBar->closeMenu();
     }
@@ -430,6 +555,10 @@ public:
             for (int i = 0; i < doc.lineCount(); i++) {
                 size_t pos = doc.lines[i].find(term, 0);
                 if (pos != std::string::npos) {
+                    UndoEntry ue;
+                    ue.cursorX = doc.cursorX; ue.cursorY = doc.cursorY;
+                    ue.diffs.push_back({LineDiff::MODIFY, i, doc.lines[i]});
+                    doc.undoMgr.record(std::move(ue));
                     doc.lines[i].erase(pos, term.size());
                     doc.lines[i].insert(pos, rep);
                     doc.cursorY = i;
@@ -446,17 +575,25 @@ public:
         };
         
         dlg->onReplaceAll = [this](const std::string& term, const std::string& rep) {
+            UndoEntry ue;
+            ue.cursorX = doc.cursorX; ue.cursorY = doc.cursorY;
             int count = 0;
             for (int i = 0; i < doc.lineCount(); i++) {
-                size_t pos = 0;
-                while ((pos = doc.lines[i].find(term, pos)) != std::string::npos) {
-                    doc.lines[i].erase(pos, term.size());
-                    doc.lines[i].insert(pos, rep);
-                    pos += rep.size();
-                    count++;
+                size_t pos = doc.lines[i].find(term, 0);
+                if (pos != std::string::npos) {
+                    ue.diffs.push_back({LineDiff::MODIFY, i, doc.lines[i]});
+                    while ((pos = doc.lines[i].find(term, pos)) != std::string::npos) {
+                        doc.lines[i].erase(pos, term.size());
+                        doc.lines[i].insert(pos, rep);
+                        pos += rep.size();
+                        count++;
+                    }
                 }
             }
-            if (count > 0) doc.modified = true;
+            if (count > 0) {
+                doc.undoMgr.record(std::move(ue));
+                doc.modified = true;
+            }
             statusMsg = "Replaced " + std::to_string(count) + " occurrence(s)";
             editor->clearSearch();
             lastSearchTerm.clear();
@@ -576,6 +713,16 @@ public:
                 case 17: quit(); return;
                 case 6: showSearch(); return;
                 case 7: gotoLine(); return;
+                case 26: {
+                    auto& editMenu = menuBar->menus[1];
+                    if (editMenu.items.size() > 0 && editMenu.items[0].action) editMenu.items[0].action();
+                    return;
+                }
+                case 25: {
+                    auto& editMenu = menuBar->menus[1];
+                    if (editMenu.items.size() > 1 && editMenu.items[1].action) editMenu.items[1].action();
+                    return;
+                }
             }
         }
         
