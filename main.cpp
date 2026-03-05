@@ -8523,6 +8523,13 @@ public:
         trimmed.erase(0, trimmed.find_first_not_of(" \t"));
         if (!trimmed.empty()) trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
         
+        bool runInBackground = false;
+        if (!trimmed.empty() && trimmed.back() == '&') {
+            runInBackground = true;
+            trimmed.pop_back(); // Remove the '&'
+            trimmed.erase(trimmed.find_last_not_of(" \t") + 1); // Trim any spaces before '&'
+        }
+
         // Explicit AutoNav: if inputs start with markers (./, /, ~, ..)
         if (AutoNav::isNavigablePath(trimmed, ctx.currentDir)) {
             std::string targetDir = AutoNav::getResolvedDirectory(trimmed, ctx.currentDir);
@@ -8605,9 +8612,48 @@ public:
             if (cmd.substr(0, 2) == "./" || cmd.substr(0, 2) == ".\\") {
                 execPath = cmd.substr(2);
             }
-            runExecutable(execPath, tokens);
+            
+            if (runInBackground) {
+                // To run in the background we need to call ChildHandler::spawn but NOT wait.
+                // However, runExecutable inside might be hardcoded to wait, let's just launch directly:
+                std::string fullCmdArgs = "\"" + resolvePath(execPath) + "\"";
+                for (size_t i = 1; i < tokens.size(); i++) {
+                    fullCmdArgs += " \"" + tokens[i] + "\"";
+                }
+                
+                // Spawn the process and DO NOT wait
+                ChildHandler::spawn(fullCmdArgs, ctx.currentDir, false);
+                return 0; // Immediate return for background processes
+            } else {
+                runExecutable(execPath, tokens);
+            }
         } else {
-            executeCommand(tokens);
+            if (runInBackground && !internalCmds.count(cmd)) {
+                // Find executable
+                std::string execPath;
+                std::string regPath = g_registry.getExecutablePath(cmd);
+                if (!regPath.empty() && fs::exists(regPath)) execPath = regPath;
+                else {
+                    char exePath[MAX_PATH];
+                    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+                    fs::path cmdsDir = fs::path(exePath).parent_path() / "cmds";
+                    std::vector<std::string> exts = {".exe", ".cmd", ".bat", ""};
+                    for (const auto& ext : exts) {
+                        fs::path tryPath = cmdsDir / (cmd + ext);
+                        if (fs::exists(tryPath)) { execPath = tryPath.string(); break; }
+                    }
+                }
+                if (execPath.empty()) execPath = cmd;
+                
+                std::string fullCmdArgs = "\"" + execPath + "\"";
+                for (size_t i = 1; i < tokens.size(); i++) {
+                    fullCmdArgs += " \"" + tokens[i] + "\"";
+                }
+                ChildHandler::spawn(fullCmdArgs, ctx.currentDir, false);
+                return 0;
+            } else {
+                executeCommand(tokens);
+            }
         }
         return ctx.lastExitCode;
     }
