@@ -72,19 +72,36 @@ namespace IO {
             WriteConsoleA(hOut, text.c_str(), (DWORD)text.length(), &written, NULL);
         }
 
-        // Optimized screen clear
+        // Optimized screen clear (GUI + Buffer)
         void clearScreen() {
-            updateInfo();
-            DWORD count;
-            DWORD cellCount = csbi.dwSize.X * csbi.dwSize.Y;
-            COORD homeCoords = { 0, 0 };
-            FillConsoleOutputCharacterA(hOut, ' ', cellCount, homeCoords, &count);
-            FillConsoleOutputAttribute(hOut, csbi.wAttributes, cellCount, homeCoords, &count);
-            setCursorPos(0, 0);
-        }
+            DWORD dwMode = 0;
+            
+            if (GetConsoleMode(hOut, &dwMode) && (dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
 
-        // Robust Area Clear - Clears from specific row to end of current view
-        // Used for clean repainting of multi-line prompts
+                write("\x1b[2J\x1b[3J\x1b[H");
+            } else {
+                // Legacy Fallback (for older conhost.exe without VT support)
+                updateInfo();
+                
+                COORD topLeft = { 0, 0 };
+                DWORD cCharsWritten;
+                DWORD dwConSize = csbi.dwSize.X * csbi.dwSize.Y;
+
+                // Fill the entire screen with blanks
+                FillConsoleOutputCharacterA(hOut, (TCHAR)' ', dwConSize, topLeft, &cCharsWritten);
+                FillConsoleOutputAttribute(hOut, csbi.wAttributes, dwConSize, topLeft, &cCharsWritten);
+                
+                // Put the cursor at its home coordinates
+                SetConsoleCursorPosition(hOut, topLeft);
+                
+                // Force the GUI viewport to reset to the top of the buffer
+                SMALL_RECT scrollRect = csbi.srWindow;
+                scrollRect.Bottom = scrollRect.Bottom - scrollRect.Top; // Maintain current height
+                scrollRect.Top = 0;                                     // Move view to the top
+                SetConsoleWindowInfo(hOut, TRUE, &scrollRect);
+            }
+        }
+        
         void clearArea(int startRow, int numLines) {
             updateInfo();
             COORD clearPos;
@@ -117,4 +134,4 @@ namespace IO {
 
 } 
 
-#endif 
+#endif
