@@ -410,26 +410,23 @@ private:
             promptLen += 1 + (int)branch.length();
         }
         
-        int contentLen = (int)inputBuffer.length();
-        if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
-             std::string bufLower = inputBuffer;
-             std::string sugLower = currentSuggestion.substr(0, inputBuffer.length());
-             std::transform(bufLower.begin(), bufLower.end(), bufLower.begin(), ::tolower);
-             std::transform(sugLower.begin(), sugLower.end(), sugLower.begin(), ::tolower);
-
-             if (bufLower == sugLower) {
-                 contentLen = (int)currentSuggestion.length();
-             }
-        }
-
-        int totalLen = promptLen + contentLen;
-        int numLines = (totalLen + width - 1) / width;
-        if (numLines < 1) numLines = 1;
-
-        // Handle Scrolling
+        // Handle Scrolling (pre-calc)
         int startRow = promptStartRow;
         if (startRow < 0) startRow = 0;
-        
+
+        int cx = promptLen;
+        int cy = startRow;
+        for (size_t i = 0; i < inputBuffer.length(); i++) {
+            if (inputBuffer[i] == '\n') {
+                cx = 2; // Length of "> "
+                cy++;
+            } else {
+                cx++;
+                if (cx >= width) { cx = 0; cy++; }
+            }
+        }
+        int numLines = cy - startRow + 1;
+
         int linesNeeded = startRow + numLines;
         if (linesNeeded > height) {
             int scrollAmount = linesNeeded - height;
@@ -438,11 +435,8 @@ private:
         }
 
         // Clear and Reset
-        // NO - causes flicker: io.clearArea(startRow, numLines);
         io.setCursorPos(0, (SHORT)startRow);
         printPrompt();
-
-        // if (inputBuffer.empty()) return; - REMOVED to ensure clearing happens
 
         // Syntax Highlighting Loop
         bool inQuotes = false;
@@ -464,6 +458,15 @@ private:
                 io.setColor(BACKGROUND_BLUE | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
                 std::string s(1, c); io.write(s);
                 continue; // Skip syntax highlighting for selected text
+            }
+
+            if (c == '\n') {
+                io.clearFromCursor(); 
+                io.setColor(IO::Console::COLOR_DEFAULT);
+                io.write("\n> ");
+                isFirstToken = true;
+                if (inQuotes) io.setColor(IO::Console::COLOR_STRING);
+                continue;
             }
 
             if ((c == '"' || c == '\'') && !inQuotes) {
@@ -537,10 +540,18 @@ private:
         lastNumLines = numLines;
 
         // Set Cursor
-        int totalCursor = promptLen + cursorPos;
-        SHORT cx = (SHORT)(totalCursor % width);
-        SHORT cy = (SHORT)(startRow + totalCursor / width);
-        io.setCursorPos(cx, cy);
+        cx = promptLen;
+        cy = startRow;
+        for (int i = 0; i < cursorPos; i++) {
+            if (inputBuffer[i] == '\n') {
+                cx = 2; // Length of "> "
+                cy++;
+            } else {
+                cx++;
+                if (cx >= width) { cx = 0; cy++; }
+            }
+        }
+        io.setCursorPos((SHORT)cx, (SHORT)cy);
     }
 
 public:
@@ -616,6 +627,58 @@ public:
         if (vk == VK_RETURN) {
             // Fix: Clear any ghost text/suggestions before moving to next line
             currentSuggestion.clear();
+            
+            // History Expansion: !! and !$ (only handle this if we're not inside a multiline string from the start)
+            if (!history.empty() && !inputBuffer.empty()) {
+                std::string expanded;
+                size_t i = 0;
+                bool changed = false;
+                while (i < inputBuffer.length()) {
+                    if (inputBuffer[i] == '!' && i + 1 < inputBuffer.length()) {
+                        if (inputBuffer[i + 1] == '!') {
+                            expanded += history.back();
+                            changed = true;
+                            i += 2;
+                            continue;
+                        } else if (inputBuffer[i + 1] == '$') {
+                            std::string lastCmd = history.back();
+                            // Find last token (space separated)
+                            size_t lastSpace = lastCmd.find_last_of(" \t");
+                            if (lastSpace != std::string::npos) {
+                                expanded += lastCmd.substr(lastSpace + 1);
+                            } else {
+                                expanded += lastCmd;
+                            }
+                            changed = true;
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    expanded += inputBuffer[i];
+                    i++;
+                }
+                
+                if (changed) {
+                    inputBuffer = expanded;
+                }
+            }
+
+            // Check for unclosed quotes
+            bool openSingle = false;
+            bool openDouble = false;
+            for (char c : inputBuffer) {
+                if (c == '\'' && !openDouble) openSingle = !openSingle;
+                else if (c == '"' && !openSingle) openDouble = !openDouble;
+            }
+
+            if (openSingle || openDouble) {
+                inputBuffer += '\n'; // Add newline and continue accepting input
+                cursorPos++;
+                
+                render(); 
+                return PollResult::Continue;
+            }
+
             render();
             
             ShellIO::sout.setPromptActive(false);

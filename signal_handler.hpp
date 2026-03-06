@@ -75,15 +75,18 @@ namespace SignalHandler {
             }
             enableRawMode();
         }
+
         void enableRawMode() { 
             if (!initialized) return;  
             DWORD newMode = ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT;
             SetConsoleMode(hStdin, newMode);  
         }  
+
         void enableMouse(bool enable) {
             mouseEnabled = enable;
             if (initialized) enableRawMode();
         }
+        
         void restore() {
             if (initialized) {
                 DWORD cookedMode = originalMode | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
@@ -166,7 +169,7 @@ namespace SignalHandler {
         if (g_interruptCallback) g_interruptCallback();
         else std::cout << "^C\n";
     }
-
+    
     inline void handleSuspend() {
         if (g_signalsBlocked.load()) return;
         if (g_suspendCallback) {
