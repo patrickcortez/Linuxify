@@ -1,16 +1,175 @@
 // Compile: g++ -std=c++17 -static -o Lino/lino.exe Lino/main.cpp
 
 #include "dialogs.hpp"
+#include "widgets.hpp"
 #include <fstream>
 #include <sstream>
+#include <deque>
+#include <filesystem>
+#include <processenv.h>
+
+namespace fs = std::filesystem;
 
 namespace TUI {
+
+#pragma pack(push, 1)
+struct DiskLineRecord {
+    uint8_t src; // 0=none, 1=orig, 2=cache
+    uint64_t offset;
+    uint32_t length;
+};
+#pragma pack(pop)
+
+class DiskIndexGapBuffer {
+private:
+    std::fstream file;
+    std::string tmppath;
+    std::string expandTmpPath;
+    size_t gapStart;
+    size_t gapEnd;
+    size_t cap;
+
+    void expand() {
+        size_t newCap = cap * 2;
+        std::fstream newFile(expandTmpPath, std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
+        
+        DiskLineRecord rec;
+        file.clear(); file.seekg(0, std::ios::beg);
+        for (size_t i = 0; i < gapStart; i++) {
+            file.read((char*)&rec, sizeof(rec));
+            newFile.write((char*)&rec, sizeof(rec));
+        }
+        
+        size_t newGapEnd = newCap - (cap - gapEnd);
+        
+        DiskLineRecord blank = {0,0,0};
+        for(size_t i=gapStart; i<newGapEnd; i++) {
+            newFile.write((char*)&blank, sizeof(blank));
+        }
+        
+        file.clear();
+        file.seekg(gapEnd * sizeof(rec), std::ios::beg);
+        for(size_t i=0; i < (cap - gapEnd); i++) {
+            file.read((char*)&rec, sizeof(rec));
+            newFile.write((char*)&rec, sizeof(rec));
+        }
+        
+        file.close();
+        std::remove(tmppath.c_str());
+        std::rename(expandTmpPath.c_str(), tmppath.c_str());
+        file.open(tmppath, std::ios::in | std::ios::out | std::ios::binary);
+        
+        gapEnd = newGapEnd;
+        cap = newCap;
+    }
+
+public:
+    DiskIndexGapBuffer() : tmppath(""), expandTmpPath(""), gapStart(0), gapEnd(1024), cap(1024) {}
+
+    void setup(const std::string& path, const std::string& expandPath, size_t initialCapacity = 1024) {
+        tmppath = path;
+        expandTmpPath = expandPath;
+        gapStart = 0;
+        gapEnd = initialCapacity;
+        cap = initialCapacity;
+        
+        file.open(tmppath, std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
+        DiskLineRecord blank = {0,0,0};
+        for(size_t i=0; i<cap; i++) file.write((char*)&blank, sizeof(blank));
+    }
+    
+    ~DiskIndexGapBuffer() {
+        if (file.is_open()) file.close();
+        std::remove(tmppath.c_str());
+    }
+
+    void moveGap(size_t pos) {
+        size_t sz = size();
+        if (pos > sz) pos = sz;
+        if (pos == gapStart) return;
+        
+        DiskLineRecord rec;
+        if (pos < gapStart) {
+            size_t count = gapStart - pos;
+            for (size_t i = 0; i < count; i++) {
+                file.clear(); file.seekg((gapStart - 1 - i) * sizeof(rec), std::ios::beg);
+                file.read((char*)&rec, sizeof(rec));
+                file.clear(); file.seekp((gapEnd - 1 - i) * sizeof(rec), std::ios::beg);
+                file.write((char*)&rec, sizeof(rec));
+            }
+            gapStart -= count;
+            gapEnd -= count;
+        } else {
+            size_t count = pos - gapStart;
+            for (size_t i = 0; i < count; i++) {
+                file.clear(); file.seekg((gapEnd + i) * sizeof(rec), std::ios::beg);
+                file.read((char*)&rec, sizeof(rec));
+                file.clear(); file.seekp((gapStart + i) * sizeof(rec), std::ios::beg);
+                file.write((char*)&rec, sizeof(rec));
+            }
+            gapStart += count;
+            gapEnd += count;
+        }
+    }
+
+    void insert(size_t pos, const DiskLineRecord& item) {
+        if (gapStart == gapEnd) expand();
+        moveGap(pos);
+        file.clear(); file.seekp(gapStart * sizeof(item), std::ios::beg);
+        file.write((char*)&item, sizeof(item));
+        gapStart++;
+    }
+
+    void remove(size_t pos) {
+        moveGap(pos + 1);
+        if (gapStart > 0) gapStart--;
+    }
+
+    DiskLineRecord operator[](size_t idx) {
+        DiskLineRecord rec = {0,0,0};
+        file.clear();
+        if (idx < gapStart) {
+            file.seekg(idx * sizeof(rec), std::ios::beg);
+        } else {
+            file.seekg((idx + (gapEnd - gapStart)) * sizeof(rec), std::ios::beg);
+        }
+        file.read((char*)&rec, sizeof(rec));
+        return rec;
+    }
+    
+    void set(size_t idx, const DiskLineRecord& rec) {
+        file.clear();
+        if (idx < gapStart) {
+            file.seekp(idx * sizeof(rec), std::ios::beg);
+        } else {
+            file.seekp((idx + (gapEnd - gapStart)) * sizeof(rec), std::ios::beg);
+        }
+        file.write((char*)&rec, sizeof(rec));
+    }
+
+    size_t size() const {
+        return cap - (gapEnd - gapStart); // Elements count, not bytes
+    }
+
+    void clear() {
+        if (file.is_open()) file.close();
+        std::remove(tmppath.c_str());
+        gapStart = 0;
+        gapEnd = cap;
+    }
+    
+    bool isOpen() const { return file.is_open(); }
+    void close() {
+        if (file.is_open()) file.close();
+        std::remove(tmppath.c_str());
+    }
+};
 
 struct LineDiff {
     enum Type { MODIFY, INSERT, REMOVE };
     Type type;
     int lineIdx;
-    std::string oldContent;
+    DiskLineRecord oldRecord;
 };
 
 struct UndoEntry {
@@ -36,25 +195,110 @@ struct UndoManager {
 };
 
 struct Document {
-    std::vector<std::string> lines;
+    DiskIndexGapBuffer lines;
+    std::fstream origFile;
+    std::fstream cacheFile;
+    std::string cachePath;
     std::string filename;
     bool modified = false;
     int cursorX = 0, cursorY = 0;
     int scrollX = 0, scrollY = 0;
     UndoManager undoMgr;
     
-    Document() { lines.push_back(""); }
+    Document() {
+        DWORD pid = GetCurrentProcessId();
+        std::string tmpDir = fs::temp_directory_path().string();
+        cachePath = tmpDir + "/lino_chars_" + std::to_string(pid) + ".tmp";
+        
+        // Reinitialize the lines buffer with explicit temp paths 
+        std::string idxPath = tmpDir + "/lino_idx_" + std::to_string(pid) + ".tmp";
+        std::string idxExpand = tmpDir + "/lino_idx2_" + std::to_string(pid) + ".tmp";
+        lines.setup(idxPath, idxExpand);
+        
+        cacheFile.open(cachePath, std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
+        uint8_t zero = 0; cacheFile.write((char*)&zero, 1);
+        insertLine(0, ""); 
+    }
+    
+    ~Document() {
+        if (origFile.is_open()) origFile.close();
+        if (cacheFile.is_open()) cacheFile.close();
+        std::remove(cachePath.c_str());
+    }
+    
+    void clear() {
+        if (origFile.is_open()) origFile.close();
+        
+        DWORD pid = GetCurrentProcessId();
+        std::string tmpDir = fs::temp_directory_path().string();
+        std::string idxPath = tmpDir + "/lino_idx_" + std::to_string(pid) + ".tmp";
+        std::string idxExpand = tmpDir + "/lino_idx2_" + std::to_string(pid) + ".tmp";
+        if (lines.isOpen()) lines.close();
+        lines.setup(idxPath, idxExpand);
+        
+        cacheFile.close();
+        cacheFile.open(cachePath, std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
+        uint8_t zero = 0; cacheFile.write((char*)&zero, 1);
+        insertLine(0, "");
+        filename = "";
+        modified = false;
+        cursorX = cursorY = scrollX = scrollY = 0;
+        undoMgr.clear();
+    }
     
     bool load(const std::string& path) {
-        std::ifstream file(path);
-        if (!file) return false;
-        lines.clear();
-        std::string line;
-        while (std::getline(file, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            lines.push_back(line);
+        if (origFile.is_open()) origFile.close();
+        origFile.open(path, std::ios::in | std::ios::binary);
+        if (!origFile) return false;
+        
+        DWORD pid = GetCurrentProcessId();
+        std::string tmpDir = fs::temp_directory_path().string();
+        std::string idxPath = tmpDir + "/lino_idx_" + std::to_string(pid) + ".tmp";
+        std::string idxExpand = tmpDir + "/lino_idx2_" + std::to_string(pid) + ".tmp";
+        if (lines.isOpen()) lines.close();
+        lines.setup(idxPath, idxExpand);
+        
+        cacheFile.close(); 
+        cacheFile.open(cachePath, std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
+        uint8_t zero = 0; cacheFile.write((char*)&zero, 1);
+        
+        origFile.clear(); origFile.seekg(0, std::ios::end);
+        uint64_t fileSize = origFile.tellg();
+        origFile.clear(); origFile.seekg(0, std::ios::beg);
+        
+        uint64_t currentOffset = 0;
+        char buffer[8192];
+        uint64_t startOfLine = 0;
+        
+        while (currentOffset < fileSize) {
+            origFile.read(buffer, sizeof(buffer));
+            int bytesRead = origFile.gcount();
+            
+            for (int i = 0; i < bytesRead; i++) {
+                if (buffer[i] == '\n') {
+                    uint64_t absolutePos = currentOffset + i;
+                    uint64_t len = absolutePos - startOfLine;
+                    if (len > 0) {
+                        origFile.clear(); origFile.seekg(absolutePos - 1, std::ios::beg);
+                        char prev; origFile.read(&prev, 1);
+                        if (prev == '\r') len--;
+                        origFile.clear(); origFile.seekg(currentOffset + bytesRead, std::ios::beg);
+                    }
+                    DiskLineRecord rec = {1, startOfLine, (uint32_t)len};
+                    lines.insert(lines.size(), rec);
+                    startOfLine = absolutePos + 1;
+                }
+            }
+            currentOffset += bytesRead;
         }
-        if (lines.empty()) lines.push_back("");
+        
+        if (startOfLine < fileSize) {
+            DiskLineRecord rec = {1, startOfLine, (uint32_t)(fileSize - startOfLine)};
+            lines.insert(lines.size(), rec);
+        }
+        
+        if (lines.size() == 0) insertLine(0, "");
+        
         filename = path;
         modified = false;
         cursorX = cursorY = scrollX = scrollY = 0;
@@ -65,21 +309,67 @@ struct Document {
     bool save(const std::string& path = "") {
         std::string savePath = path.empty() ? filename : path;
         if (savePath.empty()) return false;
-        std::ofstream file(savePath);
-        if (!file) return false;
-        for (size_t i = 0; i < lines.size(); i++) {
-            file << lines[i];
-            if (i < lines.size() - 1) file << '\n';
+        
+        std::string tmpSave = savePath + ".saving";
+        std::ofstream out(tmpSave, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        
+        for (int i = 0; i < lines.size(); i++) {
+            std::string content = getLine(i);
+            if (content.size() > 0) out.write(content.c_str(), content.size());
+            if (i < lines.size() - 1) out.write("\n", 1);
         }
-        filename = savePath;
-        modified = false;
+        out.close();
+        
+        if (origFile.is_open()) origFile.close();
+        
+#ifdef _WIN32
+        DeleteFileA(savePath.c_str());
+        MoveFileA(tmpSave.c_str(), savePath.c_str());
+#else
+        std::rename(tmpSave.c_str(), savePath.c_str());
+#endif
+        
+        // Let's reload to reset mapping properly onto the freshly saved clean file.
+        load(savePath);
         return true;
     }
     
-    std::string& line(int idx) {
-        static std::string empty;
-        if (idx < 0 || idx >= (int)lines.size()) return empty;
-        return lines[idx];
+    std::string getLine(int idx) {
+        if (idx < 0 || idx >= lines.size()) return "";
+        DiskLineRecord rec = lines[idx];
+        if (rec.length == 0 || rec.src == 0) return "";
+        
+        std::string res(rec.length, '\0');
+        if (rec.src == 1) {
+            origFile.clear();
+            origFile.seekg(rec.offset, std::ios::beg);
+            origFile.read(&res[0], rec.length);
+        } else if (rec.src == 2) {
+            cacheFile.clear();
+            cacheFile.seekg(rec.offset, std::ios::beg);
+            cacheFile.read(&res[0], rec.length);
+        }
+        return res;
+    }
+    
+    DiskLineRecord cacheString(const std::string& str) {
+        cacheFile.clear();
+        cacheFile.seekp(0, std::ios::end);
+        uint64_t offset = cacheFile.tellp();
+        if (str.size() > 0) cacheFile.write(str.c_str(), str.size());
+        return { 2, offset, (uint32_t)str.size() };
+    }
+    
+    void setLine(int idx, const std::string& content) {
+        if (idx < 0 || idx >= lines.size()) return;
+        DiskLineRecord rec = cacheString(content);
+        lines.set(idx, rec);
+    }
+    
+    void insertLine(int idx, const std::string& content) {
+        DiskLineRecord rec = cacheString(content);
+        lines.insert(idx, rec);
     }
     
     int lineCount() const { return lines.size(); }
@@ -89,8 +379,29 @@ class EditWidget : public Widget {
 public:
     Document* doc = nullptr;
     int lineNumWidth = 5;
+    int tabWidth = 4;
     std::string searchTerm;
     
+    // UTF-8 Helpers
+    int utf8_prev(const std::string& str, int pos) {
+        while (pos > 0) {
+            pos--;
+            if ((str[pos] & 0xC0) != 0x80) break;
+        }
+        return pos;
+    }
+
+    int utf8_next(const std::string& str, int pos) {
+        if (pos >= str.length()) return pos;
+        if ((str[pos] & 0x80) == 0) return pos + 1; // ASCII
+        
+        int len = 1;
+        while (pos + len < str.length() && (str[pos + len] & 0xC0) == 0x80) {
+            len++;
+        }
+        return pos + len;
+    }
+
     void setSearchTerm(const std::string& term) { searchTerm = term; }
     void clearSearch() { searchTerm.clear(); }
     
@@ -109,7 +420,7 @@ public:
             snprintf(lineNum, sizeof(lineNum), "%4d ", lineIdx + 1);
             buf.write(bounds.x, bounds.y + i, lineNum, Colors::BG_NORMAL | FOREGROUND_RED);
             
-            std::string& line = doc->line(lineIdx);
+            std::string line = doc->getLine(lineIdx);
             int start = doc->scrollX;
             std::string visible = (start < (int)line.size()) ? line.substr(start, viewWidth) : "";
             buf.write(bounds.x + lineNumWidth, bounds.y + i, visible, Colors::EDIT_AREA);
@@ -134,8 +445,8 @@ public:
         int cursorScreenY = bounds.y + (doc->cursorY - doc->scrollY);
         if (cursorScreenX >= bounds.x + lineNumWidth && cursorScreenX < bounds.x + bounds.width &&
             cursorScreenY >= bounds.y && cursorScreenY < bounds.y + bounds.height) {
-            char ch = (doc->cursorX < (int)doc->line(doc->cursorY).size()) ? 
-                      doc->line(doc->cursorY)[doc->cursorX] : ' ';
+            std::string currentLine = doc->getLine(doc->cursorY);
+            char ch = (doc->cursorX < (int)currentLine.size()) ? currentLine[doc->cursorX] : ' ';
             buf.set(cursorScreenX, cursorScreenY, ch, BACKGROUND_RED | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         }
     }
@@ -144,12 +455,14 @@ public:
         if (!doc) return false;
         
         if (e.key >= 32 && e.key < 127 && !e.ctrl && !e.alt) {
+            std::string curLine = doc->getLine(doc->cursorY);
             UndoEntry ue;
             ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-            ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+            ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
             doc->undoMgr.record(std::move(ue));
-            doc->line(doc->cursorY).insert(doc->cursorX, 1, (char)e.key);
-            doc->cursorX++;
+            curLine.insert(doc->cursorX, 1, (char)e.key);
+            doc->setLine(doc->cursorY, curLine);
+            doc->cursorX = utf8_next(curLine, doc->cursorX);
             doc->modified = true;
             ensureVisible();
             return true;
@@ -157,15 +470,19 @@ public:
         
         switch (e.key) {
             case 13: {
+                std::string curLine = doc->getLine(doc->cursorY);
                 UndoEntry ue;
                 ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
-                std::string& cur = doc->line(doc->cursorY);
-                std::string rest = cur.substr(doc->cursorX);
-                cur = cur.substr(0, doc->cursorX);
-                doc->lines.insert(doc->lines.begin() + doc->cursorY + 1, rest);
-                ue.diffs.push_back({LineDiff::INSERT, doc->cursorY + 1, ""});
+                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
+                std::string rest = curLine.substr(doc->cursorX);
+                curLine = curLine.substr(0, doc->cursorX);
+                
+                doc->setLine(doc->cursorY, curLine);
+                doc->insertLine(doc->cursorY + 1, rest);
+                
+                ue.diffs.push_back({LineDiff::INSERT, doc->cursorY + 1, {0,0,0}});
                 doc->undoMgr.record(std::move(ue));
+                
                 doc->cursorY++;
                 doc->cursorX = 0;
                 doc->modified = true;
@@ -174,54 +491,66 @@ public:
             }
             case 8:
                 if (doc->cursorX > 0) {
+                    std::string curLine = doc->getLine(doc->cursorY);
                     UndoEntry ue;
                     ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
                     doc->undoMgr.record(std::move(ue));
-                    doc->line(doc->cursorY).erase(doc->cursorX - 1, 1);
-                    doc->cursorX--;
+                    
+                    int prevX = utf8_prev(curLine, doc->cursorX);
+                    int charLen = doc->cursorX - prevX;
+                    
+                    curLine.erase(prevX, charLen);
+                    doc->setLine(doc->cursorY, curLine);
+                    doc->cursorX = prevX;
                     doc->modified = true;
                 } else if (doc->cursorY > 0) {
+                    std::string prevLine = doc->getLine(doc->cursorY - 1);
+                    std::string curLine = doc->getLine(doc->cursorY);
                     UndoEntry ue;
                     ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY - 1, doc->line(doc->cursorY - 1)});
-                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY, doc->line(doc->cursorY)});
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY - 1, doc->lines[doc->cursorY - 1]});
+                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY, doc->lines[doc->cursorY]});
                     doc->undoMgr.record(std::move(ue));
-                    doc->cursorX = doc->line(doc->cursorY - 1).size();
-                    doc->line(doc->cursorY - 1) += doc->line(doc->cursorY);
-                    doc->lines.erase(doc->lines.begin() + doc->cursorY);
+                    doc->cursorX = prevLine.size();
+                    prevLine += curLine;
+                    doc->setLine(doc->cursorY - 1, prevLine);
+                    doc->lines.remove(doc->cursorY);
                     doc->cursorY--;
                     doc->modified = true;
                 }
                 ensureVisible();
                 return true;
             case 9: {
+                std::string curLine = doc->getLine(doc->cursorY);
                 UndoEntry ue;
                 ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
                 doc->undoMgr.record(std::move(ue));
-                doc->line(doc->cursorY).insert(doc->cursorX, "    ");
-                doc->cursorX += 4;
+                std::string spaces(tabWidth, ' ');
+                curLine.insert(doc->cursorX, spaces);
+                doc->setLine(doc->cursorY, curLine);
+                doc->cursorX += tabWidth;
                 doc->modified = true;
                 return true;
             }
             case 256 + VK_UP:
                 if (doc->cursorY > 0) doc->cursorY--;
-                doc->cursorX = std::min(doc->cursorX, (int)doc->line(doc->cursorY).size());
+                doc->cursorX = std::min(doc->cursorX, (int)doc->getLine(doc->cursorY).size());
                 ensureVisible();
                 return true;
             case 256 + VK_DOWN:
                 if (doc->cursorY < doc->lineCount() - 1) doc->cursorY++;
-                doc->cursorX = std::min(doc->cursorX, (int)doc->line(doc->cursorY).size());
+                doc->cursorX = std::min(doc->cursorX, (int)doc->getLine(doc->cursorY).size());
                 ensureVisible();
                 return true;
             case 256 + VK_LEFT:
-                if (doc->cursorX > 0) doc->cursorX--;
-                else if (doc->cursorY > 0) { doc->cursorY--; doc->cursorX = doc->line(doc->cursorY).size(); }
+                if (doc->cursorX > 0) doc->cursorX = utf8_prev(doc->getLine(doc->cursorY), doc->cursorX);
+                else if (doc->cursorY > 0) { doc->cursorY--; doc->cursorX = doc->getLine(doc->cursorY).size(); }
                 ensureVisible();
                 return true;
             case 256 + VK_RIGHT:
-                if (doc->cursorX < (int)doc->line(doc->cursorY).size()) doc->cursorX++;
+                if (doc->cursorX < (int)doc->getLine(doc->cursorY).size()) doc->cursorX = utf8_next(doc->getLine(doc->cursorY), doc->cursorX);
                 else if (doc->cursorY < doc->lineCount() - 1) { doc->cursorY++; doc->cursorX = 0; }
                 ensureVisible();
                 return true;
@@ -230,35 +559,43 @@ public:
                 ensureVisible();
                 return true;
             case 256 + VK_END:
-                doc->cursorX = doc->line(doc->cursorY).size();
+                doc->cursorX = doc->getLine(doc->cursorY).size();
                 ensureVisible();
                 return true;
             case 256 + VK_PRIOR:
                 doc->cursorY = std::max(0, doc->cursorY - bounds.height);
-                doc->cursorX = std::min(doc->cursorX, (int)doc->line(doc->cursorY).size());
+                doc->cursorX = std::min(doc->cursorX, (int)doc->getLine(doc->cursorY).size());
                 ensureVisible();
                 return true;
             case 256 + VK_NEXT:
                 doc->cursorY = std::min(doc->lineCount() - 1, doc->cursorY + bounds.height);
-                doc->cursorX = std::min(doc->cursorX, (int)doc->line(doc->cursorY).size());
+                doc->cursorX = std::min(doc->cursorX, (int)doc->getLine(doc->cursorY).size());
                 ensureVisible();
                 return true;
             case 256 + VK_DELETE:
-                if (doc->cursorX < (int)doc->line(doc->cursorY).size()) {
+                std::string curLine = doc->getLine(doc->cursorY);
+                if (doc->cursorX < (int)curLine.size()) {
                     UndoEntry ue;
                     ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
                     doc->undoMgr.record(std::move(ue));
-                    doc->line(doc->cursorY).erase(doc->cursorX, 1);
+                    
+                    int nextX = utf8_next(curLine, doc->cursorX);
+                    int charLen = nextX - doc->cursorX;
+                    
+                    curLine.erase(doc->cursorX, charLen);
+                    doc->setLine(doc->cursorY, curLine);
                     doc->modified = true;
                 } else if (doc->cursorY < doc->lineCount() - 1) {
+                    std::string nextLine = doc->getLine(doc->cursorY + 1);
                     UndoEntry ue;
                     ue.cursorX = doc->cursorX; ue.cursorY = doc->cursorY;
-                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->line(doc->cursorY)});
-                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY + 1, doc->line(doc->cursorY + 1)});
+                    ue.diffs.push_back({LineDiff::MODIFY, doc->cursorY, doc->lines[doc->cursorY]});
+                    ue.diffs.push_back({LineDiff::REMOVE, doc->cursorY + 1, doc->lines[doc->cursorY + 1]});
                     doc->undoMgr.record(std::move(ue));
-                    doc->line(doc->cursorY) += doc->line(doc->cursorY + 1);
-                    doc->lines.erase(doc->lines.begin() + doc->cursorY + 1);
+                    curLine += nextLine;
+                    doc->setLine(doc->cursorY, curLine);
+                    doc->lines.remove(doc->cursorY + 1);
                     doc->modified = true;
                 }
                 return true;
@@ -274,7 +611,7 @@ public:
             int clickY = e.y - bounds.y + doc->scrollY;
             if (clickY >= 0 && clickY < doc->lineCount()) {
                 doc->cursorY = clickY;
-                doc->cursorX = std::min(std::max(0, clickX), (int)doc->line(clickY).size());
+                doc->cursorX = std::min(std::max(0, clickX), (int)doc->getLine(clickY).size());
             }
             return true;
         }
@@ -303,7 +640,6 @@ public:
 using namespace TUI;
 
 class LinoApp {
-    HANDLE hOriginalConsole;
     HANDLE hConsole;
     InputManager input;
     Buffer buffer;
@@ -320,9 +656,14 @@ class LinoApp {
     
 public:
     LinoApp() {
-        hOriginalConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        hConsole = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE, 0, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
-        SetConsoleActiveScreenBuffer(hConsole);
+        hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        
+        DWORD outMode = 0;
+        GetConsoleMode(hConsole, &outMode);
+        SetConsoleMode(hConsole, outMode | 0x0004);
+        
+        DWORD written;
+        WriteConsoleA(hConsole, "\x1b[?1049h", 8, &written, NULL);
         
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         GetConsoleScreenBufferInfo(hConsole, &csbi);
@@ -337,8 +678,8 @@ public:
     }
     
     ~LinoApp() {
-        SetConsoleActiveScreenBuffer(hOriginalConsole);
-        CloseHandle(hConsole);
+        DWORD written;
+        WriteConsoleA(hConsole, "\x1b[?1049l", 8, &written, NULL);
     }
     
     void setupUI() {
@@ -365,16 +706,16 @@ public:
                     switch (d.type) {
                         case LineDiff::MODIFY:
                             redo.diffs.push_back({LineDiff::MODIFY, d.lineIdx, doc.lines[d.lineIdx]});
-                            doc.lines[d.lineIdx] = d.oldContent;
+                            doc.lines.set(d.lineIdx, d.oldRecord);
                             break;
                         case LineDiff::INSERT:
                             redo.diffs.push_back({LineDiff::REMOVE, d.lineIdx, doc.lines[d.lineIdx]});
-                            doc.lines.erase(doc.lines.begin() + d.lineIdx);
+                            doc.lines.remove(d.lineIdx); 
                             break;
                         case LineDiff::REMOVE:
-                            doc.lines.insert(doc.lines.begin() + d.lineIdx, d.oldContent);
-                            redo.diffs.push_back({LineDiff::INSERT, d.lineIdx, ""});
-                            break;
+                            doc.lines.insert(d.lineIdx, d.oldRecord); 
+                            redo.diffs.push_back({LineDiff::INSERT, d.lineIdx, {0,0,0}});
+                            break;  
                     }
                 }
                 doc.cursorX = entry.cursorX; doc.cursorY = entry.cursorY;
@@ -395,15 +736,15 @@ public:
                     switch (d.type) {
                         case LineDiff::MODIFY:
                             undo.diffs.push_back({LineDiff::MODIFY, d.lineIdx, doc.lines[d.lineIdx]});
-                            doc.lines[d.lineIdx] = d.oldContent;
+                            doc.lines.set(d.lineIdx, d.oldRecord);
                             break;
                         case LineDiff::INSERT:
                             undo.diffs.push_back({LineDiff::REMOVE, d.lineIdx, doc.lines[d.lineIdx]});
-                            doc.lines.erase(doc.lines.begin() + d.lineIdx);
+                            doc.lines.remove(d.lineIdx);
                             break;
                         case LineDiff::REMOVE:
-                            doc.lines.insert(doc.lines.begin() + d.lineIdx, d.oldContent);
-                            undo.diffs.push_back({LineDiff::INSERT, d.lineIdx, ""});
+                            doc.lines.insert(d.lineIdx, d.oldRecord);
+                            undo.diffs.push_back({LineDiff::INSERT, d.lineIdx, {0,0,0}});
                             break;
                     }
                 }
@@ -442,8 +783,7 @@ public:
     }
     
     void newFile() {
-        doc = Document();
-        doc.undoMgr.clear();
+        doc.clear();
         statusMsg = "New file";
         menuBar->closeMenu();
     }
@@ -500,7 +840,7 @@ public:
         lastSearchTerm = term;
         editor->setSearchTerm(term);
         for (int i = 0; i < doc.lineCount(); i++) {
-            size_t pos = doc.lines[i].find(term, 0);
+            size_t pos = doc.getLine(i).find(term, 0);
             if (pos != std::string::npos) {
                 doc.cursorY = i;
                 doc.cursorX = pos;
@@ -519,7 +859,7 @@ public:
         int startOffset = skipCurrent ? 1 : 0;
         for (int i = doc.cursorY; i < doc.lineCount() && !found; i++) {
             size_t startPos = (i == doc.cursorY) ? doc.cursorX + startOffset : 0;
-            size_t pos = doc.lines[i].find(lastSearchTerm, startPos);
+            size_t pos = doc.getLine(i).find(lastSearchTerm, startPos);
             if (pos != std::string::npos) {
                 doc.cursorY = i;
                 doc.cursorX = pos;
@@ -528,7 +868,7 @@ public:
         }
         if (!found) {
             for (int i = 0; i < doc.lineCount() && !found; i++) {
-                size_t pos = doc.lines[i].find(lastSearchTerm, 0);
+                size_t pos = doc.getLine(i).find(lastSearchTerm, 0);
                 if (pos != std::string::npos) {
                     doc.cursorY = i;
                     doc.cursorX = pos;
@@ -553,14 +893,17 @@ public:
         
         dlg->onReplace = [this](const std::string& term, const std::string& rep) {
             for (int i = 0; i < doc.lineCount(); i++) {
-                size_t pos = doc.lines[i].find(term, 0);
+                std::string curLine = doc.getLine(i);
+                size_t pos = curLine.find(term, 0);
                 if (pos != std::string::npos) {
                     UndoEntry ue;
                     ue.cursorX = doc.cursorX; ue.cursorY = doc.cursorY;
                     ue.diffs.push_back({LineDiff::MODIFY, i, doc.lines[i]});
                     doc.undoMgr.record(std::move(ue));
-                    doc.lines[i].erase(pos, term.size());
-                    doc.lines[i].insert(pos, rep);
+                    curLine.erase(pos, term.size());
+                    curLine.insert(pos, rep);
+                    
+                    doc.setLine(i, curLine);
                     doc.cursorY = i;
                     doc.cursorX = pos;
                     doc.modified = true;
@@ -579,15 +922,17 @@ public:
             ue.cursorX = doc.cursorX; ue.cursorY = doc.cursorY;
             int count = 0;
             for (int i = 0; i < doc.lineCount(); i++) {
-                size_t pos = doc.lines[i].find(term, 0);
+                std::string curLine = doc.getLine(i);
+                size_t pos = curLine.find(term, 0);
                 if (pos != std::string::npos) {
                     ue.diffs.push_back({LineDiff::MODIFY, i, doc.lines[i]});
-                    while ((pos = doc.lines[i].find(term, pos)) != std::string::npos) {
-                        doc.lines[i].erase(pos, term.size());
-                        doc.lines[i].insert(pos, rep);
+                    while ((pos = curLine.find(term, pos)) != std::string::npos) {
+                        curLine.erase(pos, term.size());
+                        curLine.insert(pos, rep);
                         pos += rep.size();
                         count++;
                     }
+                    doc.setLine(i, curLine);
                 }
             }
             if (count > 0) {
@@ -637,7 +982,7 @@ public:
     
     void showAbout() {
         menuBar->closeMenu();
-        auto dlg = std::make_shared<MsgBox>("About", "Lino Editor v2.0");
+        auto dlg = std::make_shared<MsgBox>("About", "Lino Editor v2.1 Disk-Backed");
         dlg->center(width, height);
         activeDialog = dlg;
         
@@ -650,11 +995,22 @@ public:
     
     void quit() {
         if (doc.modified) {
-            auto dlg = std::make_shared<MsgBox>("Warning", "Unsaved changes!");
+            auto dlg = std::make_shared<MsgBox>("Warning", "Unsaved changes!", MsgBox::YES_NO_CANCEL);
             dlg->center(width, height);
             activeDialog = dlg;
             while (!dlg->closed) { render(); processInput(); }
+            int res = dlg->result;
             activeDialog = nullptr;
+            
+            if (res == 2) {
+                // Save and quit
+                saveFile();
+                if (doc.modified) return; // If save failed or was cancelled, don't quit
+            } else if (res == 0) {
+                // Cancel quit
+                return;
+            }
+            // If res == 1 (OK/Discard), proceed to quit without saving
         }
         running = false;
     }

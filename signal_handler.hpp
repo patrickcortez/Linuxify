@@ -12,6 +12,9 @@
 #include <vector>
 #include <map>
 #include <queue>
+#include <string>
+#include <thread>
+#include <string_view>
 namespace SignalHandler {
     inline std::atomic<bool> g_isShuttingDown(false);
     inline std::atomic<bool> g_signalsBlocked(false); 
@@ -20,10 +23,20 @@ namespace SignalHandler {
     inline std::function<void()> g_interruptCallback = nullptr;
     inline std::function<void()> g_suspendCallback = nullptr; 
 
+    // Custom Signals
+    inline std::map<std::string, std::function<void()>> g_customSignalHandlers;
+    inline std::mutex g_customSignalMutex;
+    inline std::thread g_ipcListenerThread;
+
     inline void blockSignals() { g_signalsBlocked.store(true); }
     inline void unblockSignals() { g_signalsBlocked.store(false); }
     inline void signalHeartbeat() {
         // No-op: Watchdog removed
+    }
+
+    inline void registerCustomSignal(const std::string& signalName, std::function<void()> callback) {
+        std::lock_guard<std::mutex> lock(g_customSignalMutex);
+        g_customSignalHandlers[signalName] = callback;
     }
 
     struct KeyCombo {
@@ -211,6 +224,63 @@ namespace SignalHandler {
         }
     }
 
+    inline void IpcListener() {
+        DWORD pid = GetCurrentProcessId();
+        std::string pipeName = "\\\\.\\pipe\\linuxify_signals_" + std::to_string(pid);
+
+        while (!g_isShuttingDown.load()) {
+            HANDLE hPipe = CreateNamedPipeA(
+                pipeName.c_str(),
+                PIPE_ACCESS_INBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1, // Only 1 instance
+                1024,
+                1024,
+                0,
+                NULL
+            );
+
+            if (hPipe == INVALID_HANDLE_VALUE) {
+                Sleep(100);
+                continue;
+            }
+
+            if (ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED)) {
+                char buffer[256];
+                DWORD bytesRead;
+                if (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+                    if (bytesRead > 0) {
+                        buffer[bytesRead] = '\0';
+                        
+                        // Parse the signal - safely strip newlines
+                        std::string sig(buffer);
+                        size_t pos = sig.find_first_of("\r\n");
+                        if (pos != std::string::npos) sig.erase(pos);
+                        
+                        if (g_signalsBlocked.load()) goto next_client;
+
+                        if (sig == "SIGINT" || sig == "SIGINT\n" || sig == "INT") {
+                            handleInterrupt();
+                        } else if (sig == "SIGTERM" || sig == "TERM") {
+                            handleTermination("SIGTERM via IPC");
+                        } else if (sig == "SIGABRT" || sig == "ABRT") {
+                            std::cerr << "\n[SIGABRT] Abort via IPC.\n"; ExitProcess(3);
+                        } else {
+                            // Custom signal
+                            std::lock_guard<std::mutex> lock(g_customSignalMutex);
+                            if (g_customSignalHandlers.count(sig)) {
+                                g_customSignalHandlers[sig]();
+                            }
+                        }
+                    }
+                }
+            }
+        next_client:
+            DisconnectNamedPipe(hPipe);
+            CloseHandle(hPipe);
+        }
+    }
+
     inline void init() {
         HANDLE hPseudo = GetCurrentThread();
         DuplicateHandle(GetCurrentProcess(), hPseudo, GetCurrentProcess(), &g_mainThreadHandle, 0, FALSE, DUPLICATE_SAME_ACCESS);
@@ -223,6 +293,10 @@ namespace SignalHandler {
         
         // No Watchdog Init
         InputDispatcher::getInstance().init();
+        
+        // Start IPC listener for custom sig command
+        g_ipcListenerThread = std::thread(IpcListener);
+        g_ipcListenerThread.detach(); // Allow it to run independently
     }
     inline void poll() {
         InputDispatcher::getInstance().poll();

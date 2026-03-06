@@ -1,2 +1,0 @@
-8:cmd.txt
-46:test.txt

@@ -402,7 +402,7 @@ void executeJob(const CronJob& job) {
     
     if (isDirectExecutable) {
         // Direct executable - run as-is via cmd
-        cmdLine = "cmd /c " + job.command;
+        cmdLine = "linuxify.exe -c \"" + job.command + "\"";
     } else {
         // Try to look up the interpreter in registry
         std::string interpreterPath = lookupInterpreter(firstWord);
@@ -415,8 +415,8 @@ void executeJob(const CronJob& job) {
             }
             logMessage("Using interpreter: " + firstWord + " -> " + interpreterPath);
         } else {
-            // Not found in registry - try running via cmd (might be in PATH)
-            cmdLine = "cmd /c " + job.command;
+            // Not found in registry - try running via cmds
+            cmdLine = "linuxify.exe -c \"" + job.command + "\"";
             logMessage("Interpreter not in registry, using PATH: " + firstWord);
         }
     }

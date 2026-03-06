@@ -7268,8 +7268,6 @@ public:
             Networking::dig(expandedTokens);
         } else if (cmd == "wget") {
             Networking::wget(expandedTokens, ctx.currentDir);
-        } else if (cmd == "net") {
-            Networking::netCommand(expandedTokens);
         } else if (cmd == "netstat") {
             Networking::netstat(expandedTokens);
         } else if (cmd == "ifconfig" || cmd == "ipconfig") {
@@ -8587,8 +8585,12 @@ public:
             }
             // Check if it is a file
             else if (fs::exists(trimmed) && !fs::is_directory(trimmed)) {
-                printError(trimmed + ": Is a file");
-                return 1;
+                std::string ext = fs::path(trimmed).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".exe" && ext != ".bat" && ext != ".cmd" && ext != ".ps1" && ext != ".com") {
+                    printError(trimmed + ": Is a file");
+                    return 1;
+                }
             }
         }
 

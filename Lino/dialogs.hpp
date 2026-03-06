@@ -66,24 +66,70 @@ public:
 
 class MsgBox : public Dialog {
 public:
+    enum Type { OK, YES_NO_CANCEL };
     std::string message;
     std::shared_ptr<Button> okBtn;
+    std::shared_ptr<Button> yesBtn;
+    std::shared_ptr<Button> noBtn;
+    std::shared_ptr<Button> cancelBtn;
+    Type boxType;
     
-    MsgBox(const std::string& title, const std::string& msg) 
-        : Dialog(title, std::max((int)msg.size() + 6, 30), 7), message(msg) {
-        okBtn = std::make_shared<Button>("OK");
-        okBtn->bounds.x = bounds.x + (bounds.width - okBtn->bounds.width) / 2;
-        okBtn->bounds.y = bounds.y + bounds.height - 2;
-        okBtn->focused = true;
-        okBtn->onClick = [this]() { closed = true; result = 1; };
-        addChild(okBtn);
+    MsgBox(const std::string& title, const std::string& msg, Type type = OK) 
+        : Dialog(title, std::max((int)msg.size() + 6, 40), 7), message(msg), boxType(type) {
+        
+        if (boxType == OK) {
+            okBtn = std::make_shared<Button>("OK");
+            okBtn->bounds.x = bounds.x + (bounds.width - okBtn->bounds.width) / 2;
+            okBtn->bounds.y = bounds.y + bounds.height - 2;
+            okBtn->focused = true;
+            okBtn->onClick = [this]() { closed = true; result = 1; };
+            addChild(okBtn);
+        } else if (boxType == YES_NO_CANCEL) {
+            yesBtn = std::make_shared<Button>("Save");
+            noBtn = std::make_shared<Button>("OK");
+            cancelBtn = std::make_shared<Button>("Cancel");
+            
+            int totalWidth = yesBtn->bounds.width + noBtn->bounds.width + cancelBtn->bounds.width + 4; // 2 spaces between buttons
+            int startX = bounds.x + (bounds.width - totalWidth) / 2;
+            
+            yesBtn->bounds.x = startX;
+            yesBtn->bounds.y = bounds.y + bounds.height - 2;
+            yesBtn->focused = true;
+            yesBtn->onClick = [this]() { closed = true; result = 2; }; // Save
+            addChild(yesBtn);
+            
+            noBtn->bounds.x = startX + yesBtn->bounds.width + 2;
+            noBtn->bounds.y = bounds.y + bounds.height - 2;
+            noBtn->onClick = [this]() { closed = true; result = 1; }; // Discard (OK)
+            addChild(noBtn);
+            
+            cancelBtn->bounds.x = noBtn->bounds.x + noBtn->bounds.width + 2;
+            cancelBtn->bounds.y = bounds.y + bounds.height - 2;
+            cancelBtn->onClick = [this]() { closed = true; result = 0; }; // Cancel
+            addChild(cancelBtn);
+        }
     }
     
     void draw(Buffer& buf) override {
         Dialog::draw(buf);
         buf.write(bounds.x + 3, bounds.y + 2, message, Colors::BG_NORMAL | Colors::FG_TEXT);
-        okBtn->bounds.x = bounds.x + (bounds.width - okBtn->bounds.width) / 2;
-        okBtn->bounds.y = bounds.y + bounds.height - 2;
+        
+        if (boxType == OK && okBtn) {
+            okBtn->bounds.x = bounds.x + (bounds.width - okBtn->bounds.width) / 2;
+            okBtn->bounds.y = bounds.y + bounds.height - 2;
+        } else if (boxType == YES_NO_CANCEL && yesBtn && noBtn && cancelBtn) {
+            int totalWidth = yesBtn->bounds.width + noBtn->bounds.width + cancelBtn->bounds.width + 4;
+            int startX = bounds.x + (bounds.width - totalWidth) / 2;
+            
+            yesBtn->bounds.x = startX;
+            yesBtn->bounds.y = bounds.y + bounds.height - 2;
+            
+            noBtn->bounds.x = startX + yesBtn->bounds.width + 2;
+            noBtn->bounds.y = bounds.y + bounds.height - 2;
+            
+            cancelBtn->bounds.x = noBtn->bounds.x + noBtn->bounds.width + 2;
+            cancelBtn->bounds.y = bounds.y + bounds.height - 2;
+        }
     }
 };
 
