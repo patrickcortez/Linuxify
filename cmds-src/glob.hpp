@@ -15,7 +15,7 @@ namespace Glob {
 
 inline bool containsGlob(const std::string& s) {
     for (char c : s) {
-        if (c == '*' || c == '?' || c == '[') return true;
+        if (c == '*' || c == '?' || c == '[' || c == '{') return true;
     }
     return false;
 }
@@ -204,7 +204,130 @@ inline std::vector<std::string> expandRecursive(const std::string& basePath, con
     return results;
 }
 
-inline std::vector<std::string> expandGlob(const std::string& pattern, const std::string& cwd) {
+inline std::vector<std::string> expandBraces(const std::string& input) {
+    std::vector<std::string> results;
+    
+    size_t searchPos = 0;
+    while (searchPos < input.length()) {
+        size_t start = std::string::npos;
+        for (size_t i = searchPos; i < input.length(); ++i) {
+            if (input[i] == '\\' && i + 1 < input.length()) {
+                i++;
+                continue;
+            }
+            if (input[i] == '{') {
+                start = i;
+                break;
+            }
+        }
+        
+        if (start == std::string::npos) {
+            break; 
+        }
+        
+        size_t end = std::string::npos;
+        int depth = 0;
+        std::vector<size_t> commas;
+        
+        for (size_t i = start; i < input.length(); ++i) {
+            if (input[i] == '\\' && i + 1 < input.length()) {
+                i++;
+                continue;
+            }
+            if (input[i] == '{') depth++;
+            else if (input[i] == '}') {
+                depth--;
+                if (depth == 0) {
+                    end = i;
+                    break;
+                }
+            } else if (input[i] == ',' && depth == 1) {
+                commas.push_back(i);
+            }
+        }
+        
+        if (end == std::string::npos) {
+            searchPos = start + 1;
+            continue;
+        }
+        
+        std::string mid = input.substr(start + 1, end - start - 1);
+        bool isRange = false;
+        std::string rangeStart, rangeEnd;
+        if (commas.empty()) {
+            size_t dots = mid.find("..");
+            if (dots != std::string::npos && dots > 0 && dots + 2 < mid.length()) {
+                rangeStart = mid.substr(0, dots);
+                rangeEnd = mid.substr(dots + 2);
+                if (rangeStart.find("..") == std::string::npos && rangeEnd.find("..") == std::string::npos) {
+                    auto isNum = [](const std::string& s) {
+                        if (s.empty()) return false;
+                        size_t i = 0;
+                        if (s[i] == '-' || s[i] == '+') i++;
+                        if (i == s.length()) return false;
+                        for (; i < s.length(); i++) if (!isdigit(s[i])) return false;
+                        return true;
+                    };
+                    auto isChar = [](const std::string& s) {
+                        return s.length() == 1 && isalpha(s[0]);
+                    };
+                    if ((isNum(rangeStart) && isNum(rangeEnd)) || (isChar(rangeStart) && isChar(rangeEnd))) {
+                        isRange = true;
+                    }
+                }
+            }
+        }
+        
+        if (!commas.empty() || isRange) {
+            std::string pre = input.substr(0, start);
+            std::string post = input.substr(end + 1);
+            
+            if (!commas.empty()) {
+                std::vector<std::string> parts;
+                size_t lastPos = start + 1;
+                for (size_t c : commas) {
+                    parts.push_back(input.substr(lastPos, c - lastPos));
+                    lastPos = c + 1;
+                }
+                parts.push_back(input.substr(lastPos, end - lastPos));
+                
+                for (const auto& p : parts) {
+                    std::string constructed = pre + p + post;
+                    auto sub = expandBraces(constructed);
+                    results.insert(results.end(), sub.begin(), sub.end());
+                }
+            } else if (isRange) {
+                if (isdigit(rangeStart[0]) || rangeStart[0] == '-' || rangeStart[0] == '+') {
+                    int s = std::stoi(rangeStart);
+                    int e = std::stoi(rangeEnd);
+                    int step = s <= e ? 1 : -1;
+                    for (int i = s; s <= e ? i <= e : i >= e; i += step) {
+                        std::string constructed = pre + std::to_string(i) + post;
+                        auto sub = expandBraces(constructed);
+                        results.insert(results.end(), sub.begin(), sub.end());
+                    }
+                } else {
+                    char s = rangeStart[0];
+                    char e = rangeEnd[0];
+                    int step = s <= e ? 1 : -1;
+                    for (char i = s; s <= e ? i <= e : i >= e; i += step) {
+                        std::string constructed = pre + std::string(1, i) + post;
+                        auto sub = expandBraces(constructed);
+                        results.insert(results.end(), sub.begin(), sub.end());
+                    }
+                }
+            }
+            return results;
+        } else {
+            searchPos = start + 1;
+        }
+    }
+    
+    results.push_back(input);
+    return results;
+}
+
+inline std::vector<std::string> expandGlobInternal(const std::string& pattern, const std::string& cwd) {
     std::vector<std::string> results;
     
     if (!containsGlob(pattern)) {
@@ -283,7 +406,7 @@ inline std::vector<std::string> expandGlob(const std::string& pattern, const std
                         
                         if (globMatch(dynamicPart, entryName)) {
                             std::string subPattern = entry.path().string() + "/" + filePart;
-                            auto subResults = expandGlob(subPattern, cwd);
+                            auto subResults = expandGlobInternal(subPattern, cwd);
                             for (const auto& r : subResults) {
                                 if (r != subPattern || !containsGlob(r)) {
                                     results.push_back(r);
@@ -331,6 +454,24 @@ inline std::vector<std::string> expandGlob(const std::string& pattern, const std
         results.push_back(pattern);
     }
     
+    return results;
+}
+
+inline std::vector<std::string> expandGlob(const std::string& pattern, const std::string& cwd) {
+    std::vector<std::string> braced = expandBraces(pattern);
+    if (braced.size() == 1 && braced[0] == pattern) {
+        return expandGlobInternal(pattern, cwd);
+    }
+    
+    std::vector<std::string> results;
+    for (const auto& b : braced) {
+        auto g = expandGlobInternal(b, cwd);
+        if (g.size() == 1 && g[0] == b && g[0] != pattern) {
+            results.push_back(g[0]);
+        } else {
+            results.insert(results.end(), g.begin(), g.end());
+        }
+    }
     return results;
 }
 
