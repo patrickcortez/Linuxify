@@ -1,5 +1,4 @@
-// Compile: cl /EHsc /std:c++17 main.cpp registry.cpp /Fe:linuxify.exe
-// Alternate compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
+// compile: g++ -std=c++17 -static -o linuxify.exe main.cpp registry.cpp -lpsapi -lws2_32 -liphlpapi -lwininet -lwlanapi 2>&1
 
 #include <io.h>
 #include <stdio.h>

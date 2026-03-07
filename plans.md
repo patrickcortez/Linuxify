@@ -1,6 +1,6 @@
 # Plans
 
-Linuxify package manager:
+Linuxify package manager: {Optional}
 
 Name: lpm (Client Side)
 
@@ -32,3 +32,6 @@ every package must have a folder and the server will look inside the folder and 
 
 client -> server
 server -> client
+
+
+Linuxify Status {DONE}
