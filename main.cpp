@@ -73,7 +73,7 @@ class ShellLogic {
         "echo", "pwd", "cd", "type", "clear", "env", "export",
         "which", "history", "lin", "jobs", "fg", "bg", "uninstall",
         "setup", "alias", "unalias", "source", "read", "test", "true", "false",
-        "exit", "help", "man", "fuzz"
+        "exit", "help", "man", "fuzz", "registry"
     }; 
 
 
@@ -5897,6 +5897,31 @@ public:
         std::cout << "\n  Utilities:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  calc";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Command-line calculator\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cal";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Calendar\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cmatrix";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Matrix digital rain\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  cowsay";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        ASCII cow speech\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  printf";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Format and print data\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  clear";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "         Clear the screen\n";
@@ -5932,9 +5957,24 @@ public:
         std::cout << "           Manage persistent variables (list, mod, insert, purge, del)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  alias";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Create command aliases\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  unalias";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Remove aliases\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  which";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "         Find command location\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  type";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Describe a command\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  help";
@@ -5960,6 +6000,16 @@ public:
         std::cout << "  yes [str]";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "     Output string repeatedly\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  date";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Print system date/time\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  seq";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "           Print a sequence of numbers\n";
 
         std::cout << "\n  Package Management:\n\n";
 
@@ -6098,6 +6148,16 @@ public:
         std::cout << "\n  File Operations:\n\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  mount";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "         Mount custom filesystems\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  umount";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Unmount filesystems\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  ln";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
         std::cout << "            Create links (-s for symbolic)\n";
@@ -6175,6 +6235,21 @@ public:
         std::cout << "     Pipe output to next command\n";
 
         std::cout << "\n  System Information:\n\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  wsltest";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "       Test WSL Kernel Access\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  uptime";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "        Show system uptime\n";
+
+        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        std::cout << "  free";
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+        std::cout << "          Show free and used memory\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
         std::cout << "  lsmem";
@@ -6259,19 +6334,9 @@ public:
         std::cout << "     TCP client/server (-l listen)\n";
 
         SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  net show";
+        std::cout << "  net";
         SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "      Scan WiFi networks\n";
-
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  net connect";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "   Connect to WiFi network\n";
-
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "  net disconnect";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "Disconnect from WiFi\n";
+        std::cout << "            Network services & WiFi management\n";
 
         std::cout << "\n  Process Management (Extended):\n\n";
 

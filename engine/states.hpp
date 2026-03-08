@@ -5,6 +5,7 @@
 #include "shell_context.hpp"
 #include "../shell_streams.hpp"
 #include "../input_handler.hpp"
+#include "../registry.hpp"
 #include <iostream>
 
 // Forward declarations of helper functions (to be defined in main.cpp or a helper file)
@@ -69,6 +70,37 @@ inline std::unique_ptr<Continuation> StateReadInput::run(ShellContext& ctx) {
     // Lazy Initialization of Handler
     if (!handler) {
         handler = std::make_unique<InputHandler>(ctx.currentDir, ctx.commandHistory, ctx.isAdmin);
+        handler->setCommandValidator([&](const std::string& cmd) -> bool {
+            if (cmd.empty()) return true;
+            
+            // Check Builtins
+            const auto& builtins = AutoSuggest::getBuiltinCommands();
+            if (std::find(builtins.begin(), builtins.end(), cmd) != builtins.end()) return true;
+            
+            // Check Shell Syntax
+            const auto& syntaxKws = AutoSuggest::getShellSyntaxKeywords();
+            if (std::find(syntaxKws.begin(), syntaxKws.end(), cmd) != syntaxKws.end()) return true;
+            
+            // Check Externals / PATH
+            const auto& externals = AutoSuggest::getExternalCommands();
+            if (std::find(externals.begin(), externals.end(), cmd) != externals.end()) return true;
+
+            // Check Registry explicitly
+            if (g_registry.isRegistered(cmd)) return true;
+            
+            // Check Absolute/Relative Paths
+            if (cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos) {
+                std::string fullPath = cmd;
+                if (!std::filesystem::path(cmd).is_absolute()) {
+                    fullPath = (std::filesystem::path(ctx.currentDir) / cmd).string();
+                }
+                if (std::filesystem::exists(fullPath) && !std::filesystem::is_directory(fullPath)) {
+                    return true;
+                }
+            }
+            
+            return false;
+        });
     }
 
     // POLL (Non-Blocking)

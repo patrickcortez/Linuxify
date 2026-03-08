@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <windows.h>
 #include <set>
+#include "../registry.hpp"
 
 namespace fs = std::filesystem;
 
@@ -26,9 +27,18 @@ public:
             "setup", "alias", "unalias", "source", "read", "test", "true", "false",
             "exit", "help", "man", "date", "cal", "uname", "hostname", "uptime",
             "free", "df", "mount", "umount", "sleep", "printf", "seq", "yes",
-            "fuzz"
+            "fuzz", "registry"
         };
         return commands;
+    }
+    
+    static const std::vector<std::string>& getShellSyntaxKeywords() {
+        static std::vector<std::string> keywords = {
+            "if", "for", "while", "case", "function", "declare", "typeset", "local",
+            "read", "source", ".", "[[", "((", "select", "until", "elif", "fi", "done", "esac",
+            "do", "then", "else", "{", "}"
+        };
+        return keywords;
     }
     
     static std::vector<std::string> getExternalCommands() {
@@ -100,6 +110,11 @@ public:
             } catch (...) {}
         }
 
+        // 3. Scan Registry (registry.lin)
+        for (const auto& pair : g_registry.getAllCommands()) {
+            uniqueCmds.insert(pair.first);
+        }
+
         cachedCommands.assign(uniqueCmds.begin(), uniqueCmds.end());
         cachePopulated = true;
         return cachedCommands;
@@ -121,6 +136,13 @@ public:
             if (cmd.length() >= prefix.length() && 
                 toLower(cmd.substr(0, prefix.length())) == lowerPrefix) {
                 if (seen.insert(cmd).second) suggestions.push_back(cmd);
+            }
+        }
+        
+        for (const auto& kw : getShellSyntaxKeywords()) {
+            if (kw.length() >= prefix.length() && 
+                toLower(kw.substr(0, prefix.length())) == lowerPrefix) {
+                if (seen.insert(kw).second) suggestions.push_back(kw);
             }
         }
         

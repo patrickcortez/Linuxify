@@ -40,6 +40,7 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> lastTimeInput;
     bool initialized;
     bool isAdmin;
+    std::function<bool(const std::string&)> commandValidator;
 
     // Auto-Suggestion State
     struct SuggestionEntry {
@@ -450,6 +451,18 @@ private:
             selEnd = std::max(selectionAnchor, cursorPos);
         }
 
+        std::string firstTokenStr;
+        if (!inputBuffer.empty()) {
+            size_t firstSpace = inputBuffer.find(' ');
+            if (firstSpace != std::string::npos) {
+                firstTokenStr = inputBuffer.substr(0, firstSpace);
+            } else {
+                firstTokenStr = inputBuffer;
+            }
+        }
+        
+        bool isValidCommand = commandValidator ? commandValidator(firstTokenStr) : true;
+
         for (size_t i = 0; i < inputBuffer.length(); i++) {
             char c = inputBuffer[i];
             
@@ -498,7 +511,11 @@ private:
 
             // Color Logic
             if (isFirstToken) {
-                io.setColor(IO::Console::COLOR_COMMAND);
+                if (!isValidCommand) {
+                    io.setColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
+                } else {
+                    io.setColor(IO::Console::COLOR_COMMAND);
+                }
             } else if (c == '-') {
                  io.setColor(IO::Console::COLOR_FLAG);
             } else {
@@ -557,7 +574,7 @@ private:
 public:
     InputHandler(const std::string& cwd, const std::vector<std::string>& hist, bool admin = false) 
         : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1),
-          lastCharInput(0), initialized(false), isAdmin(admin) {
+          lastCharInput(0), initialized(false), isAdmin(admin), commandValidator(nullptr) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
         
@@ -568,6 +585,10 @@ public:
         }
         
         rebuildSuggestions(); // Build the frequency index logic
+    }
+
+    void setCommandValidator(std::function<bool(const std::string&)> validator) {
+        commandValidator = validator;
     }
 
     std::string getInputBuffer() const { return inputBuffer; }
