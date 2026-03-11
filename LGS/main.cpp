@@ -71,8 +71,14 @@ int main(int argc, char** argv) {
         listGrid(flag);
     } else if (command == "import") {
         importGrid();
+    } else if (command == "help"){
+        printHelp();
+        return 1;
+    } else if (command == "which"){
+        whichGrid();
+        return 1;
     } else {
-        std::cerr << "Command not found or missing implementation\n";
+        std::cerr << "LGS: Command not found!\n";
         return 1;
     }
 

@@ -416,3 +416,33 @@ inline void importGrid() {
         }
     }
 }
+
+inline void printHelp() {
+    std::cout << "Linuxify Grid System (LGS) - Command Reference\n";
+    std::cout << "------------------------------------------------\n";
+    std::cout << "grid create <grid-name>                     : create a new grid(binary file)\n";
+    std::cout << "grid use <grid-name>                        : use a grid\n";
+    std::cout << "grid add <column-name>:<data-type>          : add a column to the grid\n";
+    std::cout << "grid insert <row-data>                      : insert data to the grid\n";
+    std::cout << "grid select <condition>                     : select data from the grid\n";
+    std::cout << "grid edit <row-index> <column-index> <data> : edit data in the grid\n";
+    std::cout << "grid delete-row <row-index>                 : delete a row from the grid\n";
+    std::cout << "grid delete-column <column-index>            : delete a column from the grid\n";
+    std::cout << "grid delete <row-index> <column-index>      : delete a singular data from the grid\n";
+    std::cout << "grid list                                   : list all grids\n";
+    std::cout << "grid list -c                                : list all columns in the grid\n";
+    std::cout << "grid list -r                                : list all rows in the grid\n";
+    std::cout << "grid list -a                                : list all datas in grid row+column\n";
+    std::cout << "grid import                                 : for piping other command output to grid\n";
+    std::cout << "grid help                                   : show this help\n";
+    std::cout << "grid which                                  : show the current grid\n";
+}
+
+inline void whichGrid() {
+    std::string name = getCurrentGrid();
+    if (name.empty()) {
+        std::cerr << "No grid currently selected\n";
+    } else {
+        std::cout << name << "\n";
+    }
+}
