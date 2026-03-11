@@ -1,6 +1,7 @@
 # Plans
 
-Linuxify package manager: {Optional}
+Linuxify package manager:
+Status: {NOT STARTED}
 
 Name: lpm (Client Side)
 
@@ -53,12 +54,10 @@ client -> server
 server -> client
 
 
+---
 
-
-Linuxify Status {DONE}
-
-
-Data Grid System?
+Data Grid System:
+Status: {DONE}
 
 Name: Linuxify Grid System (LGS)
 

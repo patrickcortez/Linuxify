@@ -21,6 +21,7 @@ A native Unix-like shell and development platform for Windows — built on a con
 - Arithmetic Handling and pyenv or wrapper for python(I havent solved how to make pythons input work).
 - globbing support: <command> *.<ext>
 - Persistent environment variables: export -p <var>=<Value>, and Arrays: export -arr <arrname>={<val1>,<val2>,<val3>}
+- **Linuxify Grid System** (LGS) - A command-line database management system for Linuxify that can be piped to different commands.
 
 ## Components
 
@@ -486,5 +487,3 @@ g++ -std=c++17 -static -o cmds/crond.exe cmds-src/crond.cpp -lws2_32
 ## License
 
 Linuxify is licensed under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for details.
-
-MinGW-w64 components are licensed under GPL/LGPL.

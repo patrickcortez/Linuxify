@@ -55,4 +55,20 @@ Windows kernel with linux syntax for its commands.
 
 - [X] Integrate the rest of the Linux commands and utilities
 
+## Phase 7: Actual Package Manager: LPM(Linuxify Package Manager)
+
+- [ ] Make Client side package manager
+- [ ] Make Server Side handler for packages
+- [ ] Secure Server Side 
+- [ ] Find a way to host other than tailscale
+    - Option 1: Yggdrasil
+    - Option 2: Reverse Proxy
+    - Option 3: Cloudflare Tunnel
+    - Option 4: Get a actual Public IP
+
+## Phase 8:
+
+- Publicly Announce Linuxify.
+
+
 
