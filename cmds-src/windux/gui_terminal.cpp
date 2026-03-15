@@ -1,5 +1,4 @@
-// Linuxify GUI Terminal (Tabs + ConPTY + Pixel Font + Polish + Scrollback + TUI Support)
-// Compile: g++ -std=c++17 -static -mwindows -o cmds\terminal.exe cmds-src\gui_terminal.cpp cmds-src\terminal.res -lgdi32 -luser32 -ldwmapi
+// Compile: g++ -std=c++17 -static -mwindows -o cmds\terminal.exe cmds-src\windux\gui_terminal.cpp cmds-src\windux\windux.res -lgdi32 -luser32 -ldwmapi -lshell32
 
 #define _WIN32_WINNT 0x0A00 
 #define NOMINMAX
@@ -16,6 +15,7 @@
 #include <cctype>
 #include <fstream>
 #include <sstream>
+#include <shellapi.h>
 
 #include "conpty_defs.hpp"
 
@@ -31,17 +31,19 @@ const int SCROLLBAR_WIDTH = 12;
 
 // Colors
 const COLORREF PALETTE[] = {
-    RGB(12, 12, 12), RGB(197, 15, 31), RGB(19, 161, 14), RGB(193, 156, 0),
-    RGB(0, 55, 218), RGB(136, 23, 152), RGB(58, 150, 221), RGB(204, 204, 204),
-    RGB(118, 118, 118), RGB(231, 72, 86), RGB(22, 198, 12), RGB(249, 241, 165),
-    RGB(59, 120, 255), RGB(180, 0, 158), RGB(97, 214, 214), RGB(242, 242, 242)
+    RGB(15, 17, 20), RGB(204, 62, 68), RGB(38, 180, 58), RGB(215, 175, 40),
+    RGB(55, 120, 230), RGB(160, 60, 176), RGB(68, 170, 220), RGB(210, 210, 210),
+    RGB(100, 105, 115), RGB(240, 85, 90), RGB(50, 215, 60), RGB(250, 240, 150),
+    RGB(86, 156, 255), RGB(190, 60, 175), RGB(90, 220, 220), RGB(240, 242, 245)
 };
 
-const COLORREF DEFAULT_BG = RGB(10, 10, 10);
-const COLORREF DEFAULT_FG = RGB(220, 220, 220);
-const COLORREF TAB_BG = RGB(30, 30, 30);
-const COLORREF TAB_ACTIVE_BG = RGB(50, 50, 50);
-const int TAB_HEIGHT = 32;
+const COLORREF DEFAULT_BG = RGB(15, 17, 20);
+const COLORREF DEFAULT_FG = RGB(210, 215, 220);
+const COLORREF TAB_BG = RGB(20, 22, 28);
+const COLORREF TAB_ACTIVE_BG = RGB(32, 36, 46);
+const COLORREF ACCENT = RGB(86, 156, 255);
+const COLORREF SELECTION_BG = RGB(55, 70, 110);
+const int TAB_HEIGHT = 34;
 
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x00020016
@@ -61,6 +63,23 @@ struct ShellProfile {
 };
 
 std::vector<ShellProfile> g_profiles;
+std::string g_shellsProfPath;
+
+struct Settings {
+    std::string fontName = "Consolas";
+    int fontSize = 16;
+    int opacity = 240;
+    std::string cursorStyle = "underline";
+};
+
+Settings g_settings;
+std::string g_settingsProfPath;
+
+struct UrlSpan {
+    int startCol;
+    int endCol;
+    std::string url;
+};
 
 void LoadProfiles() {
     char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -76,6 +95,7 @@ void LoadProfiles() {
     }
     
     fs::path profPath = shellsDir / "shells.prof";
+    g_shellsProfPath = profPath.string();
     if (!fs::exists(profPath)) {
         std::ofstream out(profPath);
         out << "[Linuxify]\n";
@@ -109,8 +129,12 @@ void LoadProfiles() {
         
         if (trimmed.front() == '[' && trimmed.back() == ']') {
             if (inSection) {
-                if (!current.iconPath.empty() && fs::exists(current.iconPath)) {
-                    current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+                if (!current.iconPath.empty()) {
+                    fs::path resolvedIcon = fs::weakly_canonical(shellsDir / current.iconPath);
+                    if (fs::exists(resolvedIcon)) {
+                        current.iconPath = resolvedIcon.string();
+                        current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+                    }
                 }
                 g_profiles.push_back(current);
             }
@@ -142,8 +166,12 @@ void LoadProfiles() {
         }
     }
     if (inSection) {
-        if (!current.iconPath.empty() && fs::exists(current.iconPath)) {
-            current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+        if (!current.iconPath.empty()) {
+            fs::path resolvedIcon = fs::weakly_canonical(shellsDir / current.iconPath);
+            if (fs::exists(resolvedIcon)) {
+                current.iconPath = resolvedIcon.string();
+                current.hIcon = (HICON)LoadImageA(NULL, current.iconPath.c_str(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
+            }
         }
         g_profiles.push_back(current);
     }
@@ -159,6 +187,58 @@ void LoadProfiles() {
     }
 }
 
+void LoadSettings() {
+    char exePath[MAX_PATH]; GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    fs::path exeDir = fs::path(exePath).parent_path();
+    fs::path shellsDir = exeDir / "shells";
+    if (!fs::exists(shellsDir)) fs::create_directory(shellsDir);
+    fs::path settPath = shellsDir / "settings.prof";
+    g_settingsProfPath = settPath.string();
+    if (!fs::exists(settPath)) {
+        std::ofstream out(settPath);
+        out << "[Settings]\n";
+        out << "    font: \"Consolas\"\n";
+        out << "    fontSize: 16\n";
+        out << "    opacity: 240\n";
+        out << "    cursorStyle: \"underline\"\n";
+        out.close();
+    }
+    std::ifstream file(settPath);
+    std::string line;
+    bool inSection = false;
+    while (std::getline(file, line)) {
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;
+        size_t last = line.find_last_not_of(" \t\r\n");
+        std::string trimmed = line.substr(first, last - first + 1);
+        if (trimmed.front() == '[' && trimmed.back() == ']') { inSection = true; continue; }
+        if (!inSection) continue;
+        size_t colon = trimmed.find(':');
+        if (colon == std::string::npos) continue;
+        std::string key = trimmed.substr(0, colon);
+        std::string val = trimmed.substr(colon + 1);
+        last = key.find_last_not_of(" \t");
+        if (last != std::string::npos) key = key.substr(0, last + 1);
+        first = val.find_first_not_of(" \t");
+        if (first != std::string::npos) val = val.substr(first);
+        if (val.size() >= 2 && val.front() == '"' && val.back() == '"') val = val.substr(1, val.size() - 2);
+        if (key == "font") g_settings.fontName = val;
+        else if (key == "fontSize") g_settings.fontSize = std::max(8, std::min(72, std::stoi(val)));
+        else if (key == "opacity") g_settings.opacity = std::max(50, std::min(255, std::stoi(val)));
+        else if (key == "cursorStyle") g_settings.cursorStyle = val;
+    }
+}
+
+void SaveSettings() {
+    std::ofstream out(g_settingsProfPath);
+    out << "[Settings]\n";
+    out << "    font: \"" << g_settings.fontName << "\"\n";
+    out << "    fontSize: " << g_settings.fontSize << "\n";
+    out << "    opacity: " << g_settings.opacity << "\n";
+    out << "    cursorStyle: \"" << g_settings.cursorStyle << "\"\n";
+    out.close();
+}
+
 // ============================================================================
 // Data Structures
 // ============================================================================
@@ -168,6 +248,28 @@ struct Cell {
     COLORREF fg = DEFAULT_FG;
     COLORREF bg = DEFAULT_BG;
 };
+
+std::vector<UrlSpan> FindUrlsInRow(const std::vector<Cell>& row) {
+    std::vector<UrlSpan> urls;
+    std::string text;
+    text.reserve(row.size());
+    for (const auto& c : row) text += c.ch;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t httpPos = text.find("http://", pos);
+        size_t httpsPos = text.find("https://", pos);
+        size_t urlStart = std::min(httpPos, httpsPos);
+        if (urlStart == std::string::npos) break;
+        size_t urlEnd = urlStart;
+        while (urlEnd < text.size() && text[urlEnd] > 32 && text[urlEnd] != '"' && text[urlEnd] != '<' && text[urlEnd] != '>') urlEnd++;
+        while (urlEnd > urlStart && (text[urlEnd-1] == '.' || text[urlEnd-1] == ',' || text[urlEnd-1] == ')' || text[urlEnd-1] == ']' || text[urlEnd-1] == ';')) urlEnd--;
+        if (urlEnd > urlStart + 7) {
+            urls.push_back({(int)urlStart, (int)urlEnd - 1, text.substr(urlStart, urlEnd - urlStart)});
+        }
+        pos = urlEnd;
+    }
+    return urls;
+}
 
 struct Session;
 struct ShellProfile;
@@ -281,59 +383,113 @@ HWND g_hMenuWnd = NULL;
 int g_menuHoverIndex = -1;
 std::string g_startDir;
 
+float g_scrollCurrent = 0.0f;
+int g_scrollTarget = 0;
+bool g_scrollAnimating = false;
+#define SCROLL_TIMER_ID 1
+
+int g_draggingTab = -1;
+int g_dragStartX = 0;
+
+int g_hoverUrlRow = -1;
+int g_hoverUrlStartCol = -1;
+int g_hoverUrlEndCol = -1;
+std::string g_hoverUrlText;
+
+HWND g_hSettingsWnd = NULL;
+
 // Custom Menu Window
 LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    const int itemHeight = 28;
+    const int separatorHeight = 9;
+    int editShellsY = 1 + (int)g_profiles.size() * itemHeight + separatorHeight;
+    int settingsY = editShellsY + itemHeight;
+    int totalMenuItems = (int)g_profiles.size() + 2;
+
     switch(msg) {
         case WM_PAINT:
         {
             PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
             RECT rc; GetClientRect(hwnd, &rc);
-            
-            HBRUSH hBg = CreateSolidBrush(RGB(12, 12, 12));
+
+            HBRUSH hBg = CreateSolidBrush(RGB(22, 24, 30));
             FillRect(hdc, &rc, hBg);
             DeleteObject(hBg);
-            
-            // Border
-            HBRUSH hBorder = CreateSolidBrush(RGB(60, 60, 60));
+
+            HBRUSH hBorder = CreateSolidBrush(RGB(55, 60, 75));
             FrameRect(hdc, &rc, hBorder);
             DeleteObject(hBorder);
-            
+
             SelectObject(hdc, g_hFont);
             SetBkMode(hdc, TRANSPARENT);
-            
-            int itemHeight = 24;
+
             for (size_t i = 0; i < g_profiles.size(); i++) {
                 RECT rcItem = {1, 1 + (LONG)i * itemHeight, rc.right - 1, 1 + (LONG)(i+1) * itemHeight};
-                
-                if (i == g_menuHoverIndex) {
-                    HBRUSH hHover = CreateSolidBrush(RGB(50, 50, 50));
+
+                if ((int)i == g_menuHoverIndex) {
+                    HBRUSH hHover = CreateSolidBrush(RGB(40, 44, 56));
                     FillRect(hdc, &rcItem, hHover);
                     DeleteObject(hHover);
                 }
-                
-                SetTextColor(hdc, RGB(220, 220, 220));
-                
-                // Draw Icon if available
+
+                SetTextColor(hdc, RGB(210, 215, 220));
+
                 if (g_profiles[i].hIcon) {
-                    DrawIconEx(hdc, rcItem.left + 5, rcItem.top + 4, g_profiles[i].hIcon, 16, 16, 0, NULL, DI_NORMAL);
+                    DrawIconEx(hdc, rcItem.left + 8, rcItem.top + 6, g_profiles[i].hIcon, 16, 16, 0, NULL, DI_NORMAL);
                 }
-                
-                RECT rcText = rcItem; rcText.left += 26;
+
+                RECT rcText = rcItem; rcText.left += 30;
                 DrawTextA(hdc, g_profiles[i].name.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
+
+            int sepY = 1 + (int)g_profiles.size() * itemHeight + 4;
+            HPEN hPen = CreatePen(PS_SOLID, 1, RGB(55, 60, 75));
+            HPEN hOld = (HPEN)SelectObject(hdc, hPen);
+            MoveToEx(hdc, 8, sepY, NULL);
+            LineTo(hdc, rc.right - 8, sepY);
+            SelectObject(hdc, hOld);
+            DeleteObject(hPen);
+
+            RECT rcEdit = {1, (LONG)editShellsY, rc.right - 1, (LONG)(editShellsY + itemHeight)};
+            if (g_menuHoverIndex == (int)g_profiles.size()) {
+                HBRUSH hHover = CreateSolidBrush(RGB(40, 44, 56));
+                FillRect(hdc, &rcEdit, hHover);
+                DeleteObject(hHover);
+            }
+            SetTextColor(hdc, RGB(170, 175, 185));
+            RECT rcEditText = rcEdit; rcEditText.left += 12;
+            DrawTextA(hdc, "Edit Shells...", -1, &rcEditText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+            RECT rcSettings = {1, (LONG)settingsY, rc.right - 1, (LONG)(settingsY + itemHeight)};
+            if (g_menuHoverIndex == (int)g_profiles.size() + 1) {
+                HBRUSH hHover2 = CreateSolidBrush(RGB(40, 44, 56));
+                FillRect(hdc, &rcSettings, hHover2);
+                DeleteObject(hHover2);
+            }
+            SetTextColor(hdc, RGB(170, 175, 185));
+            RECT rcSettText = rcSettings; rcSettText.left += 12;
+            DrawTextA(hdc, "Settings...", -1, &rcSettText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
             EndPaint(hwnd, &ps);
             return 0;
         }
         case WM_MOUSEMOVE:
         {
             int y = HIWORD(lParam);
-            int newIndex = (y - 1) / 24;
-            if (newIndex < 0 || newIndex >= g_profiles.size()) newIndex = -1;
-            
+            int newIndex = -1;
+            if (y >= 1 && y < 1 + (int)g_profiles.size() * itemHeight) {
+                newIndex = (y - 1) / itemHeight;
+                if (newIndex >= (int)g_profiles.size()) newIndex = -1;
+            } else if (y >= editShellsY && y < editShellsY + itemHeight) {
+                newIndex = (int)g_profiles.size();
+            } else if (y >= settingsY && y < settingsY + itemHeight) {
+                newIndex = (int)g_profiles.size() + 1;
+            }
+
             if (newIndex != g_menuHoverIndex) {
                 g_menuHoverIndex = newIndex;
                 InvalidateRect(hwnd, NULL, FALSE);
-                
+
                 TRACKMOUSEEVENT tme;
                 tme.cbSize = sizeof(TRACKMOUSEEVENT);
                 tme.dwFlags = TME_LEAVE;
@@ -346,20 +502,32 @@ LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             g_menuHoverIndex = -1;
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
-            
+
         case WM_LBUTTONUP:
         {
             int y = HIWORD(lParam);
-            int index = (y - 1) / 24;
-            if (index >= 0 && index < g_profiles.size()) {
-                CreateNewSession(&g_profiles[index]);
+            int index = -1;
+            if (y >= 1 && y < 1 + (int)g_profiles.size() * itemHeight) {
+                index = (y - 1) / itemHeight;
+            } else if (y >= editShellsY && y < editShellsY + itemHeight) {
+                index = (int)g_profiles.size();
+            } else if (y >= settingsY && y < settingsY + itemHeight) {
+                index = (int)g_profiles.size() + 1;
             }
-            ShowWindow(hwnd, SW_HIDE); // Hide first
+
+            if (index >= 0 && index < (int)g_profiles.size()) {
+                CreateNewSession(&g_profiles[index]);
+            } else if (index == (int)g_profiles.size()) {
+                ShellExecuteA(NULL, "open", g_shellsProfPath.c_str(), NULL, NULL, SW_SHOWNORMAL);
+            } else if (index == (int)g_profiles.size() + 1) {
+                PostMessage(g_hwnd, WM_USER + 100, 0, 0);
+            }
+            ShowWindow(hwnd, SW_HIDE);
             DestroyWindow(hwnd);
             g_hMenuWnd = NULL;
             return 0;
         }
-        
+
         case WM_KILLFOCUS:
             DestroyWindow(hwnd);
             g_hMenuWnd = NULL;
@@ -377,6 +545,153 @@ void RegisterMenuClass() {
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.style = CS_DROPSHADOW; // Add drop shadow
     RegisterClassExA(&wc);
+}
+
+void ApplySettings();
+void ShowSettingsDialog();
+
+#define IDC_SFONT 201
+#define IDC_SFONTSIZE 202
+#define IDC_SOPACITY 203
+#define IDC_SCURSOR 204
+#define IDC_SAPPLY 205
+
+LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE:
+        {
+            HFONT hUiFont = CreateFontA(14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+
+            auto MakeLabel = [&](const char* text, int x, int y, int w, int h) {
+                HWND lbl = CreateWindowExA(0, "STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h, hwnd, NULL, GetModuleHandle(NULL), NULL);
+                SendMessage(lbl, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+            };
+
+            MakeLabel("Font:", 15, 22, 90, 20);
+            HWND hFont = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", g_settings.fontName.c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 120, 20, 200, 24, hwnd, (HMENU)IDC_SFONT, GetModuleHandle(NULL), NULL);
+            SendMessage(hFont, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+
+            MakeLabel("Font Size:", 15, 56, 90, 20);
+            HWND hSize = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", std::to_string(g_settings.fontSize).c_str(), WS_CHILD | WS_VISIBLE | ES_NUMBER, 120, 54, 70, 24, hwnd, (HMENU)IDC_SFONTSIZE, GetModuleHandle(NULL), NULL);
+            SendMessage(hSize, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+
+            MakeLabel("Opacity (50-255):", 15, 90, 100, 20);
+            HWND hOpac = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", std::to_string(g_settings.opacity).c_str(), WS_CHILD | WS_VISIBLE | ES_NUMBER, 120, 88, 70, 24, hwnd, (HMENU)IDC_SOPACITY, GetModuleHandle(NULL), NULL);
+            SendMessage(hOpac, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+
+            MakeLabel("Cursor Style:", 15, 124, 90, 20);
+            HWND hCursor = CreateWindowExA(0, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_HASSTRINGS, 120, 122, 140, 120, hwnd, (HMENU)IDC_SCURSOR, GetModuleHandle(NULL), NULL);
+            SendMessage(hCursor, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+            SendMessageA(hCursor, CB_ADDSTRING, 0, (LPARAM)"Underline");
+            SendMessageA(hCursor, CB_ADDSTRING, 0, (LPARAM)"Block");
+            SendMessageA(hCursor, CB_ADDSTRING, 0, (LPARAM)"Bar");
+            int sel = 0;
+            if (g_settings.cursorStyle == "block") sel = 1;
+            else if (g_settings.cursorStyle == "bar") sel = 2;
+            SendMessage(hCursor, CB_SETCURSEL, sel, 0);
+
+            HWND hApply = CreateWindowExA(0, "BUTTON", "Apply", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 120, 168, 100, 32, hwnd, (HMENU)IDC_SAPPLY, GetModuleHandle(NULL), NULL);
+            SendMessage(hApply, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_SAPPLY && HIWORD(wParam) == BN_CLICKED) {
+                char buf[256];
+                GetDlgItemTextA(hwnd, IDC_SFONT, buf, sizeof(buf));
+                g_settings.fontName = buf;
+
+                GetDlgItemTextA(hwnd, IDC_SFONTSIZE, buf, sizeof(buf));
+                g_settings.fontSize = std::max(8, std::min(72, atoi(buf)));
+
+                GetDlgItemTextA(hwnd, IDC_SOPACITY, buf, sizeof(buf));
+                g_settings.opacity = std::max(50, std::min(255, atoi(buf)));
+
+                int csIdx = (int)SendDlgItemMessageA(hwnd, IDC_SCURSOR, CB_GETCURSEL, 0, 0);
+                if (csIdx == 0) g_settings.cursorStyle = "underline";
+                else if (csIdx == 1) g_settings.cursorStyle = "block";
+                else if (csIdx == 2) g_settings.cursorStyle = "bar";
+
+                SaveSettings();
+                ApplySettings();
+                DestroyWindow(hwnd);
+                g_hSettingsWnd = NULL;
+            }
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            g_hSettingsWnd = NULL;
+            return 0;
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        {
+            HDC hdcCtrl = (HDC)wParam;
+            SetTextColor(hdcCtrl, RGB(210, 215, 220));
+            SetBkColor(hdcCtrl, RGB(30, 33, 42));
+            static HBRUSH hEditBg = CreateSolidBrush(RGB(30, 33, 42));
+            return (LRESULT)hEditBg;
+        }
+        case WM_CTLCOLORBTN:
+        {
+            static HBRUSH hBtnBg = CreateSolidBrush(RGB(40, 44, 56));
+            return (LRESULT)hBtnBg;
+        }
+        case WM_ERASEBKGND:
+        {
+            HDC hdc = (HDC)wParam;
+            RECT rc; GetClientRect(hwnd, &rc);
+            HBRUSH hBg = CreateSolidBrush(RGB(22, 24, 30));
+            FillRect(hdc, &rc, hBg);
+            DeleteObject(hBg);
+            return 1;
+        }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void RegisterSettingsClass() {
+    WNDCLASSEXA wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc = SettingsWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "LinuxifySettingsClass";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassExA(&wc);
+}
+
+void ShowSettingsDialog() {
+    if (g_hSettingsWnd) { SetForegroundWindow(g_hSettingsWnd); return; }
+    RECT rcMain; GetWindowRect(g_hwnd, &rcMain);
+    int x = rcMain.left + 100;
+    int y = rcMain.top + 80;
+    g_hSettingsWnd = CreateWindowExA(WS_EX_TOOLWINDOW, "LinuxifySettingsClass", "Windux Settings",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, 350, 240, g_hwnd, NULL, GetModuleHandle(NULL), NULL);
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(g_hSettingsWnd, 20, &dark, sizeof(dark));
+    ShowWindow(g_hSettingsWnd, SW_SHOW);
+    SetForegroundWindow(g_hSettingsWnd);
+}
+
+void ApplySettings() {
+    if (g_hFont) DeleteObject(g_hFont);
+    g_hFont = CreateFontA(g_settings.fontSize, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, g_settings.fontName.c_str());
+    HDC hdc = GetDC(g_hwnd);
+    SelectObject(hdc, g_hFont);
+    TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+    g_fontWidth = tm.tmAveCharWidth;
+    g_fontHeight = tm.tmHeight;
+    ReleaseDC(g_hwnd, hdc);
+    SetLayeredWindowAttributes(g_hwnd, 0, (BYTE)g_settings.opacity, LWA_ALPHA);
+    RECT rc; GetClientRect(g_hwnd, &rc);
+    int termHeight = rc.bottom - TAB_HEIGHT;
+    int cols = std::max(20, (int)((rc.right - 20 - SCROLLBAR_WIDTH) / g_fontWidth));
+    int rows = std::max(5, (int)((termHeight - 20) / g_fontHeight));
+    for (Session* s : g_sessions) {
+        if (s && s->hPC) {
+            g_pty.ResizePseudoConsole(s->hPC, {(SHORT)cols, (SHORT)rows});
+            s->Resize(rows, cols);
+        }
+    }
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 void ScreenToCell(int screenX, int screenY, int& row, int& col) {
@@ -1020,6 +1335,11 @@ void PaintWindow(HWND hwnd, HDC hdc) {
     FillRect(hdcMem, &rcTab, hTabBg);
     DeleteObject(hTabBg);
 
+    RECT rcTabSep = {0, TAB_HEIGHT - 1, rc.right, TAB_HEIGHT};
+    HBRUSH hTabSep = CreateSolidBrush(RGB(40, 44, 56));
+    FillRect(hdcMem, &rcTabSep, hTabSep);
+    DeleteObject(hTabSep);
+
     SelectObject(hdcMem, g_hFont);
     SetBkMode(hdcMem, OPAQUE);
     
@@ -1046,12 +1366,12 @@ void PaintWindow(HWND hwnd, HDC hdc) {
         DrawTextA(hdcMem, title.c_str(), -1, &rcText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         
         RECT rcClose = {rcItem.right - 20, rcItem.top, rcItem.right - 5, rcItem.bottom};
-        SetTextColor(hdcMem, RGB(200, 100, 100)); 
+        SetTextColor(hdcMem, RGB(160, 80, 80));
         DrawTextA(hdcMem, "x", 1, &rcClose, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         if (i == g_activeSessionIndex) {
-            RECT rcLine = {rcItem.left, TAB_HEIGHT-2, rcItem.right, TAB_HEIGHT};
-            HBRUSH hLine = CreateSolidBrush(RGB(60, 160, 255));
+            RECT rcLine = {rcItem.left, TAB_HEIGHT - 3, rcItem.right, TAB_HEIGHT - 1};
+            HBRUSH hLine = CreateSolidBrush(ACCENT);
             FillRect(hdcMem, &rcLine, hLine);
             DeleteObject(hLine);
         }
@@ -1060,7 +1380,7 @@ void PaintWindow(HWND hwnd, HDC hdc) {
     // Draw + button
     RECT rcPlus = { (LONG)g_sessions.size() * tabWidth, 0, (LONG)g_sessions.size() * tabWidth + 30, TAB_HEIGHT };
     if (g_hoverPlus) {
-        HBRUSH hHover = CreateSolidBrush(RGB(60, 60, 60)); // Light grey/hover
+        HBRUSH hHover = CreateSolidBrush(RGB(45, 48, 58));
         FillRect(hdcMem, &rcPlus, hHover);
         DeleteObject(hHover);
     }
@@ -1070,14 +1390,14 @@ void PaintWindow(HWND hwnd, HDC hdc) {
 
     // Separator Line
     RECT rcSep = { rcPlus.right, 4, rcPlus.right + 1, TAB_HEIGHT - 4 };
-    HBRUSH hSep = CreateSolidBrush(RGB(80, 80, 80));
+    HBRUSH hSep = CreateSolidBrush(RGB(50, 55, 65));
     FillRect(hdcMem, &rcSep, hSep);
     DeleteObject(hSep);
 
     // Draw v dropdown
     RECT rcDown = { rcPlus.right + 1, 0, rcPlus.right + 31, TAB_HEIGHT };
     if (g_hoverDown) {
-        HBRUSH hHover = CreateSolidBrush(RGB(60, 60, 60));
+        HBRUSH hHover = CreateSolidBrush(RGB(45, 48, 58));
         FillRect(hdcMem, &rcDown, hHover);
         DeleteObject(hHover);
     }
@@ -1115,18 +1435,18 @@ void PaintWindow(HWND hwnd, HDC hdc) {
             
             if (rowPtr) {
                 const auto& row = *rowPtr;
-                
-                // Get selection bounds
+
                 int r1, c1, r2, c2;
                 bool hasSel = HasSelection();
                 if (hasSel) GetOrderedSelection(r1, c1, r2, c2);
-                
-                for (int c = 0; c < row.size(); ++c) {
+
+                std::vector<UrlSpan> rowUrls = FindUrlsInRow(row);
+
+                for (int c = 0; c < (int)row.size(); ++c) {
                     const Cell& cell = row[c];
                     int x = termX + c * g_fontWidth;
                     int y = termY + i * g_fontHeight;
-                    
-                    // Check if this cell is selected
+
                     bool isSelected = false;
                     if (hasSel && i >= r1 && i <= r2) {
                         if (r1 == r2) {
@@ -1139,16 +1459,39 @@ void PaintWindow(HWND hwnd, HDC hdc) {
                             isSelected = true;
                         }
                     }
-                    
+
+                    bool isHoveredUrl = false;
+                    bool isAnyUrl = false;
+                    for (const auto& u : rowUrls) {
+                        if (c >= u.startCol && c <= u.endCol) {
+                            isAnyUrl = true;
+                            if (i == g_hoverUrlRow && u.startCol == g_hoverUrlStartCol && u.endCol == g_hoverUrlEndCol) {
+                                isHoveredUrl = true;
+                            }
+                            break;
+                        }
+                    }
+
                     if (isSelected) {
-                        // Highlight: invert colors (white bg, dark text)
-                        SetTextColor(hdcMem, RGB(0, 0, 0));
-                        SetBkColor(hdcMem, RGB(0, 255, 255)); // Cyan selection
+                        SetTextColor(hdcMem, cell.fg);
+                        SetBkColor(hdcMem, SELECTION_BG);
+                    } else if (isHoveredUrl) {
+                        SetTextColor(hdcMem, ACCENT);
+                        SetBkColor(hdcMem, cell.bg);
                     } else {
                         SetTextColor(hdcMem, cell.fg);
                         SetBkColor(hdcMem, cell.bg);
                     }
                     TextOutA(hdcMem, x, y, &cell.ch, 1);
+
+                    if (isHoveredUrl) {
+                        HPEN hULine = CreatePen(PS_SOLID, 1, ACCENT);
+                        HPEN hOldPen = (HPEN)SelectObject(hdcMem, hULine);
+                        MoveToEx(hdcMem, x, y + g_fontHeight - 1, NULL);
+                        LineTo(hdcMem, x + g_fontWidth, y + g_fontHeight - 1);
+                        SelectObject(hdcMem, hOldPen);
+                        DeleteObject(hULine);
+                    }
                 }
             }
         }
@@ -1158,8 +1501,15 @@ void PaintWindow(HWND hwnd, HDC hdc) {
             if (visualRow >= 0 && visualRow < maxVisible) {
                 int cx = termX + s->cursorCol * g_fontWidth;
                 int cy = termY + visualRow * g_fontHeight;
-                HBRUSH hCaret = CreateSolidBrush(RGB(200, 200, 200));
-                RECT rcCaret = {cx, cy + g_fontHeight - 2, cx + g_fontWidth, cy + g_fontHeight};
+                HBRUSH hCaret = CreateSolidBrush(ACCENT);
+                RECT rcCaret;
+                if (g_settings.cursorStyle == "block") {
+                    rcCaret = {cx, cy, cx + g_fontWidth, cy + g_fontHeight};
+                } else if (g_settings.cursorStyle == "bar") {
+                    rcCaret = {cx, cy, cx + 2, cy + g_fontHeight};
+                } else {
+                    rcCaret = {cx, cy + g_fontHeight - 2, cx + g_fontWidth, cy + g_fontHeight};
+                }
                 FillRect(hdcMem, &rcCaret, hCaret);
                 DeleteObject(hCaret);
             }
@@ -1171,18 +1521,20 @@ void PaintWindow(HWND hwnd, HDC hdc) {
              int sbY = TAB_HEIGHT;
              int sbH = rc.bottom - sbY;
              RECT rcSb = {sbX, sbY, rc.right, rc.bottom};
-             FillRect(hdcMem, &rcSb, (HBRUSH)GetStockObject(DKGRAY_BRUSH));
-             
+             HBRUSH hSbTrack = CreateSolidBrush(RGB(20, 22, 28));
+             FillRect(hdcMem, &rcSb, hSbTrack);
+             DeleteObject(hSbTrack);
+
              float ratio = (float)s->rows / (float)totalRows;
              if (ratio > 1.0f) ratio = 1.0f;
-             int thumbH = std::max(20, (int)(sbH * ratio));
-             
-             int maxStart = historySize; 
+             int thumbH = std::max(24, (int)(sbH * ratio));
+
+             int maxStart = historySize;
              if (maxStart > 0) {
                  float posRatio = (float)startLine / (float)maxStart;
                  int thumbY = sbY + (int)((sbH - thumbH) * posRatio);
-                 RECT rcThumb = {sbX + 2, thumbY, rc.right - 2, thumbY + thumbH};
-                 HBRUSH hThumb = CreateSolidBrush(RGB(150, 150, 150));
+                 RECT rcThumb = {sbX + 3, thumbY, rc.right - 3, thumbY + thumbH};
+                 HBRUSH hThumb = CreateSolidBrush(RGB(80, 85, 95));
                  FillRect(hdcMem, &rcThumb, hThumb);
                  DeleteObject(hThumb);
              }
@@ -1198,9 +1550,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
         g_hwnd = hwnd;
-        g_hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, 0,0,0, DEFAULT_CHARSET, 0,0,0, FIXED_PITCH, "Fixedsys"); 
-        
-        // FIX: Calculate actual font metrics
+        LoadSettings();
+        g_hFont = CreateFontA(g_settings.fontSize, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, g_settings.fontName.c_str());
         {
             HDC hdc = GetDC(hwnd);
             SelectObject(hdc, g_hFont);
@@ -1209,7 +1560,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g_fontHeight = tm.tmHeight;
             ReleaseDC(hwnd, hdc);
         }
-
         LoadProfiles();
         if (!g_pty.Init()) MessageBoxA(NULL, "Failed to init ConPTY", "Error", MB_OK);
         else CreateNewSession();
@@ -1242,11 +1592,36 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT) {
             POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
-            if (pt.y < TAB_HEIGHT) SetCursor(LoadCursor(NULL, IDC_ARROW)); 
-            else SetCursor(LoadCursor(NULL, IDC_IBEAM)); // IBeam in terminal area
+            if (pt.y < TAB_HEIGHT) {
+                SetCursor(LoadCursor(NULL, IDC_ARROW));
+            } else if (g_hoverUrlRow >= 0) {
+                SetCursor(LoadCursor(NULL, IDC_HAND));
+            } else {
+                SetCursor(LoadCursor(NULL, IDC_IBEAM));
+            }
             return TRUE;
         }
         break;
+
+    case WM_TIMER:
+        if (wParam == SCROLL_TIMER_ID && g_activeSessionIndex >= 0) {
+            Session* s = g_sessions[g_activeSessionIndex];
+            std::lock_guard<std::mutex> lock(s->mutex);
+            float diff = (float)g_scrollTarget - g_scrollCurrent;
+            if (std::abs(diff) < 0.5f) {
+                g_scrollCurrent = (float)g_scrollTarget;
+                s->viewOffset = g_scrollTarget;
+                g_scrollAnimating = false;
+                KillTimer(hwnd, SCROLL_TIMER_ID);
+            } else {
+                g_scrollCurrent += diff * 0.3f;
+                s->viewOffset = (int)(g_scrollCurrent + 0.5f);
+            }
+            if (s->viewOffset < 0) s->viewOffset = 0;
+            if (s->viewOffset > (int)s->history.size()) s->viewOffset = (int)s->history.size();
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
 
     case WM_LBUTTONDOWN:
         {
@@ -1272,11 +1647,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (y < TAB_HEIGHT) {
                 int tabWidth = 140;
                 int clickedIndex = x / tabWidth;
-                if (clickedIndex < g_sessions.size()) {
+                if (clickedIndex < (int)g_sessions.size()) {
                     int tabLeft = clickedIndex * tabWidth;
-                    if (x > tabLeft + tabWidth - 25) CloseSession(clickedIndex);
-                    else SwitchTab(clickedIndex);
-                } else if (clickedIndex == g_sessions.size()) {
+                    if (x > tabLeft + tabWidth - 25) {
+                        CloseSession(clickedIndex);
+                    } else {
+                        SwitchTab(clickedIndex);
+                        g_draggingTab = clickedIndex;
+                        g_dragStartX = x;
+                        SetCapture(hwnd);
+                    }
+                } else if (clickedIndex == (int)g_sessions.size()) {
                     // Check if clicked the + button (approx 0-30px relative to start)
                     int startX = g_sessions.size() * tabWidth;
                     int localX = x - startX;
@@ -1288,20 +1669,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         
                         POINT pt = {startX + 31, TAB_HEIGHT};
                         ClientToScreen(hwnd, &pt);
-                        
-                        int w = 200;
-                        int h = 2 + (g_profiles.size() * 24);
-                        
-                        g_hMenuWnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "LinuxifyMenuClass", "", 
+
+                        int w = 220;
+                        int h = 2 + ((int)g_profiles.size() * 28) + 9 + 28 + 28;
+
+                        g_hMenuWnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "LinuxifyMenuClass", "",
                                        WS_POPUP, pt.x, pt.y, w, h, hwnd, NULL, GetModuleHandle(NULL), NULL);
                                        
+                        AnimateWindow(g_hMenuWnd, 120, AW_SLIDE | AW_VER_POSITIVE | AW_ACTIVATE);
                         SetForegroundWindow(g_hMenuWnd);
                         SetFocus(g_hMenuWnd);
-                        AnimateWindow(g_hMenuWnd, 150, AW_SLIDE | AW_VER_POSITIVE | AW_ACTIVATE);
                     }
                 }
             } else {
-                // Start text selection in terminal area
+                if ((GetKeyState(VK_CONTROL) & 0x8000) && g_hoverUrlRow >= 0 && !g_hoverUrlText.empty()) {
+                    ShellExecuteA(NULL, "open", g_hoverUrlText.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                    return 0;
+                }
                 ScreenToCell(x, y, g_selStartRow, g_selStartCol);
                 g_selEndRow = g_selStartRow;
                 g_selEndCol = g_selStartCol;
@@ -1315,25 +1699,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_MOUSEMOVE:
         {
             int x = LOWORD(lParam); int y = HIWORD(lParam);
-            bool redraw = false;
-            
+
+            if (g_draggingTab >= 0 && y < TAB_HEIGHT) {
+                int tabWidth = 140;
+                int targetIndex = x / tabWidth;
+                if (targetIndex >= 0 && targetIndex < (int)g_sessions.size() && targetIndex != g_draggingTab) {
+                    std::swap(g_sessions[g_draggingTab], g_sessions[targetIndex]);
+                    if (g_activeSessionIndex == g_draggingTab) g_activeSessionIndex = targetIndex;
+                    else if (g_activeSessionIndex == targetIndex) g_activeSessionIndex = g_draggingTab;
+                    g_draggingTab = targetIndex;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+                return 0;
+            }
+
             if (y < TAB_HEIGHT) {
-                int tabWidth = 140; 
-                int startX = g_sessions.size() * tabWidth;
+                int tabWidth = 140;
+                int startX = (int)g_sessions.size() * tabWidth;
                 int localX = x - startX;
-                
+
                 bool oldPlus = g_hoverPlus;
                 bool oldDown = g_hoverDown;
-                
+
                 int clickedIndex = x / tabWidth;
-                if (clickedIndex == g_sessions.size()) {
+                if (clickedIndex == (int)g_sessions.size()) {
                     g_hoverPlus = (localX >= 0 && localX < 30);
                     g_hoverDown = (localX >= 31 && localX < 61);
                 } else {
                     g_hoverPlus = false;
                     g_hoverDown = false;
                 }
-                
+
                 if (oldPlus != g_hoverPlus || oldDown != g_hoverDown) {
                     InvalidateRect(hwnd, NULL, FALSE);
                     TRACKMOUSEEVENT tme;
@@ -1342,12 +1738,48 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     tme.hwndTrack = hwnd;
                     TrackMouseEvent(&tme);
                 }
+                g_hoverUrlRow = -1;
+                g_hoverUrlText.clear();
             } else if (g_selecting) {
                 ScreenToCell(x, y, g_selEndRow, g_selEndCol);
                 InvalidateRect(hwnd, NULL, FALSE);
             } else {
                 if (g_hoverPlus || g_hoverDown) {
                     g_hoverPlus = false; g_hoverDown = false;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+                int oldHoverRow = g_hoverUrlRow;
+                int oldHoverStart = g_hoverUrlStartCol;
+                g_hoverUrlRow = -1;
+                g_hoverUrlStartCol = -1;
+                g_hoverUrlEndCol = -1;
+                g_hoverUrlText.clear();
+                if (g_activeSessionIndex >= 0 && y >= TAB_HEIGHT) {
+                    Session* s = g_sessions[g_activeSessionIndex];
+                    std::lock_guard<std::mutex> lock(s->mutex);
+                    int row, col;
+                    ScreenToCell(x, y, row, col);
+                    int historySize = s->inAltBuffer ? 0 : (int)s->history.size();
+                    int totalRows = historySize + (int)s->grid.size();
+                    int startLine = totalRows - s->rows - s->viewOffset;
+                    int lineIdx = startLine + row;
+                    const std::vector<Cell>* rowPtr = nullptr;
+                    if (lineIdx >= 0 && lineIdx < historySize) rowPtr = &s->history[lineIdx];
+                    else if (lineIdx >= historySize && lineIdx < totalRows) rowPtr = &s->grid[lineIdx - historySize];
+                    if (rowPtr) {
+                        std::vector<UrlSpan> urls = FindUrlsInRow(*rowPtr);
+                        for (const auto& u : urls) {
+                            if (col >= u.startCol && col <= u.endCol) {
+                                g_hoverUrlRow = row;
+                                g_hoverUrlStartCol = u.startCol;
+                                g_hoverUrlEndCol = u.endCol;
+                                g_hoverUrlText = u.url;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (oldHoverRow != g_hoverUrlRow || oldHoverStart != g_hoverUrlStartCol) {
                     InvalidateRect(hwnd, NULL, FALSE);
                 }
             }
@@ -1357,10 +1789,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_MOUSELEAVE:
         g_hoverPlus = false;
         g_hoverDown = false;
+        g_hoverUrlRow = -1;
+        g_hoverUrlText.clear();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_LBUTTONUP:
+        if (g_draggingTab >= 0) {
+            g_draggingTab = -1;
+            ReleaseCapture();
+            return 0;
+        }
         if (g_activeSessionIndex >= 0) {
              Session* s = g_sessions[g_activeSessionIndex];
              if (s->mouseMode) {
@@ -1439,14 +1878,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if (g_activeSessionIndex >= 0) {
             Session* s = g_sessions[g_activeSessionIndex];
             std::lock_guard<std::mutex> lock(s->mutex);
-            if (s->inAltBuffer) return 0; // Disable scroll in Alt Buffer
-
+            if (s->inAltBuffer) return 0;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
             int lines = delta / WHEEL_DELTA * 3;
-            s->viewOffset += lines;
-            if (s->viewOffset < 0) s->viewOffset = 0;
-            if (s->viewOffset > s->history.size()) s->viewOffset = s->history.size();
-            InvalidateRect(hwnd, NULL, FALSE);
+            g_scrollTarget += lines;
+            if (g_scrollTarget < 0) g_scrollTarget = 0;
+            if (g_scrollTarget > (int)s->history.size()) g_scrollTarget = (int)s->history.size();
+            if (!g_scrollAnimating) {
+                g_scrollCurrent = (float)s->viewOffset;
+                g_scrollAnimating = true;
+                SetTimer(hwnd, SCROLL_TIMER_ID, 16, NULL);
+            }
         }
         return 0;
 
@@ -1548,6 +1990,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
         
     case WM_DESTROY: PostQuitMessage(0); return 0;
+
+    case WM_USER + 100:
+        ShowSettingsDialog();
+        return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -1574,16 +2020,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     RegisterClassExA(&wc);
     
     RegisterMenuClass();
+    RegisterSettingsClass();
 
-    HWND hwnd = CreateWindowExA(0, CLASS_NAME, WINDOW_TITLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+    HWND hwnd = CreateWindowExA(WS_EX_LAYERED, CLASS_NAME, WINDOW_TITLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 900, 600, NULL, NULL, hInstance, NULL);
 
     BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+    SetLayeredWindowAttributes(hwnd, 0, (BYTE)g_settings.opacity, LWA_ALPHA);
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
-    
+
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
     return (int)msg.wParam;

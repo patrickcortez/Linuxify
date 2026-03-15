@@ -4,8 +4,8 @@
     icon: "../../assets/linux-logo.ico"
     sdir: "home"
 
-[Yori]
-    path: "C:\Users\patri\AppData\Local\Yori\yori.exe"
+[CMD]
+    path: "C:\WINDOWS\system32\cmd.exe "
     default: false
-    icon: ""
-    sdir: "C:\"
+    icon: "../../assets/shocked-surprised-emoticon-emoticon.ico"
+    sdir: "home"
