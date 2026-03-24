@@ -1,5 +1,5 @@
 // main.cpp
-// g++ main.cpp -o lgs.exe
+// g++ -static main.cpp -o lgs.exe
 
 #include <iostream>
 #include <string>

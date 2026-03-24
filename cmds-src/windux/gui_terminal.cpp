@@ -1,4 +1,4 @@
-// Compile: g++ -std=c++17 -static -mwindows -o cmds\terminal.exe cmds-src\windux\gui_terminal.cpp cmds-src\windux\windux.res -lgdi32 -luser32 -ldwmapi -lshell32
+// Compile: g++ -std=c++17 -static -mwindows -o cmds\windux.exe cmds-src\windux\gui_terminal.cpp cmds-src\windux\windux.res -lgdi32 -luser32 -ldwmapi -lshell32
 
 #define _WIN32_WINNT 0x0A00 
 #define NOMINMAX
@@ -70,6 +70,7 @@ struct Settings {
     int fontSize = 16;
     int opacity = 240;
     std::string cursorStyle = "underline";
+    std::string defaultBrowser = "";
 };
 
 Settings g_settings;
@@ -201,6 +202,7 @@ void LoadSettings() {
         out << "    fontSize: 16\n";
         out << "    opacity: 240\n";
         out << "    cursorStyle: \"underline\"\n";
+        out << "    defaultBrowser: \"\"\n";
         out.close();
     }
     std::ifstream file(settPath);
@@ -226,6 +228,7 @@ void LoadSettings() {
         else if (key == "fontSize") g_settings.fontSize = std::max(8, std::min(72, std::stoi(val)));
         else if (key == "opacity") g_settings.opacity = std::max(50, std::min(255, std::stoi(val)));
         else if (key == "cursorStyle") g_settings.cursorStyle = val;
+        else if (key == "defaultBrowser") g_settings.defaultBrowser = val;
     }
 }
 
@@ -236,6 +239,7 @@ void SaveSettings() {
     out << "    fontSize: " << g_settings.fontSize << "\n";
     out << "    opacity: " << g_settings.opacity << "\n";
     out << "    cursorStyle: \"" << g_settings.cursorStyle << "\"\n";
+    out << "    defaultBrowser: \"" << g_settings.defaultBrowser << "\"\n";
     out.close();
 }
 
@@ -244,7 +248,7 @@ void SaveSettings() {
 // ============================================================================
 
 struct Cell {
-    char ch = ' ';
+    wchar_t ch = L' ';
     COLORREF fg = DEFAULT_FG;
     COLORREF bg = DEFAULT_BG;
 };
@@ -253,7 +257,7 @@ std::vector<UrlSpan> FindUrlsInRow(const std::vector<Cell>& row) {
     std::vector<UrlSpan> urls;
     std::string text;
     text.reserve(row.size());
-    for (const auto& c : row) text += c.ch;
+    for (const auto& c : row) text += (c.ch < 128) ? (char)c.ch : '?';
     size_t pos = 0;
     while (pos < text.size()) {
         size_t httpPos = text.find("http://", pos);
@@ -290,7 +294,13 @@ struct Session {
     bool sgrMouseMode = false;   // SGR extended mode (1006)
     bool clickMode = false;      // Click only (1000)
     bool dragMode = false;       // Drag support (1002)
+    bool anyMode = false;        // Any event support (1003)
     int viewOffset = 0; 
+    wchar_t lastPrintedChar = L' ';
+    
+    // UTF-8 Decoding state
+    int utf8BytesLeft = 0;
+    uint32_t utf8Codepoint = 0;
     
     // TUI Support
     bool inAltBuffer = false; 
@@ -550,11 +560,28 @@ void RegisterMenuClass() {
 void ApplySettings();
 void ShowSettingsDialog();
 
+void SendMouseEvent(Session* s, int button, int col, int row, bool pressed) {
+    if (s->sgrMouseMode) {
+        std::string seq = "\033[<" + std::to_string(button) + ";" + std::to_string(col) + ";" + std::to_string(row) + (pressed ? "M" : "m");
+        WriteFile(s->hPipeIn, seq.c_str(), seq.length(), NULL, NULL);
+    } else if (s->mouseMode) {
+        int cb = pressed ? button : 3;
+        if (!pressed && (button == 64 || button == 65)) return; // Scroll has no release
+        char seq[6];
+        seq[0] = '\033'; seq[1] = '['; seq[2] = 'M';
+        seq[3] = (char)(cb + 32);
+        seq[4] = (char)(std::min(223, col) + 32); 
+        seq[5] = (char)(std::min(223, row) + 32);
+        WriteFile(s->hPipeIn, seq, 6, NULL, NULL);
+    }
+}
+
 #define IDC_SFONT 201
 #define IDC_SFONTSIZE 202
 #define IDC_SOPACITY 203
 #define IDC_SCURSOR 204
 #define IDC_SAPPLY 205
+#define IDC_SBROWSER 206
 
 LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -590,7 +617,11 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             else if (g_settings.cursorStyle == "bar") sel = 2;
             SendMessage(hCursor, CB_SETCURSEL, sel, 0);
 
-            HWND hApply = CreateWindowExA(0, "BUTTON", "Apply", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 120, 168, 100, 32, hwnd, (HMENU)IDC_SAPPLY, GetModuleHandle(NULL), NULL);
+            MakeLabel("Browser:", 15, 158, 90, 20);
+            HWND hBrowser = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", g_settings.defaultBrowser.c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 120, 156, 200, 24, hwnd, (HMENU)IDC_SBROWSER, GetModuleHandle(NULL), NULL);
+            SendMessage(hBrowser, WM_SETFONT, (WPARAM)hUiFont, TRUE);
+
+            HWND hApply = CreateWindowExA(0, "BUTTON", "Apply", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 120, 196, 100, 32, hwnd, (HMENU)IDC_SAPPLY, GetModuleHandle(NULL), NULL);
             SendMessage(hApply, WM_SETFONT, (WPARAM)hUiFont, TRUE);
             return 0;
         }
@@ -610,6 +641,10 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 if (csIdx == 0) g_settings.cursorStyle = "underline";
                 else if (csIdx == 1) g_settings.cursorStyle = "block";
                 else if (csIdx == 2) g_settings.cursorStyle = "bar";
+
+                char browBuf[1024] = {0};
+                GetDlgItemTextA(hwnd, IDC_SBROWSER, browBuf, sizeof(browBuf));
+                g_settings.defaultBrowser = browBuf;
 
                 SaveSettings();
                 ApplySettings();
@@ -664,7 +699,7 @@ void ShowSettingsDialog() {
     int x = rcMain.left + 100;
     int y = rcMain.top + 80;
     g_hSettingsWnd = CreateWindowExA(WS_EX_TOOLWINDOW, "LinuxifySettingsClass", "Windux Settings",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, 350, 240, g_hwnd, NULL, GetModuleHandle(NULL), NULL);
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, 350, 280, g_hwnd, NULL, GetModuleHandle(NULL), NULL);
     BOOL dark = TRUE;
     DwmSetWindowAttribute(g_hSettingsWnd, 20, &dark, sizeof(dark));
     ShowWindow(g_hSettingsWnd, SW_SHOW);
@@ -751,7 +786,14 @@ std::string GetSelectedText() {
         int endCol = (i == r2) ? c2 : (int)rowPtr->size() - 1;
         
         for (int c = startCol; c <= endCol && c < (int)rowPtr->size(); c++) {
-            text += (*rowPtr)[c].ch;
+            wchar_t wc = (*rowPtr)[c].ch;
+            if (wc < 128) {
+                text += (char)wc;
+            } else {
+                char u8[5] = {0};
+                WideCharToMultiByte(CP_UTF8, 0, &wc, 1, u8, 4, NULL, NULL);
+                text += u8;
+            }
         }
         if (i < r2) text += "\r\n";
     }
@@ -1022,6 +1064,19 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
     case 'r':
         // Currently ignoring scroll region - full screen scrolling only
         break;
+        
+    // Repeat Character (REP)
+    case 'b':
+        {
+            int count = codes[0] ? codes[0] : 1;
+            for (int j = 0; j < count; ++j) {
+                if (s->cursorCol < s->cols) {
+                    s->grid[s->cursorRow][s->cursorCol] = Cell{s->lastPrintedChar, s->currentFg, s->currentBg};
+                    s->cursorCol++;
+                }
+            }
+        }
+        break;
     
     // Private Modes
     case 'h': // SM (Set Mode)
@@ -1036,8 +1091,9 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
                     for (auto& r : s->grid) for (auto& c : r) c = Cell{' ', DEFAULT_FG, DEFAULT_BG};
                 } else if (code == 25) {
                     // Show cursor (DECTCEM)
-                } else if (code == 1000) { s->mouseMode = true; s->clickMode = true; s->dragMode = false; }
-                else if (code == 1002) { s->mouseMode = true; s->clickMode = true; s->dragMode = true; }
+                } else if (code == 1000) { s->mouseMode = true; s->clickMode = true; s->dragMode = false; s->anyMode = false; }
+                else if (code == 1002) { s->mouseMode = true; s->clickMode = true; s->dragMode = true; s->anyMode = false; }
+                else if (code == 1003) { s->mouseMode = true; s->clickMode = true; s->dragMode = true; s->anyMode = true; }
                 else if (code == 1006) { s->sgrMouseMode = true; }
             }
         }
@@ -1054,8 +1110,9 @@ void ApplyCSI(Session* s, char cmd, const std::string& params) {
                     }
                 } else if (code == 25) {
                     // Hide cursor (DECTCEM)
-                } else if (code == 1000) { s->mouseMode = false; s->clickMode = false; }
-                else if (code == 1002) { s->mouseMode = false; s->dragMode = false; }
+                } else if (code == 1000) { s->mouseMode = false; s->clickMode = false; s->anyMode = false; }
+                else if (code == 1002) { s->mouseMode = false; s->dragMode = false; s->anyMode = false; }
+                else if (code == 1003) { s->mouseMode = false; s->dragMode = false; s->anyMode = false; }
                 else if (code == 1006) { s->sgrMouseMode = false; }
             }
         }
@@ -1088,6 +1145,7 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
         case STATE_TEXT:
             if (c == '\x1b') {
                 s->parseState = STATE_ESCAPE;
+                s->utf8BytesLeft = 0;
             }
             else if (c == '\r') {
                 s->cursorCol = 0;
@@ -1095,6 +1153,7 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
             }
             else if (c == '\n') {
                 s->wrapPending = false;
+                s->cursorCol = 0; // ConPTY relies on \n providing both LineFeed and Carriage Return
                 s->cursorRow++;
                 if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
             }
@@ -1103,26 +1162,55 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
                 if (s->cursorCol > 0) s->cursorCol--;
             }
             else if (c == '\a') {}
-            else if (c >= 32 || c == '\t') {
-                if (c == '\t') c = ' ';
-                
-                // If wrap was pending from previous char at end of line, now actually wrap
-                if (s->wrapPending) {
-                    s->wrapPending = false;
-                    s->cursorCol = 0;
-                    s->cursorRow++;
-                    if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
-                }
-                
-                if (s->cursorRow < s->rows && s->cursorCol < s->cols) {
-                    s->grid[s->cursorRow][s->cursorCol] = Cell{c, s->currentFg, s->currentBg};
-                    s->cursorCol++;
-                    
-                    // If we just wrote to the last column, set wrap pending (deferred wrap)
-                    if (s->cursorCol >= s->cols) {
-                        s->cursorCol = s->cols - 1;  // Keep cursor at last column
-                        s->wrapPending = true;       // Mark that next char should wrap
+            else if (c == '\t') {
+                s->wrapPending = false;
+                int remain = 8 - (s->cursorCol % 8);
+                s->cursorCol += remain;
+                if (s->cursorCol >= s->cols) s->cursorCol = s->cols - 1;
+            }
+            else if ((unsigned char)c >= 32) {
+                auto PrintChar = [&](wchar_t wc) {
+                    if (s->wrapPending) {
+                        s->wrapPending = false;
+                        s->cursorCol = 0;
+                        s->cursorRow++;
+                        if (s->cursorRow >= s->rows) { s->Scroll(); s->cursorRow = s->rows - 1; }
                     }
+                    if (s->cursorRow < s->rows && s->cursorCol < s->cols) {
+                        s->grid[s->cursorRow][s->cursorCol] = Cell{wc, s->currentFg, s->currentBg};
+                        s->lastPrintedChar = wc;
+                        s->cursorCol++;
+                        if (s->cursorCol >= s->cols) {
+                            s->cursorCol = s->cols - 1;
+                            s->wrapPending = true;
+                        }
+                    }
+                };
+
+                unsigned char uc = (unsigned char)c;
+                if (s->utf8BytesLeft > 0) {
+                    if ((uc & 0xC0) == 0x80) { // Continuation byte
+                        s->utf8Codepoint = (s->utf8Codepoint << 6) | (uc & 0x3F);
+                        s->utf8BytesLeft--;
+                        if (s->utf8BytesLeft == 0) {
+                            PrintChar((s->utf8Codepoint <= 0xFFFF) ? (wchar_t)s->utf8Codepoint : L'?');
+                        }
+                    } else {
+                        // Invalid continuation
+                        s->utf8BytesLeft = 0;
+                        PrintChar((wchar_t)uc); // Recover
+                    }
+                } else if ((uc & 0xE0) == 0xC0) {
+                    s->utf8Codepoint = uc & 0x1F;
+                    s->utf8BytesLeft = 1;
+                } else if ((uc & 0xF0) == 0xE0) {
+                    s->utf8Codepoint = uc & 0x0F;
+                    s->utf8BytesLeft = 2;
+                } else if ((uc & 0xF8) == 0xF0) {
+                    s->utf8Codepoint = uc & 0x07;
+                    s->utf8BytesLeft = 3;
+                } else {
+                    PrintChar((wchar_t)uc);
                 }
             }
             break;
@@ -1165,6 +1253,10 @@ void ProcessOutput(Session* s, const char* buffer, DWORD bytes) {
             else if (c == '8') {
                 // Restore cursor (DECRC) - ignoring for now
                 s->parseState = STATE_TEXT;
+            }
+            else if (c == '(' || c == ')' || c == '*' || c == '+') {
+                // Character set selection (G0-G3) - absorb the next character by staying in ESCAPE
+                // The next character will hit the 'else' and return to STATE_TEXT without being printed.
             }
             else {
                 s->parseState = STATE_TEXT;
@@ -1482,7 +1574,7 @@ void PaintWindow(HWND hwnd, HDC hdc) {
                         SetTextColor(hdcMem, cell.fg);
                         SetBkColor(hdcMem, cell.bg);
                     }
-                    TextOutA(hdcMem, x, y, &cell.ch, 1);
+                    TextOutW(hdcMem, x, y, &cell.ch, 1);
 
                     if (isHoveredUrl) {
                         HPEN hULine = CreatePen(PS_SOLID, 1, ACCENT);
@@ -1597,7 +1689,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (g_hoverUrlRow >= 0) {
                 SetCursor(LoadCursor(NULL, IDC_HAND));
             } else {
-                SetCursor(LoadCursor(NULL, IDC_IBEAM));
+                SetCursor(LoadCursor(NULL, IDC_ARROW));
             }
             return TRUE;
         }
@@ -1636,10 +1728,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                      int vtCol = col + 1;
                      int vtRow = row + 1;
                      
-                     if (s->sgrMouseMode) {
-                         std::string seq = "\033[<0;" + std::to_string(vtCol) + ";" + std::to_string(vtRow) + "M";
-                         WriteFile(s->hPipeIn, seq.c_str(), seq.length(), NULL, NULL);
-                     }
+                     SendMouseEvent(s, 0, vtCol, vtRow, true);
                      return 0; // Block selection
                  }
             }
@@ -1682,8 +1771,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                 }
             } else {
-                if ((GetKeyState(VK_CONTROL) & 0x8000) && g_hoverUrlRow >= 0 && !g_hoverUrlText.empty()) {
-                    ShellExecuteA(NULL, "open", g_hoverUrlText.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                if (g_hoverUrlRow >= 0 && !g_hoverUrlText.empty()) {
+                    if (g_settings.defaultBrowser.empty() || !fs::exists(g_settings.defaultBrowser)) {
+                        MessageBoxA(hwnd, "No browser specified or path does not exist. Please enter the full path to a browser executable in Settings to open links.", "Browser Not Found", MB_OK | MB_ICONERROR);
+                    } else {
+                        ShellExecuteA(NULL, "open", g_settings.defaultBrowser.c_str(), g_hoverUrlText.c_str(), NULL, SW_SHOWNORMAL);
+                    }
                     return 0;
                 }
                 ScreenToCell(x, y, g_selStartRow, g_selStartCol);
@@ -1756,9 +1849,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_hoverUrlText.clear();
                 if (g_activeSessionIndex >= 0 && y >= TAB_HEIGHT) {
                     Session* s = g_sessions[g_activeSessionIndex];
-                    std::lock_guard<std::mutex> lock(s->mutex);
                     int row, col;
                     ScreenToCell(x, y, row, col);
+                    
+                    if (s->dragMode && (wParam & MK_LBUTTON)) {
+                        SendMouseEvent(s, 32, col + 1, row + 1, true);
+                    } else if (s->anyMode) {
+                        SendMouseEvent(s, 35, col + 1, row + 1, true);
+                    }
+
+                    std::lock_guard<std::mutex> lock(s->mutex);
                     int historySize = s->inAltBuffer ? 0 : (int)s->history.size();
                     int totalRows = historySize + (int)s->grid.size();
                     int startLine = totalRows - s->rows - s->viewOffset;
@@ -1805,10 +1905,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
              if (s->mouseMode) {
                  int x = LOWORD(lParam); int y = HIWORD(lParam);
                  int row, col; ScreenToCell(x, y, row, col);
-                 if (s->sgrMouseMode) {
-                     std::string seq = "\033[<0;" + std::to_string(col+1) + ";" + std::to_string(row+1) + "m";
-                     WriteFile(s->hPipeIn, seq.c_str(), seq.length(), NULL, NULL);
-                 }
+                 SendMouseEvent(s, 0, col + 1, row + 1, false);
              }
         }
         if (g_selecting) {
@@ -1877,6 +1974,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_MOUSEWHEEL:
         if (g_activeSessionIndex >= 0) {
             Session* s = g_sessions[g_activeSessionIndex];
+            if (s->mouseMode) {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                POINT pt; pt.x = LOWORD(lParam); pt.y = HIWORD(lParam);
+                ScreenToClient(hwnd, &pt);
+                int row, col;
+                ScreenToCell(pt.x, pt.y, row, col);
+                int btn = (delta > 0) ? 64 : 65;
+                SendMouseEvent(s, btn, col + 1, row + 1, true);
+                return 0;
+            }
             std::lock_guard<std::mutex> lock(s->mutex);
             if (s->inAltBuffer) return 0;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);

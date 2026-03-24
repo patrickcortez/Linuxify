@@ -7,10 +7,21 @@
 #include <vector>
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 inline std::string getGridsDirectory() {
+#ifdef _WIN32
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    fs::path exePath = fs::path(path).parent_path();
+    return (exePath / "grids").string();
+#else
     return "grids";
+#endif
 }
 
 inline void ensureGridsDirectory() {

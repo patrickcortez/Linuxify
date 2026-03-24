@@ -5,7 +5,9 @@ A native Unix-like shell and development platform for Windows — built on a con
 ## Features
 
 - **Linuxify Shell** with 60+ built-in Linux commands
+
 - **Lino Text Editor** with user defined syntax highlighting plugins
+
 - **Startup Script** (.linuxifyrc) with custom prompt, aliases, environment variables, and more.
 - **Lin Package Manager** (winget-powered) with 180+ package aliases
 - **Integrated Bash interpreter** with full lexer, parser, and AST executor
