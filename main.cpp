@@ -2153,6 +2153,7 @@ public:
         
         bool persistent = false;
         bool isArray = false;
+        std::map<std::string, std::vector<std::string>> parsedArrays;
         
         for (size_t i = 1; i < args.size(); ++i) {
             std::string arg = args[i];
@@ -2191,29 +2192,18 @@ public:
             }
             
             if (isArray) {
-                std::vector<std::string> arr;
-                
-                if (value.size() >= 2 && value[0] == '{' && value[value.size() - 1] == '}') {
+                if (value.size() >= 2 && value[0] == '{' && value.back() == '}') {
                     std::string inner = value.substr(1, value.size() - 2);
                     std::stringstream ss(inner);
                     std::string item;
                     while (std::getline(ss, item, ',')) {
                         item.erase(0, item.find_first_not_of(" \t"));
                         item.erase(item.find_last_not_of(" \t") + 1);
-                        arr.push_back(item);
+                        parsedArrays[name].push_back(item);
                     }
                 } else {
-                    printError("export: array format must be VARNAME={val1,val2,...}");
-                    isArray = false;
-                    continue;
+                    parsedArrays[name].push_back(value);
                 }
-                
-                ctx.sessionArrayEnv[name] = arr;
-                if (persistent) {
-                    ctx.persistentArrayVars.insert(name);
-                    savePersistentVars();
-                }
-                printSuccess("Exported array: " + name + " (" + std::to_string(arr.size()) + " elements)" + (persistent ? " [persistent]" : ""));
             } else {
                 ctx.sessionEnv[name] = value;
                 SetEnvironmentVariableA(name.c_str(), value.c_str());
@@ -2223,8 +2213,17 @@ public:
                 }
                 printSuccess("Exported: " + name + "=" + value + (persistent ? " [persistent]" : ""));
             }
-            
-            isArray = false;
+        }
+        
+        for (const auto& pair : parsedArrays) {
+            ctx.sessionArrayEnv[pair.first] = pair.second;
+            if (persistent) {
+                ctx.persistentArrayVars.insert(pair.first);
+            }
+            printSuccess("Exported array: " + pair.first + " (" + std::to_string(pair.second.size()) + " elements)" + (persistent ? " [persistent]" : ""));
+        }
+        if (!parsedArrays.empty() && persistent) {
+            savePersistentVars();
         }
     }
 
