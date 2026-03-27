@@ -1462,6 +1462,65 @@ public:
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
             
+            if (line.substr(0, 4) == "OBJ:") {
+                std::string rest = line.substr(4);
+                size_t braceStart = rest.find('{');
+                if (braceStart == std::string::npos) continue;
+                std::string objName = rest.substr(0, braceStart);
+                objName.erase(0, objName.find_first_not_of(" \t"));
+                objName.erase(objName.find_last_not_of(" \t") + 1);
+                if (objName.empty()) continue;
+                std::string body = rest.substr(braceStart + 1);
+                if (!body.empty() && body.back() == '}') body.pop_back();
+                std::map<std::string, std::string> members;
+                std::map<std::string, std::vector<std::string>> arrMembers;
+                size_t p = 0;
+                while (p < body.size()) {
+                    size_t colonPos = body.find(':', p);
+                    if (colonPos == std::string::npos) break;
+                    std::string key = body.substr(p, colonPos - p);
+                    key.erase(0, key.find_first_not_of(" \t"));
+                    key.erase(key.find_last_not_of(" \t") + 1);
+                    p = colonPos + 1;
+                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                    if (p < body.size() && body[p] == '[') {
+                        size_t closeBrk = body.find(']', p);
+                        if (closeBrk == std::string::npos) break;
+                        std::string arrInner = body.substr(p + 1, closeBrk - p - 1);
+                        std::vector<std::string> arrVals;
+                        std::stringstream ass(arrInner);
+                        std::string aitem;
+                        while (std::getline(ass, aitem, ',')) {
+                            aitem.erase(0, aitem.find_first_not_of(" \t\""));
+                            aitem.erase(aitem.find_last_not_of(" \t\"") + 1);
+                            if (!aitem.empty()) arrVals.push_back(aitem);
+                        }
+                        arrMembers[key] = arrVals;
+                        p = closeBrk + 1;
+                        if (p < body.size() && body[p] == ',') p++;
+                    } else {
+                        bool inQuote = false;
+                        char qChar = '\0';
+                        size_t valStart = p;
+                        while (p < body.size()) {
+                            if (!inQuote && (body[p] == '"' || body[p] == '\'')) { inQuote = true; qChar = body[p]; p++; continue; }
+                            if (inQuote && body[p] == qChar) { inQuote = false; p++; continue; }
+                            if (!inQuote && body[p] == ',') break;
+                            p++;
+                        }
+                        std::string val = body.substr(valStart, p - valStart);
+                        val.erase(0, val.find_first_not_of(" \t\"\'")); 
+                        val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                        members[key] = val;
+                        if (p < body.size() && body[p] == ',') p++;
+                    }
+                }
+                ctx.sessionObjEnv[objName] = members;
+                if (!arrMembers.empty()) ctx.sessionObjArrays[objName] = arrMembers;
+                ctx.persistentObjVars.insert(objName);
+                continue;
+            }
+            
             size_t eqPos = line.find('=');
             if (eqPos == std::string::npos) continue;
             
@@ -1522,6 +1581,34 @@ public:
                 }
                 file << "}\n";
             }
+        }
+        
+        for (const auto& objName : ctx.persistentObjVars) {
+            auto scalarIt = ctx.sessionObjEnv.find(objName);
+            auto arrayIt = ctx.sessionObjArrays.find(objName);
+            if (scalarIt == ctx.sessionObjEnv.end() && arrayIt == ctx.sessionObjArrays.end()) continue;
+            file << "OBJ:" << objName << "{";
+            bool first = true;
+            if (scalarIt != ctx.sessionObjEnv.end()) {
+                for (const auto& member : scalarIt->second) {
+                    if (!first) file << ",";
+                    first = false;
+                    file << member.first << ":\"" << member.second << "\"";
+                }
+            }
+            if (arrayIt != ctx.sessionObjArrays.end()) {
+                for (const auto& arrMember : arrayIt->second) {
+                    if (!first) file << ",";
+                    first = false;
+                    file << arrMember.first << ":[";
+                    for (size_t i = 0; i < arrMember.second.size(); ++i) {
+                        if (i > 0) file << ",";
+                        file << "\"" << arrMember.second[i] << "\"";
+                    }
+                    file << "]";
+                }
+            }
+            file << "}\n";
         }
     }
 
@@ -1754,12 +1841,49 @@ public:
                     if (varName == "RANDOM") {
                         value = std::to_string(rand() % 32768);
                     } else {
-                        auto it = ctx.sessionEnv.find(varName);
-                        if (it != ctx.sessionEnv.end()) {
-                            value = it->second;
+                        size_t dotPos = varName.find('.');
+                        if (dotPos != std::string::npos) {
+                            std::string objName = varName.substr(0, dotPos);
+                            std::string memberName = varName.substr(dotPos + 1);
+                            
+                            size_t bracketIdx = memberName.find('[');
+                            if (bracketIdx != std::string::npos && memberName.back() == ']') {
+                                std::string arrMemName = memberName.substr(0, bracketIdx);
+                                std::string idxStr = memberName.substr(bracketIdx + 1, memberName.length() - bracketIdx - 2);
+                                auto objIt = ctx.sessionObjArrays.find(objName);
+                                if (objIt != ctx.sessionObjArrays.end()) {
+                                    auto memIt = objIt->second.find(arrMemName);
+                                    if (memIt != objIt->second.end()) {
+                                        if (idxStr == "*" || idxStr == "@") {
+                                            for(size_t ai=0; ai<memIt->second.size(); ai++) {
+                                                if(ai>0) value += " ";
+                                                value += memIt->second[ai];
+                                            }
+                                        } else {
+                                            try {
+                                                size_t idx = std::stoul(idxStr);
+                                                if (idx < memIt->second.size()) value = memIt->second[idx];
+                                            } catch (...) {}
+                                        }
+                                    }
+                                }
+                            } else {
+                                auto objIt = ctx.sessionObjEnv.find(objName);
+                                if (objIt != ctx.sessionObjEnv.end()) {
+                                    auto memIt = objIt->second.find(memberName);
+                                    if (memIt != objIt->second.end()) {
+                                        value = memIt->second;
+                                    }
+                                }
+                            }
                         } else {
-                            const char* envVal = getenv(varName.c_str());
-                            if (envVal) { value = envVal; }
+                            auto it = ctx.sessionEnv.find(varName);
+                            if (it != ctx.sessionEnv.end()) {
+                                value = it->second;
+                            } else {
+                                const char* envVal = getenv(varName.c_str());
+                                if (envVal) { value = envVal; }
+                            }
                         }
                     }
                     text = text.substr(0, pos) + value + text.substr(close + 1);
@@ -1770,7 +1894,52 @@ public:
                     end++;
                 }
                 
-                // Check if it's an array access $VAR[INDEX]
+                if (end < text.length() && text[end] == '.') {
+                    std::string objName = text.substr(pos + 1, end - (pos + 1));
+                    size_t memberStart = end + 1;
+                    size_t memberEnd = memberStart;
+                    while (memberEnd < text.length() && (isalnum(text[memberEnd]) || text[memberEnd] == '_')) {
+                        memberEnd++;
+                    }
+                    std::string memberName = text.substr(memberStart, memberEnd - memberStart);
+                    if (!memberName.empty()) {
+                        if (memberEnd < text.length() && text[memberEnd] == '[') {
+                            size_t closeBracket = text.find(']', memberEnd + 1);
+                            if (closeBracket != std::string::npos) {
+                                std::string idxStr = text.substr(memberEnd + 1, closeBracket - memberEnd - 1);
+                                std::string val;
+                                auto objIt = ctx.sessionObjArrays.find(objName);
+                                if (objIt != ctx.sessionObjArrays.end()) {
+                                    auto memIt = objIt->second.find(memberName);
+                                    if (memIt != objIt->second.end()) {
+                                        if (idxStr == "*" || idxStr == "@") {
+                                            for (size_t ai = 0; ai < memIt->second.size(); ai++) {
+                                                if (ai > 0) val += " ";
+                                                val += memIt->second[ai];
+                                            }
+                                        } else {
+                                            try {
+                                                size_t idx = std::stoul(idxStr);
+                                                if (idx < memIt->second.size()) val = memIt->second[idx];
+                                            } catch (...) {}
+                                        }
+                                    }
+                                }
+                                text = text.substr(0, pos) + val + text.substr(closeBracket + 1);
+                                continue;
+                            }
+                        }
+                        std::string val;
+                        auto objIt = ctx.sessionObjEnv.find(objName);
+                        if (objIt != ctx.sessionObjEnv.end()) {
+                            auto memIt = objIt->second.find(memberName);
+                            if (memIt != objIt->second.end()) val = memIt->second;
+                        }
+                        text = text.substr(0, pos) + val + text.substr(memberEnd);
+                        continue;
+                    }
+                }
+                
                 if (end < text.length() && text[end] == '[') {
                     size_t closeBracket = text.find(']', end + 1);
                     if (closeBracket != std::string::npos) {
@@ -2121,7 +2290,43 @@ public:
             std::cout << std::endl;
         }
         
-        // Then system variables
+        if (!ctx.sessionObjEnv.empty() || !ctx.sessionObjArrays.empty()) {
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "# Environmental Objects:\n";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            std::set<std::string> objNames;
+            for (const auto& pair : ctx.sessionObjEnv) objNames.insert(pair.first);
+            for (const auto& pair : ctx.sessionObjArrays) objNames.insert(pair.first);
+            for (const auto& objName : objNames) {
+                bool isPersistent = ctx.persistentObjVars.find(objName) != ctx.persistentObjVars.end();
+                std::cout << objName << (isPersistent ? " [persistent]" : "") << "{";
+                bool first = true;
+                auto scIt = ctx.sessionObjEnv.find(objName);
+                if (scIt != ctx.sessionObjEnv.end()) {
+                    for (const auto& mem : scIt->second) {
+                        if (!first) std::cout << ",";
+                        first = false;
+                        std::cout << mem.first << ":" << mem.second;
+                    }
+                }
+                auto arIt = ctx.sessionObjArrays.find(objName);
+                if (arIt != ctx.sessionObjArrays.end()) {
+                    for (const auto& mem : arIt->second) {
+                        if (!first) std::cout << ",";
+                        first = false;
+                        std::cout << mem.first << ":[";
+                        for (size_t ai = 0; ai < mem.second.size(); ai++) {
+                            if (ai > 0) std::cout << ",";
+                            std::cout << mem.second[ai];
+                        }
+                        std::cout << "]";
+                    }
+                }
+                std::cout << "}" << std::endl;
+            }
+            std::cout << std::endl;
+        }
+        
         char* envStrings = GetEnvironmentStringsA();
         if (envStrings) {
             char* current = envStrings;
@@ -2130,6 +2335,68 @@ public:
                 current += strlen(current) + 1;
             }
             FreeEnvironmentStringsA(envStrings);
+        }
+    }
+
+    void parseObjBody(const std::string& body, std::map<std::string, std::string>& members, std::map<std::string, std::vector<std::string>>& arrMembers) {
+        size_t p = 0;
+        while (p < body.size()) {
+            while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+            if (p >= body.size()) break;
+            size_t colonPos = body.find(':', p);
+            if (colonPos == std::string::npos) break;
+            std::string key = body.substr(p, colonPos - p);
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            p = colonPos + 1;
+            while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+            if (p < body.size() && body[p] == '[') {
+                size_t closeBrk = std::string::npos;
+                int depth = 0;
+                for (size_t s = p; s < body.size(); s++) {
+                    if (body[s] == '[') depth++;
+                    else if (body[s] == ']') { depth--; if (depth == 0) { closeBrk = s; break; } }
+                }
+                if (closeBrk == std::string::npos) break;
+                std::string arrInner = body.substr(p + 1, closeBrk - p - 1);
+                std::vector<std::string> arrVals;
+                size_t ap = 0;
+                while (ap < arrInner.size()) {
+                    while (ap < arrInner.size() && (arrInner[ap] == ' ' || arrInner[ap] == '\t' || arrInner[ap] == ',')) ap++;
+                    if (ap >= arrInner.size()) break;
+                    if (arrInner[ap] == '"' || arrInner[ap] == '\'') {
+                        char q = arrInner[ap]; ap++;
+                        size_t vs = ap;
+                        while (ap < arrInner.size() && arrInner[ap] != q) ap++;
+                        arrVals.push_back(arrInner.substr(vs, ap - vs));
+                        if (ap < arrInner.size()) ap++;
+                    } else {
+                        size_t vs = ap;
+                        while (ap < arrInner.size() && arrInner[ap] != ',') ap++;
+                        std::string v = arrInner.substr(vs, ap - vs);
+                        v.erase(v.find_last_not_of(" \t") + 1);
+                        arrVals.push_back(v);
+                    }
+                }
+                arrMembers[key] = arrVals;
+                p = closeBrk + 1;
+                if (p < body.size() && body[p] == ',') p++;
+            } else {
+                bool inQuote = false;
+                char qChar = '\0';
+                size_t valStart = p;
+                while (p < body.size()) {
+                    if (!inQuote && (body[p] == '"' || body[p] == '\'')) { inQuote = true; qChar = body[p]; p++; continue; }
+                    if (inQuote && body[p] == qChar) { inQuote = false; p++; continue; }
+                    if (!inQuote && body[p] == ',') break;
+                    p++;
+                }
+                std::string val = body.substr(valStart, p - valStart);
+                val.erase(0, val.find_first_not_of(" \t\"\'")); 
+                val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                members[key] = val;
+                if (p < body.size() && body[p] == ',') p++;
+            }
         }
     }
 
@@ -2148,11 +2415,114 @@ public:
                 }
                 std::cout << "}" << std::endl;
             }
+            std::set<std::string> objNames;
+            for (const auto& p : ctx.sessionObjEnv) objNames.insert(p.first);
+            for (const auto& p : ctx.sessionObjArrays) objNames.insert(p.first);
+            for (const auto& objName : objNames) {
+                bool isPersistent = ctx.persistentObjVars.find(objName) != ctx.persistentObjVars.end();
+                std::cout << "export " << (isPersistent ? "-p " : "") << "-obj " << objName << "{";
+                bool first = true;
+                auto scIt = ctx.sessionObjEnv.find(objName);
+                if (scIt != ctx.sessionObjEnv.end()) {
+                    for (const auto& mem : scIt->second) {
+                        if (!first) std::cout << ",";
+                        first = false;
+                        std::cout << mem.first << ":\"" << mem.second << "\"";
+                    }
+                }
+                auto arIt = ctx.sessionObjArrays.find(objName);
+                if (arIt != ctx.sessionObjArrays.end()) {
+                    for (const auto& mem : arIt->second) {
+                        if (!first) std::cout << ",";
+                        first = false;
+                        std::cout << mem.first << ":[";
+                        for (size_t ai = 0; ai < mem.second.size(); ai++) {
+                            if (ai > 0) std::cout << ",";
+                            std::cout << "\"" << mem.second[ai] << "\"";
+                        }
+                        std::cout << "]";
+                    }
+                }
+                std::cout << "}" << std::endl;
+            }
             return;
         }
         
         bool persistent = false;
         bool isArray = false;
+        bool isObj = false;
+        
+        std::string fullLine;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (i > 1) fullLine += " ";
+            fullLine += args[i];
+        }
+        
+        size_t scanPos = 0;
+        while (scanPos < fullLine.size() && fullLine[scanPos] == ' ') scanPos++;
+        while (scanPos < fullLine.size()) {
+            if (fullLine.substr(scanPos, 2) == "-p") {
+                persistent = true;
+                scanPos += 2;
+                while (scanPos < fullLine.size() && fullLine[scanPos] == ' ') scanPos++;
+                continue;
+            }
+            if (fullLine.substr(scanPos, 4) == "-obj") {
+                isObj = true;
+                scanPos += 4;
+                while (scanPos < fullLine.size() && fullLine[scanPos] == ' ') scanPos++;
+                continue;
+            }
+            if (fullLine.substr(scanPos, 4) == "-arr") {
+                isArray = true;
+                scanPos += 4;
+                while (scanPos < fullLine.size() && fullLine[scanPos] == ' ') scanPos++;
+                continue;
+            }
+            break;
+        }
+        
+        if (isObj) {
+            std::string rest = fullLine.substr(scanPos);
+            size_t braceStart = rest.find('{');
+            if (braceStart == std::string::npos) {
+                printError("export -obj: invalid format. Use: export -obj name{key:value,...}");
+                return;
+            }
+            std::string objName = rest.substr(0, braceStart);
+            objName.erase(0, objName.find_first_not_of(" \t"));
+            objName.erase(objName.find_last_not_of(" \t") + 1);
+            if (objName.empty()) {
+                printError("export -obj: missing object name");
+                return;
+            }
+            size_t braceEnd = std::string::npos;
+            int depth = 0;
+            for (size_t s = braceStart; s < rest.size(); s++) {
+                if (rest[s] == '{') depth++;
+                else if (rest[s] == '}') { depth--; if (depth == 0) { braceEnd = s; break; } }
+            }
+            if (braceEnd == std::string::npos) {
+                printError("export -obj: missing closing }");
+                return;
+            }
+            std::string body = rest.substr(braceStart + 1, braceEnd - braceStart - 1);
+            std::map<std::string, std::string> members;
+            std::map<std::string, std::vector<std::string>> arrMembers;
+            parseObjBody(body, members, arrMembers);
+            ctx.sessionObjEnv[objName] = members;
+            if (!arrMembers.empty()) {
+                ctx.sessionObjArrays[objName] = arrMembers;
+            }
+            if (persistent) {
+                ctx.persistentObjVars.insert(objName);
+                savePersistentVars();
+            }
+            size_t totalMembers = members.size() + arrMembers.size();
+            printSuccess("Exported object: " + objName + " (" + std::to_string(totalMembers) + " members)" + (persistent ? " [persistent]" : ""));
+            return;
+        }
+        
         std::map<std::string, std::vector<std::string>> parsedArrays;
         
         for (size_t i = 1; i < args.size(); ++i) {
@@ -2168,6 +2538,10 @@ public:
                 continue;
             }
             
+            if (arg == "-obj") {
+                continue;
+            }
+            
             size_t eqPos = arg.find('=');
             
             if (eqPos == std::string::npos) {
@@ -2177,9 +2551,8 @@ public:
             
             std::string name = arg.substr(0, eqPos);
             
-            // Trim whitespace from name
             size_t first = name.find_first_not_of(" \t");
-            if (first == std::string::npos) continue; // All spaces
+            if (first == std::string::npos) continue;
             size_t last = name.find_last_not_of(" \t");
             name = name.substr(first, (last - first + 1));
 

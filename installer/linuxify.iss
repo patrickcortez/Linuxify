@@ -2,7 +2,7 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Linuxify"
-#define MyAppVersion "1.3"
+#define MyAppVersion "1.5"
 #define MyAppPublisher "Cortez"
 #define MyAppURL "https://github.com/cortez/linuxify"
 #define MyAppExeName "linuxify.exe"

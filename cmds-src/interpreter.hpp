@@ -1550,10 +1550,92 @@ private:
         
         builtins["export"] = [this](const std::vector<std::string>& args) {
             bool isArray = false;
+            bool isObj = false;
             for (size_t i = 1; i < args.size(); i++) {
-                if (args[i] == "-arr" || args[i] == "-a" || args[i] == "-p") {
-                    if (args[i] == "-arr" || args[i] == "-a") isArray = true;
-                    continue;
+                if (args[i] == "-arr" || args[i] == "-a") { isArray = true; continue; }
+                if (args[i] == "-p") continue;
+                if (args[i] == "-obj") { isObj = true; continue; }
+                
+                if (isObj) {
+                    std::string token = args[i];
+                    for (size_t j = i + 1; j < args.size(); j++) {
+                        token += " " + args[j];
+                    }
+                    size_t braceStart = token.find('{');
+                    if (braceStart == std::string::npos) break;
+                    std::string objName = token.substr(0, braceStart);
+                    objName.erase(0, objName.find_first_not_of(" \t"));
+                    objName.erase(objName.find_last_not_of(" \t") + 1);
+                    size_t braceEnd = std::string::npos;
+                    int depth = 0;
+                    for (size_t s = braceStart; s < token.size(); s++) {
+                        if (token[s] == '{') depth++;
+                        else if (token[s] == '}') { depth--; if (depth == 0) { braceEnd = s; break; } }
+                    }
+                    if (braceEnd == std::string::npos) break;
+                    std::string body = token.substr(braceStart + 1, braceEnd - braceStart - 1);
+                    size_t p = 0;
+                    while (p < body.size()) {
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                        if (p >= body.size()) break;
+                        size_t colonPos = body.find(':', p);
+                        if (colonPos == std::string::npos) break;
+                        std::string key = body.substr(p, colonPos - p);
+                        key.erase(0, key.find_first_not_of(" \t"));
+                        key.erase(key.find_last_not_of(" \t") + 1);
+                        p = colonPos + 1;
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                        if (p < body.size() && body[p] == '[') {
+                            size_t closeBrk = std::string::npos;
+                            int d2 = 0;
+                            for (size_t s = p; s < body.size(); s++) {
+                                if (body[s] == '[') d2++;
+                                else if (body[s] == ']') { d2--; if (d2 == 0) { closeBrk = s; break; } }
+                            }
+                            if (closeBrk == std::string::npos) break;
+                            std::string arrInner = body.substr(p + 1, closeBrk - p - 1);
+                            std::vector<std::string> arrVals;
+                            size_t ap = 0;
+                            while (ap < arrInner.size()) {
+                                while (ap < arrInner.size() && (arrInner[ap] == ' ' || arrInner[ap] == '\t' || arrInner[ap] == ',')) ap++;
+                                if (ap >= arrInner.size()) break;
+                                if (arrInner[ap] == '"' || arrInner[ap] == '\'') {
+                                    char q = arrInner[ap]; ap++;
+                                    size_t vs = ap;
+                                    while (ap < arrInner.size() && arrInner[ap] != q) ap++;
+                                    arrVals.push_back(arrInner.substr(vs, ap - vs));
+                                    if (ap < arrInner.size()) ap++;
+                                } else {
+                                    size_t vs = ap;
+                                    while (ap < arrInner.size() && arrInner[ap] != ',') ap++;
+                                    std::string v = arrInner.substr(vs, ap - vs);
+                                    v.erase(v.find_last_not_of(" \t") + 1);
+                                    arrVals.push_back(v);
+                                }
+                            }
+                            if (_arrayMap) {
+                                (*_arrayMap)[objName + "." + key] = arrVals;
+                            }
+                            p = closeBrk + 1;
+                            if (p < body.size() && body[p] == ',') p++;
+                        } else {
+                            bool inQuote = false;
+                            char qChar = '\0';
+                            size_t valStart = p;
+                            while (p < body.size()) {
+                                if (!inQuote && (body[p] == '"' || body[p] == '\'')) { inQuote = true; qChar = body[p]; p++; continue; }
+                                if (inQuote && body[p] == qChar) { inQuote = false; p++; continue; }
+                                if (!inQuote && body[p] == ',') break;
+                                p++;
+                            }
+                            std::string val = body.substr(valStart, p - valStart);
+                            val.erase(0, val.find_first_not_of(" \t\"\'")); 
+                            val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                            (*_variableMap)[objName + "." + key] = val;
+                            if (p < body.size() && body[p] == ',') p++;
+                        }
+                    }
+                    return 0;
                 }
                 
                 size_t eq = args[i].find('=');
@@ -2123,7 +2205,7 @@ private:
         }
         
         // Handle $VAR and ${VAR}
-        std::regex varRegex("\\$\\{?([a-zA-Z_][a-zA-Z0-9_]*)\\}?");
+        std::regex varRegex("\\$\\{?([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)?)\\}?");
         std::smatch match;
         temp = result;
         

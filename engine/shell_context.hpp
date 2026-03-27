@@ -41,6 +41,10 @@ struct ShellContext {
     std::set<std::string> persistentVars;
     std::set<std::string> persistentArrayVars;
     
+    std::map<std::string, std::map<std::string, std::string>> sessionObjEnv;
+    std::map<std::string, std::map<std::string, std::vector<std::string>>> sessionObjArrays;
+    std::set<std::string> persistentObjVars;
+    
     std::string promptFirstColor = "\033[92m";
     std::string promptSecondColor = "\033[94m";
     std::string promptResetColor = "\033[0m";

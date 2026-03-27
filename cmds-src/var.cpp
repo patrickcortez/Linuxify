@@ -35,6 +35,9 @@ struct VarStore {
     std::map<std::string, std::string> scalars;
     std::map<std::string, std::vector<std::string>> arrays;
     
+    std::map<std::string, std::map<std::string, std::string>> objects;
+    std::map<std::string, std::map<std::string, std::vector<std::string>>> objArrays;
+    
     void load(const std::string& path) {
         std::ifstream file(path);
         if (!file) return;
@@ -42,6 +45,64 @@ struct VarStore {
         std::string line;
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
+            
+            if (line.substr(0, 4) == "OBJ:") {
+                std::string rest = line.substr(4);
+                size_t braceStart = rest.find('{');
+                if (braceStart == std::string::npos) continue;
+                std::string objName = rest.substr(0, braceStart);
+                objName.erase(0, objName.find_first_not_of(" \t"));
+                objName.erase(objName.find_last_not_of(" \t") + 1);
+                if (objName.empty()) continue;
+                std::string body = rest.substr(braceStart + 1);
+                if (!body.empty() && body.back() == '}') body.pop_back();
+                std::map<std::string, std::string> members;
+                std::map<std::string, std::vector<std::string>> arrMembers;
+                size_t p = 0;
+                while (p < body.size()) {
+                    size_t colonPos = body.find(':', p);
+                    if (colonPos == std::string::npos) break;
+                    std::string key = body.substr(p, colonPos - p);
+                    key.erase(0, key.find_first_not_of(" \t"));
+                    key.erase(key.find_last_not_of(" \t") + 1);
+                    p = colonPos + 1;
+                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                    if (p < body.size() && body[p] == '[') {
+                        size_t closeBrk = body.find(']', p);
+                        if (closeBrk == std::string::npos) break;
+                        std::string arrInner = body.substr(p + 1, closeBrk - p - 1);
+                        std::vector<std::string> arrVals;
+                        std::stringstream ass(arrInner);
+                        std::string aitem;
+                        while (std::getline(ass, aitem, ',')) {
+                            aitem.erase(0, aitem.find_first_not_of(" \t\""));
+                            aitem.erase(aitem.find_last_not_of(" \t\"") + 1);
+                            if (!aitem.empty()) arrVals.push_back(aitem);
+                        }
+                        arrMembers[key] = arrVals;
+                        p = closeBrk + 1;
+                        if (p < body.size() && body[p] == ',') p++;
+                    } else {
+                        bool inQuote = false;
+                        char qChar = '\0';
+                        size_t valStart = p;
+                        while (p < body.size()) {
+                            if (!inQuote && (body[p] == '"' || body[p] == '\'')) { inQuote = true; qChar = body[p]; p++; continue; }
+                            if (inQuote && body[p] == qChar) { inQuote = false; p++; continue; }
+                            if (!inQuote && body[p] == ',') break;
+                            p++;
+                        }
+                        std::string val = body.substr(valStart, p - valStart);
+                        val.erase(0, val.find_first_not_of(" \t\"\'")); 
+                        val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                        members[key] = val;
+                        if (p < body.size() && body[p] == ',') p++;
+                    }
+                }
+                objects[objName] = members;
+                if (!arrMembers.empty()) objArrays[objName] = arrMembers;
+                continue;
+            }
             
             size_t eqPos = line.find('=');
             if (eqPos == std::string::npos) continue;
@@ -97,6 +158,30 @@ struct VarStore {
             }
             file << "}\n";
         }
+        
+        for (const auto& pair : objects) {
+            file << "OBJ:" << pair.first << "{";
+            bool first = true;
+            for (const auto& mem : pair.second) {
+                if (!first) file << ",";
+                first = false;
+                file << mem.first << ":\"" << mem.second << "\"";
+            }
+            auto arrIt = objArrays.find(pair.first);
+            if (arrIt != objArrays.end()) {
+                for (const auto& arrMem : arrIt->second) {
+                    if (!first) file << ",";
+                    first = false;
+                    file << arrMem.first << ":[";
+                    for (size_t i = 0; i < arrMem.second.size(); ++i) {
+                        if (i > 0) file << ",";
+                        file << "\"" << arrMem.second[i] << "\"";
+                    }
+                    file << "]";
+                }
+            }
+            file << "}\n";
+        }
     }
 };
 
@@ -144,6 +229,35 @@ int main(int argc, char* argv[]) {
                     ShellIO::sout << pair.second[i];
                 }
                 ShellIO::sout << "} (" << pair.second.size() << " elements)\n" << ShellIO::endl;
+            }
+        }
+        
+        ShellIO::sout << "\nEnvironmental Objects:\n" << ShellIO::endl;
+        if (store.objects.empty() && store.objArrays.empty()) {
+            ShellIO::sout << "  (none)\n" << ShellIO::endl;
+        } else {
+            for (const auto& pair : store.objects) {
+                ShellIO::sout << "  " << pair.first << "{";
+                bool first = true;
+                for (const auto& mem : pair.second) {
+                    if (!first) ShellIO::sout << ",";
+                    first = false;
+                    ShellIO::sout << mem.first << ":" << mem.second;
+                }
+                auto arrIt = store.objArrays.find(pair.first);
+                if (arrIt != store.objArrays.end()) {
+                    for (const auto& amem : arrIt->second) {
+                        if (!first) ShellIO::sout << ",";
+                        first = false;
+                        ShellIO::sout << amem.first << ":[";
+                        for (size_t i = 0; i < amem.second.size(); ++i) {
+                            if (i > 0) ShellIO::sout << ",";
+                            ShellIO::sout << amem.second[i];
+                        }
+                        ShellIO::sout << "]";
+                    }
+                }
+                ShellIO::sout << "}\n" << ShellIO::endl;
             }
         }
         return 0;
@@ -277,6 +391,16 @@ int main(int argc, char* argv[]) {
             store.arrays.erase(arrIt);
             store.save(varPath);
             ShellIO::sout << "Deleted array: " << name << ShellIO::endl;
+            return 0;
+        }
+        
+        auto objIt = store.objects.find(name);
+        if (objIt != store.objects.end()) {
+            store.objects.erase(objIt);
+            auto oaIt = store.objArrays.find(name);
+            if (oaIt != store.objArrays.end()) store.objArrays.erase(oaIt);
+            store.save(varPath);
+            ShellIO::sout << "Deleted object: " << name << ShellIO::endl;
             return 0;
         }
         
