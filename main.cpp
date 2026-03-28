@@ -139,18 +139,27 @@ public:
     
     // Check if input contains shell syntax that requires the interpreter
     bool isShellSyntax(const std::string& input) {
-        // Simple heuristic check first for performance
         if (input.empty()) return false;
         
-        // Keywords and operators that imply shell syntax
+        std::string trimInput = input;
+        trimInput.erase(0, trimInput.find_first_not_of(" \t"));
+        std::string firstWord;
+        size_t fwEnd = trimInput.find_first_of(" \t");
+        if (fwEnd != std::string::npos) firstWord = trimInput.substr(0, fwEnd);
+        else firstWord = trimInput;
+        if (firstWord == "export") {
+            std::string rest = (fwEnd != std::string::npos) ? trimInput.substr(fwEnd) : "";
+            if (rest.find("-obj") != std::string::npos || rest.find("-arr") != std::string::npos) {
+                return false;
+            }
+        }
+        
         static const std::vector<std::string> syntaxKeywords = {
             "if", "for", "while", "case", "function", "declare", "typeset", "local",
             "read", "source", ".", "[[", "((", "select", "until", "elif", "fi", "done", "esac",
             "do", "then", "else", "{", "}"
         };
         
-        // Check for variable assignment (VAR=VAL)
-        // Must start with alpha/underscore, contain =, and not be an argument to a command
         size_t eqPos = input.find('=');
         if (eqPos != std::string::npos && eqPos > 0) {
             bool isAssignment = true;
@@ -163,10 +172,14 @@ public:
             if (isAssignment) return true;
         }
 
-        // Use the interpreter's lexer for accurate detection
         try {
             Bash::Lexer lexer(input);
             auto tokens = lexer.tokenize();
+            
+            bool isExportCmd = false;
+            if (!tokens.empty() && tokens[0].type == Bash::TokenType::WORD && tokens[0].value == "export") {
+                isExportCmd = true;
+            }
             
             for (const auto& token : tokens) {
                 switch (token.type) {
@@ -175,9 +188,10 @@ public:
                     case Bash::TokenType::KW_WHILE:
                     case Bash::TokenType::KW_CASE:
                     case Bash::TokenType::KW_FUNCTION:
-                    case Bash::TokenType::LBRACE:  // Block start {
-                    case Bash::TokenType::LPAREN:  // Subshell (
+                    case Bash::TokenType::LBRACE:
+                    case Bash::TokenType::LPAREN:
                     case Bash::TokenType::SEMICOLON:
+                        if (isExportCmd && (token.type == Bash::TokenType::LBRACE)) continue;
                         return true;
                     case Bash::TokenType::WORD:
                         // Check for specific command words that we want interpreter to handle

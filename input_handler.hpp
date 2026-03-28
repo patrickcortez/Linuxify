@@ -531,9 +531,20 @@ private:
 
         io.resetColor();
 
-        // Autosuggest Ghost Text (Frequency Based + Filesystem Fallback)
+        int endCx = promptLen;
+        int endCy = startRow;
+        for (size_t i = 0; i < inputBuffer.length(); i++) {
+            if (inputBuffer[i] == '\n') {
+                endCx = 2;
+                endCy++;
+            } else {
+                endCx++;
+                if (endCx >= width) { endCx = 0; endCy++; }
+            }
+        }
+
+        int ghostLines = 0;
         if (!currentSuggestion.empty() && currentSuggestion.length() > inputBuffer.length()) {
-             // Case-insensitive check for prefix match
              std::string bufLower = inputBuffer;
              std::string sugLower = currentSuggestion.substr(0, inputBuffer.length());
              std::transform(bufLower.begin(), bufLower.end(), bufLower.begin(), ::tolower);
@@ -541,20 +552,26 @@ private:
 
              if (bufLower == sugLower) {
                  std::string suffix = currentSuggestion.substr(inputBuffer.length());
-                 io.setColor(IO::Console::COLOR_FAINT); // Dark Gray
-                 io.write(suffix);
-                 io.resetColor();
+                 int remaining = width - endCx;
+                 if (remaining <= 0) remaining = 0;
+                 if ((int)suffix.length() > remaining) {
+                     suffix = suffix.substr(0, remaining);
+                 }
+                 if (!suffix.empty()) {
+                     io.setColor(IO::Console::COLOR_FAINT);
+                     io.write(suffix);
+                     io.resetColor();
+                 }
              }
         }
         
-        // 4. Clear Remainder of Line
         io.clearFromCursor();
 
-        // 5. Clear extra lines if we shrank
-        if (lastNumLines > numLines) {
-           io.clearArea(startRow + numLines, lastNumLines - numLines);
+        int totalVisualLines = numLines + ghostLines;
+        if (lastNumLines > totalVisualLines) {
+           io.clearArea(startRow + totalVisualLines, lastNumLines - totalVisualLines);
         }
-        lastNumLines = numLines;
+        lastNumLines = totalVisualLines;
 
         // Set Cursor
         cx = promptLen;
