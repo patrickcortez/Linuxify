@@ -4,7 +4,7 @@
 
 - **SAAO** : this is **Linuxify's** main core component and its main feature that sets it apart from every 
 other shells, while every other shells. **SAAO** stands for *Session As An Object*. Which means you can create a new session and switch to it, without having to make a new tab in your terminal. It has a hierarchical model and navigation can be abit difficult. You can read all about it in: 
-[SAAO]("SAAO\info\Sessions as an Object.md").
+"SAAO\info\Sessions as an Object.md".
 
 - **Registry** : this component basically keeps track of every package, applications and commands in the users device. So the user can dynamically use their package, app or commands in the shell, its also responsible for keeping track of the list of packages in Winget when you use **Lin**. 
 
