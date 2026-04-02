@@ -51,6 +51,12 @@ struct ShellContext {
     
     bool previousCommandWasEmpty = true; 
 
+    // SAAO Session Identity
+    int sessionId = 0;
+    std::string sessionName = "0";
+    // Parent session tracking for hierarchy
+    int parentSessionId = -1;
+
     ShellContext() {
         try {
             currentDir = fs::current_path().string();

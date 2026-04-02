@@ -363,7 +363,9 @@ private:
         std::string displayPath = getDisplayPath();
         
         IO::get().write(PromptConfig::firstColor);
-        IO::get().write("linuxify");
+        IO::get().write("linuxify[");
+        IO::get().write(sessionName);
+        IO::get().write("]");
         
         IO::get().write(PromptConfig::resetColor);
         IO::get().write(":");
@@ -404,7 +406,8 @@ private:
         int height = io.getHeight();
         
         std::string displayPath = getDisplayPath();
-        int promptLen = 9 + (int)displayPath.length() + 2; 
+        // Base length: "linuxify[" (9) + sessionName.length() + "]:" (2) + displayPath + "$ " (2)
+        int promptLen = 11 + (int)sessionName.length() + (int)displayPath.length() + 2; 
         
         std::string branch = getGitBranch();
         if (!branch.empty()) {
@@ -431,6 +434,13 @@ private:
         int linesNeeded = startRow + numLines;
         if (linesNeeded > height) {
             int scrollAmount = linesNeeded - height;
+            
+            io.setColor(IO::Console::COLOR_DEFAULT);
+            io.setCursorPos(0, (SHORT)(height - 1));
+            for (int i = 0; i < scrollAmount; i++) {
+                io.write("\n");
+            }
+            
             startRow = std::max(0, startRow - scrollAmount);
             promptStartRow = startRow; 
         }
@@ -552,7 +562,7 @@ private:
 
              if (bufLower == sugLower) {
                  std::string suffix = currentSuggestion.substr(inputBuffer.length());
-                 int remaining = width - endCx;
+                 int remaining = width - endCx - 1; // Leave 1 char margin to prevent auto-scrolling
                  if (remaining <= 0) remaining = 0;
                  if ((int)suffix.length() > remaining) {
                      suffix = suffix.substr(0, remaining);
@@ -587,11 +597,12 @@ private:
         }
         io.setCursorPos((SHORT)cx, (SHORT)cy);
     }
+    std::string sessionName;
 
 public:
-    InputHandler(const std::string& cwd, const std::vector<std::string>& hist, bool admin = false) 
+    InputHandler(const std::string& cwd, const std::vector<std::string>& hist, bool admin = false, const std::string& sessName = "0") 
         : currentDir(cwd), history(hist), historyIndex(-1), cursorPos(0), lastNumLines(1), selectionAnchor(-1),
-          lastCharInput(0), initialized(false), isAdmin(admin), commandValidator(nullptr) {
+          lastCharInput(0), initialized(false), isAdmin(admin), commandValidator(nullptr), sessionName(sessName) {
         // Init row
         promptStartRow = IO::get().getCursorPos().Y;
         

@@ -62,6 +62,10 @@ namespace fs = std::filesystem;
 #include "engine/continuation.hpp"
 #include "engine/shell_context.hpp"
 #include "engine/states.hpp"
+#include "engine/session_manager.hpp"
+
+// Global session manager
+SessionManager g_sessionManager;
 
 class ShellLogic {
     friend void execute_command_logic(ShellContext& ctx, const std::string& input); // Allow access to private members
@@ -329,10 +333,11 @@ public:
                 try {
                     if (fs::exists(scriptPath)) {
                         scriptPath = fs::canonical(scriptPath);
-                        std::string batCmd = "cmd.exe /c \"" + scriptPath.string() + "\"";
+                        std::string batCmd = "cmd.exe /c \"\"" + scriptPath.string() + "\"";
                         for (size_t i = 1; i < tokens.size(); i++) {
                             batCmd += " \"" + tokens[i] + "\"";
                         }
+                        batCmd += "\"";
                         const std::string dir = workDir.empty() ? ctx.currentDir : workDir;
                         return ChildHandler::spawn(batCmd, dir, wait);
                     }
@@ -1481,11 +1486,18 @@ public:
                 size_t braceStart = rest.find('{');
                 if (braceStart == std::string::npos) continue;
                 std::string objName = rest.substr(0, braceStart);
-                objName.erase(0, objName.find_first_not_of(" \t"));
-                objName.erase(objName.find_last_not_of(" \t") + 1);
+                size_t o_first = objName.find_first_not_of(" \t\r\n");
+                if (o_first != std::string::npos) {
+                    size_t o_last = objName.find_last_not_of(" \t\r\n");
+                    objName = objName.substr(o_first, o_last - o_first + 1);
+                } else {
+                    objName = "";
+                }
                 if (objName.empty()) continue;
-                std::string body = rest.substr(braceStart + 1);
-                if (!body.empty() && body.back() == '}') body.pop_back();
+                
+                size_t braceEnd = rest.find_last_of('}');
+                if (braceEnd == std::string::npos || braceEnd <= braceStart) continue;
+                std::string body = rest.substr(braceStart + 1, braceEnd - braceStart - 1);
                 std::map<std::string, std::string> members;
                 std::map<std::string, std::vector<std::string>> arrMembers;
                 size_t p = 0;
@@ -1493,10 +1505,15 @@ public:
                     size_t colonPos = body.find(':', p);
                     if (colonPos == std::string::npos) break;
                     std::string key = body.substr(p, colonPos - p);
-                    key.erase(0, key.find_first_not_of(" \t"));
-                    key.erase(key.find_last_not_of(" \t") + 1);
+                    size_t k_first = key.find_first_not_of(" \t\r\n");
+                    if (k_first != std::string::npos) {
+                        size_t k_last = key.find_last_not_of(" \t\r\n");
+                        key = key.substr(k_first, k_last - k_first + 1);
+                    } else {
+                        key = "";
+                    }
                     p = colonPos + 1;
-                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                     if (p < body.size() && body[p] == '[') {
                         size_t closeBrk = body.find(']', p);
                         if (closeBrk == std::string::npos) break;
@@ -1505,12 +1522,16 @@ public:
                         std::stringstream ass(arrInner);
                         std::string aitem;
                         while (std::getline(ass, aitem, ',')) {
-                            aitem.erase(0, aitem.find_first_not_of(" \t\""));
-                            aitem.erase(aitem.find_last_not_of(" \t\"") + 1);
-                            if (!aitem.empty()) arrVals.push_back(aitem);
+                            size_t a_first = aitem.find_first_not_of(" \t\r\n\"");
+                            if (a_first != std::string::npos) {
+                                size_t a_last = aitem.find_last_not_of(" \t\r\n\"");
+                                aitem = aitem.substr(a_first, a_last - a_first + 1);
+                                if (!aitem.empty()) arrVals.push_back(aitem);
+                            }
                         }
                         arrMembers[key] = arrVals;
                         p = closeBrk + 1;
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                         if (p < body.size() && body[p] == ',') p++;
                     } else {
                         bool inQuote = false;
@@ -1523,9 +1544,15 @@ public:
                             p++;
                         }
                         std::string val = body.substr(valStart, p - valStart);
-                        val.erase(0, val.find_first_not_of(" \t\"\'")); 
-                        val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                        size_t v_first = val.find_first_not_of(" \t\r\n\"\'");
+                        if (v_first != std::string::npos) {
+                            size_t v_last = val.find_last_not_of(" \t\r\n\"\'");
+                            val = val.substr(v_first, v_last - v_first + 1);
+                        } else {
+                            val = "";
+                        }
                         members[key] = val;
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                         if (p < body.size() && body[p] == ',') p++;
                     }
                 }
@@ -2355,15 +2382,20 @@ public:
     void parseObjBody(const std::string& body, std::map<std::string, std::string>& members, std::map<std::string, std::vector<std::string>>& arrMembers) {
         size_t p = 0;
         while (p < body.size()) {
-            while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+            while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
             if (p >= body.size()) break;
             size_t colonPos = body.find(':', p);
             if (colonPos == std::string::npos) break;
             std::string key = body.substr(p, colonPos - p);
-            key.erase(0, key.find_first_not_of(" \t"));
-            key.erase(key.find_last_not_of(" \t") + 1);
+            size_t k_first = key.find_first_not_of(" \t\r\n");
+            if (k_first != std::string::npos) {
+                size_t k_last = key.find_last_not_of(" \t\r\n");
+                key = key.substr(k_first, k_last - k_first + 1);
+            } else {
+                key = "";
+            }
             p = colonPos + 1;
-            while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+            while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
             if (p < body.size() && body[p] == '[') {
                 size_t closeBrk = std::string::npos;
                 int depth = 0;
@@ -2388,12 +2420,21 @@ public:
                         size_t vs = ap;
                         while (ap < arrInner.size() && arrInner[ap] != ',') ap++;
                         std::string v = arrInner.substr(vs, ap - vs);
-                        v.erase(v.find_last_not_of(" \t") + 1);
-                        arrVals.push_back(v);
+                        size_t v_first = v.find_first_not_of(" \t\r\n");
+                        if (v_first != std::string::npos) {
+                            size_t v_last = v.find_last_not_of(" \t\r\n");
+                            v = v.substr(v_first, v_last - v_first + 1);
+                        } else {
+                            v = "";
+                        }
+                        if (!v.empty()) {
+                            arrVals.push_back(v);
+                        }
                     }
                 }
                 arrMembers[key] = arrVals;
                 p = closeBrk + 1;
+                while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                 if (p < body.size() && body[p] == ',') p++;
             } else {
                 bool inQuote = false;
@@ -2406,9 +2447,15 @@ public:
                     p++;
                 }
                 std::string val = body.substr(valStart, p - valStart);
-                val.erase(0, val.find_first_not_of(" \t\"\'")); 
-                val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                size_t v_first = val.find_first_not_of(" \t\r\n\"\'");
+                if (v_first != std::string::npos) {
+                    size_t v_last = val.find_last_not_of(" \t\r\n\"\'");
+                    val = val.substr(v_first, v_last - v_first + 1);
+                } else {
+                    val = "";
+                }
                 members[key] = val;
+                while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                 if (p < body.size() && body[p] == ',') p++;
             }
         }
@@ -2504,8 +2551,13 @@ public:
                 return;
             }
             std::string objName = rest.substr(0, braceStart);
-            objName.erase(0, objName.find_first_not_of(" \t"));
-            objName.erase(objName.find_last_not_of(" \t") + 1);
+            size_t o_first = objName.find_first_not_of(" \t\r\n");
+            if (o_first != std::string::npos) {
+                size_t o_last = objName.find_last_not_of(" \t\r\n");
+                objName = objName.substr(o_first, o_last - o_first + 1);
+            } else {
+                objName = "";
+            }
             if (objName.empty()) {
                 printError("export -obj: missing object name");
                 return;
@@ -2565,9 +2617,9 @@ public:
             
             std::string name = arg.substr(0, eqPos);
             
-            size_t first = name.find_first_not_of(" \t");
+            size_t first = name.find_first_not_of(" \t\r\n");
             if (first == std::string::npos) continue;
-            size_t last = name.find_last_not_of(" \t");
+            size_t last = name.find_last_not_of(" \t\r\n");
             name = name.substr(first, (last - first + 1));
 
             std::string value = arg.substr(eqPos + 1);
@@ -9271,6 +9323,82 @@ void execute_command_logic(ShellContext& ctx, const std::string& input) {
     
     if (trimmed.empty()) return;
 
+    // SAAO Parsing: ^<([^>]+)>:<([^>]+)>\[(.*)\]$
+    std::regex saaoRegex("^<([^>]+)>:<([^>]+)>\\[(.*)\\]$");
+    std::smatch match;
+    if (std::regex_match(trimmed, match, saaoRegex)) {
+        std::string targetSeshStr = match[1];
+        std::string command = match[2];
+        std::string rawArgs = match[3];
+
+        int currentId = ctx.sessionId;
+        std::string currentName = ctx.sessionName;
+        
+        int targetId = -1;
+        try {
+            targetId = std::stoi(targetSeshStr);
+        } catch (...) {
+            targetId = g_sessionManager.getSessionIdByName(targetSeshStr);
+        }
+
+        if (targetId != currentId && targetSeshStr != currentName) {
+            std::cerr << "SAAO Error: Incorrect current session specified. You are in [" << currentName << " | " << currentId << "]\n";
+            ctx.lastExitCode = 1;
+            return;
+        }
+
+        if (command == "add") {
+            std::string newName = "";
+            if (rawArgs.length() >= 3 && rawArgs.substr(0, 3) == "-n ") {
+                newName = rawArgs.substr(3);
+                newName.erase(0, newName.find_first_not_of(" \t"));
+                if (!newName.empty()) newName.erase(newName.find_last_not_of(" \t") + 1);
+            }
+            int newId = g_sessionManager.addSession(currentId, newName);
+            // Awoke back
+            if (newId != -1) {
+                std::cout << "\n[SAAO: Resumed session " << currentName << "]\n";
+            }
+        } else if (command == "switch") {
+            int switchTargetId = -1;
+            try {
+                switchTargetId = std::stoi(rawArgs);
+            } catch (...) {
+                switchTargetId = g_sessionManager.getSessionIdByName(rawArgs);
+            }
+
+            if (!g_sessionManager.hasSession(switchTargetId)) {
+                std::cerr << "SAAO Error: Session '" << rawArgs << "' does not exist.\n";
+            } else if (!g_sessionManager.canSwitchTo(currentId, switchTargetId)) {
+                std::cerr << "SAAO Error: Cannot switch to '" << rawArgs << "'. It's not a parent or direct child.\n";
+            } else {
+                g_sessionManager.switchSession(switchTargetId);
+                // Awoke back
+                std::cout << "\n[SAAO: Resumed session " << currentName << "]\n";
+            }
+        } else if (command == "pop") {
+            int popTargetId = -1;
+            try {
+                popTargetId = std::stoi(rawArgs);
+            } catch (...) {
+                popTargetId = g_sessionManager.getSessionIdByName(rawArgs);
+            }
+
+            if (!g_sessionManager.hasSession(popTargetId)) {
+                std::cerr << "SAAO Error: Session '" << rawArgs << "' does not exist.\n";
+            } else {
+                if (g_sessionManager.deleteSession(popTargetId)) {
+                    std::cout << "SAAO: Session '" << rawArgs << "' and its entire hierarchy have been deleted.\n";
+                }
+            }
+        } else {
+            std::cerr << "SAAO Error: Unknown subcommand '" << command << "'\n";
+        }
+        
+        ctx.lastExitCode = 0;
+        return;
+    }
+
     if (Arith::isArithmeticExpression(trimmed)) {
         try {
             std::string result = Arith::evaluate(trimmed);
@@ -9331,57 +9459,57 @@ public:
         
         // Print Tux (was in run() before)
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        IO::get().clearScreen();
         
-        // Initialize Row
-        // promptStartRow logic was inside InputHandler
-        
-        // Print Tux penguin with colors (yellow body, white eyes)
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "         .---.         ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "  _     _                  _  __\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "        /     \\        ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << " | |   (_)_ __  _   ___  _(_)/ _|_   _\n";
-        
-        // Eyes line - split for white eyes
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "        \\.";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY); // White
-        std::cout << "@-@";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "./        ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << " | |   | | '_ \\| | | \\ \\/ / | |_| | | |\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "        /`\\_/`\\        ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << " | |___| | | | | |_| |>  <| |  _| |_| |\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "       //  _  \\\\       ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << " |_____|_|_| |_|\\__,_/_/\\_\\_|_|  \\__, |\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "      | \\     )|_      ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "                                 |___/\n";
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
-        std::cout << "     /`\\_`>  <_/ \\     \n";
-        std::cout << "     \\__/'---'\\__/     ";
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-        std::cout << "                             By Cortez\n" << std::endl;
-        
-        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-        std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
-        std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
-        
+        if (g_sessionManager.currentSessionId == 0) {
+            IO::get().clearScreen();
+            
+            // Print Tux penguin with colors (yellow body, white eyes)
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "         .---.         ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "  _     _                  _  __\n";
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "        /     \\        ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << " | |   (_)_ __  _   ___  _(_)/ _|_   _\n";
+            
+            // Eyes line - split for white eyes
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "        \\.";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY); // White
+            std::cout << "@-@";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "./        ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << " | |   | | '_ \\| | | \\ \\/ / | |_| | | |\n";
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "        /`\\_/`\\        ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << " | |___| | | | | |_| |>  <| |  _| |_| |\n";
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "       //  _  \\\\       ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << " |_____|_|_| |_|\\__,_/_/\\_\\_|_|  \\__, |\n";
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "      | \\     )|_      ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "                                 |___/\n";
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY); // Yellow
+            std::cout << "     /`\\_`>  <_/ \\     \n";
+            std::cout << "     \\__/'---'\\__/     ";
+            SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            std::cout << "                             By Cortez\n" << std::endl;
+            
+            SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+            std::cout << "  Linux Commands for Windows - Type 'help' for commands\n";
+            std::cout << "  Licensed under GPLv3 - Free Software Foundation\n" << std::endl;
+        }
+
         logic.loadLinuxifyRC();
 
         // Note: Crond starting logic was also in run(). 
@@ -9401,53 +9529,33 @@ int main(int argc, char* argv[]) {
     
     // Enterprise System Initialization
     Interrupt::init();
+
+    // SAAO Initialization
+    bool isSaaoChild = false;
+    if (argc >= 4 && std::string(argv[1]) == "--saao") {
+        isSaaoChild = true;
+        int mPid = std::stoi(argv[2]);
+        int sId = std::stoi(argv[3]);
+        g_sessionManager.initChild(mPid, sId);
+    } else {
+        g_sessionManager.initMaster();
+    }
     
-    // Handle /c flag - Delegate to cmd.exe (Compatibility Mode)
-    // Many external tools (npx, python, etc.) hardcode using 'cmd.exe /c' style flags.
-    // We delegate these directly to cmd.exe to ensure full compatibility.
+        //for /c suport
     if (argc >= 2) {
         std::string arg1 = argv[1];
         if (arg1 == "/c" || arg1 == "/C") {
-            // Construct command line: cmd.exe <all args>
-            // We use GetCommandLineA() and skip the first token (our exe name) to preserve exact formatting
-            std::string cmdLine = GetCommandLineA();
-            
-            // Skip the current executable part
-            bool inQuote = false;
-            size_t i = 0;
-            while (i < cmdLine.length()) {
-                if (cmdLine[i] == '"') inQuote = !inQuote;
-                else if (cmdLine[i] == ' ' && !inQuote) break;
-                i++;
-            }
-            // Skip spaces
-            while (i < cmdLine.length() && cmdLine[i] == ' ') i++;
-            
-            // Construct new command line
-            std::string newCmdLine = "cmd.exe " + cmdLine.substr(i);
-            
-            STARTUPINFOA si;
-            PROCESS_INFORMATION pi;
-            ZeroMemory(&si, sizeof(si));
-            si.cb = sizeof(si);
-            ZeroMemory(&pi, sizeof(pi));
-            
-            // Inherit handles so pipes/redirects work
-            si.dwFlags |= STARTF_USESTDHANDLES;
-            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-
-            if (CreateProcessA(NULL, (LPSTR)newCmdLine.c_str(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-                WaitForSingleObject(pi.hProcess, INFINITE);
-                DWORD exitCode = 0;
-                GetExitCodeProcess(pi.hProcess, &exitCode);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                return exitCode;
-            }
-            return 1;
+         std::string command;
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) command += " ";
+            command += argv[i];
         }
+        
+        ShellContext context;
+        ShellLogic logic(context);
+        logic.runCommand(command);
+        return 0;
+    }
     }
 
     // Handle -c flag (Internal Execution)
@@ -9503,7 +9611,7 @@ int main(int argc, char* argv[]) {
         LinkHandler::get().onMouseEvent(x, y, evType);
     });
     
-    ShellContext context;
+    auto initialContext = std::make_unique<ShellContext>();
     // We need to initialize context similar to Linuxify constructor
     // (registry paths, etc - currently handled by global g_registry)
     
@@ -9515,14 +9623,19 @@ int main(int argc, char* argv[]) {
         for (int i = 2; i < argc; i++) {
             scriptArgs.push_back(argv[i]);
         }
-        ShellLogic logic(context);
+        ShellLogic logic(*initialContext);
         return logic.runScript(argv[1], scriptArgs);
     }
     
     // Engine Start
     ShellEngine engine;
+    
+    // Set SAAO session properties in Context
+    initialContext->sessionId = g_sessionManager.currentSessionId;
+    initialContext->sessionName = g_sessionManager.currentSessionName;
+    
     try {
-        engine.execute(std::make_unique<StateBoot>(), context);
+        engine.execute(std::make_unique<StateBoot>(), *initialContext);
     } catch (const Bash::ExitException& e) {
         return e.code;
     }

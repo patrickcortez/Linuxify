@@ -66,7 +66,7 @@ public:
                 try {
                     if (std::filesystem::exists(scriptPath)) {
                         scriptPath = std::filesystem::canonical(scriptPath);
-                        finalCmdLine = "cmd.exe /c \"" + scriptPath.string() + "\"" + args;
+                        finalCmdLine = "cmd.exe /c \"\"" + scriptPath.string() + "\"" + args + "\"";
                     }
                 } catch (...) {}
             }

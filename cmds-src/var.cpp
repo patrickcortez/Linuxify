@@ -51,11 +51,18 @@ struct VarStore {
                 size_t braceStart = rest.find('{');
                 if (braceStart == std::string::npos) continue;
                 std::string objName = rest.substr(0, braceStart);
-                objName.erase(0, objName.find_first_not_of(" \t"));
-                objName.erase(objName.find_last_not_of(" \t") + 1);
+                size_t o_first = objName.find_first_not_of(" \t\r\n");
+                if (o_first != std::string::npos) {
+                    size_t o_last = objName.find_last_not_of(" \t\r\n");
+                    objName = objName.substr(o_first, o_last - o_first + 1);
+                } else {
+                    objName = "";
+                }
                 if (objName.empty()) continue;
-                std::string body = rest.substr(braceStart + 1);
-                if (!body.empty() && body.back() == '}') body.pop_back();
+                
+                size_t braceEnd = rest.find_last_of('}');
+                if (braceEnd == std::string::npos || braceEnd <= braceStart) continue;
+                std::string body = rest.substr(braceStart + 1, braceEnd - braceStart - 1);
                 std::map<std::string, std::string> members;
                 std::map<std::string, std::vector<std::string>> arrMembers;
                 size_t p = 0;
@@ -63,10 +70,15 @@ struct VarStore {
                     size_t colonPos = body.find(':', p);
                     if (colonPos == std::string::npos) break;
                     std::string key = body.substr(p, colonPos - p);
-                    key.erase(0, key.find_first_not_of(" \t"));
-                    key.erase(key.find_last_not_of(" \t") + 1);
+                    size_t k_first = key.find_first_not_of(" \t\r\n");
+                    if (k_first != std::string::npos) {
+                        size_t k_last = key.find_last_not_of(" \t\r\n");
+                        key = key.substr(k_first, k_last - k_first + 1);
+                    } else {
+                        key = "";
+                    }
                     p = colonPos + 1;
-                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) p++;
+                    while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                     if (p < body.size() && body[p] == '[') {
                         size_t closeBrk = body.find(']', p);
                         if (closeBrk == std::string::npos) break;
@@ -75,12 +87,16 @@ struct VarStore {
                         std::stringstream ass(arrInner);
                         std::string aitem;
                         while (std::getline(ass, aitem, ',')) {
-                            aitem.erase(0, aitem.find_first_not_of(" \t\""));
-                            aitem.erase(aitem.find_last_not_of(" \t\"") + 1);
-                            if (!aitem.empty()) arrVals.push_back(aitem);
+                            size_t a_first = aitem.find_first_not_of(" \t\r\n\"");
+                            if (a_first != std::string::npos) {
+                                size_t a_last = aitem.find_last_not_of(" \t\r\n\"");
+                                aitem = aitem.substr(a_first, a_last - a_first + 1);
+                                if (!aitem.empty()) arrVals.push_back(aitem);
+                            }
                         }
                         arrMembers[key] = arrVals;
                         p = closeBrk + 1;
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                         if (p < body.size() && body[p] == ',') p++;
                     } else {
                         bool inQuote = false;
@@ -93,9 +109,15 @@ struct VarStore {
                             p++;
                         }
                         std::string val = body.substr(valStart, p - valStart);
-                        val.erase(0, val.find_first_not_of(" \t\"\'")); 
-                        val.erase(val.find_last_not_of(" \t\"\'" ) + 1);
+                        size_t v_first = val.find_first_not_of(" \t\r\n\"\'");
+                        if (v_first != std::string::npos) {
+                            size_t v_last = val.find_last_not_of(" \t\r\n\"\'");
+                            val = val.substr(v_first, v_last - v_first + 1);
+                        } else {
+                            val = "";
+                        }
                         members[key] = val;
+                        while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == '\r' || body[p] == '\n')) p++;
                         if (p < body.size() && body[p] == ',') p++;
                     }
                 }
@@ -191,7 +213,9 @@ void printUsage() {
     ShellIO::sout << "  var list                         List all variables\n" << ShellIO::endl;
     ShellIO::sout << "  var mod <name> <value>           Modify scalar variable\n" << ShellIO::endl;
     ShellIO::sout << "  var mod <name[N]> <value>        Modify array element at index N\n" << ShellIO::endl;
+    ShellIO::sout << "  var mod <obj.member> <value>     Modify object member\n" << ShellIO::endl;
     ShellIO::sout << "  var insert <arrayname> <value>   Append value to array\n" << ShellIO::endl;
+    ShellIO::sout << "  var insert <obj> <mem> <val|{}>  Add member to object\n" << ShellIO::endl;
     ShellIO::sout << "  var purge <arrayname> <N>        Delete element at index N from array\n" << ShellIO::endl;
     ShellIO::sout << "  var del <name>                   Delete variable or entire array\n" << ShellIO::endl;
 }
@@ -265,15 +289,61 @@ int main(int argc, char* argv[]) {
     } else if (cmd == "mod") {
         if (argc < 4) {
             std::cerr << "var: mod: missing arguments\n";
-            std::cerr << "Usage: var mod <name> <value> OR var mod <name[N]> <value>\n";
+            std::cerr << "Usage: var mod <name> <value> OR var mod <name[N]> <value> OR var mod <obj.member> <value>\n";
             return 1;
         }
         
         std::string target = argv[2];
         std::string newValue = argv[3];
         
+        size_t dotPos = target.find('.');
         size_t bracket = target.find('[');
-        if (bracket != std::string::npos && target.back() == ']') {
+        if (dotPos != std::string::npos) {
+            std::string objName = target.substr(0, dotPos);
+            std::string member = target.substr(dotPos + 1);
+            
+            auto it = store.objects.find(objName);
+            if (it == store.objects.end()) {
+                ShellIO::serr << "var: mod: object '" << objName << "' does not exist\n" << ShellIO::endl;
+                return 1;
+            }
+            
+            // Check if member is an array element like obj.arr[N]
+            size_t memBracket = member.find('[');
+            if (memBracket != std::string::npos && member.back() == ']') {
+                std::string arrName = member.substr(0, memBracket);
+                std::string idxStr = member.substr(memBracket + 1, member.length() - memBracket - 2);
+                
+                auto arrIt = store.objArrays.find(objName);
+                if (arrIt == store.objArrays.end() || arrIt->second.find(arrName) == arrIt->second.end()) {
+                    ShellIO::serr << "var: mod: object '" << objName << "' array member '" << arrName << "' does not exist\n" << ShellIO::endl;
+                    return 1;
+                }
+                
+                try {
+                    size_t idx = std::stoul(idxStr);
+                    if (idx >= arrIt->second[arrName].size()) {
+                        ShellIO::serr << "var: mod: index " << idx << " out of bounds\n" << ShellIO::endl;
+                        return 1;
+                    }
+                    arrIt->second[arrName][idx] = newValue;
+                    store.save(varPath);
+                    ShellIO::sout << "Modified: " << objName << "." << arrName << "[" << idx << "]=" << newValue << ShellIO::endl;
+                } catch (...) {
+                    ShellIO::serr << "var: mod: invalid index '" << idxStr << "'\n" << ShellIO::endl;
+                    return 1;
+                }
+            } else {
+                auto memIt = it->second.find(member);
+                if (memIt == it->second.end()) {
+                    ShellIO::serr << "var: mod: member '" << member << "' does not exist in object '" << objName << "'\n" << ShellIO::endl;
+                    return 1;
+                }
+                it->second[member] = newValue;
+                store.save(varPath);
+                ShellIO::sout << "Modified: " << target << "=" << newValue << ShellIO::endl;
+            }
+        } else if (bracket != std::string::npos && target.back() == ']') {
             std::string arrName = target.substr(0, bracket);
             std::string idxStr = target.substr(bracket + 1, target.size() - bracket - 2);
             
@@ -318,8 +388,45 @@ int main(int argc, char* argv[]) {
     } else if (cmd == "insert") {
         if (argc < 4) {
             std::cerr << "var: insert: missing arguments\n";
-            std::cerr << "Usage: var insert <arrayname> <value>\n";
+            std::cerr << "Usage: var insert <arrayname> <value> OR var insert <objname> <newmember> <value | {}>\n";
             return 1;
+        }
+        
+        if (argc >= 5) {
+            // var insert <objname> <newmember> <value>
+            std::string objName = argv[2];
+            std::string newMember = argv[3];
+            std::string value = argv[4];
+            
+            auto objIt = store.objects.find(objName);
+            if (objIt == store.objects.end() && store.objArrays.find(objName) == store.objArrays.end()) {
+                ShellIO::serr << "var: insert: object '" << objName << "' does not exist\n" << ShellIO::endl;
+                return 1;
+            }
+            
+            if (value.size() >= 2 && value.front() == '{' && value.back() == '}') {
+                std::string inner = value.substr(1, value.size() - 2);
+                std::vector<std::string> arrVals;
+                std::stringstream ass(inner);
+                std::string aitem;
+                while (std::getline(ass, aitem, ',')) {
+                    size_t a_first = aitem.find_first_not_of(" \t\r\n\"");
+                    if (a_first != std::string::npos) {
+                        size_t a_last = aitem.find_last_not_of(" \t\r\n\"");
+                        aitem = aitem.substr(a_first, a_last - a_first + 1);
+                        if (!aitem.empty()) arrVals.push_back(aitem);
+                    }
+                }
+                store.objArrays[objName][newMember] = arrVals;
+                ShellIO::sout << "Inserted array member: " << objName << "." << newMember << " (" << arrVals.size() << " elements)\n" << ShellIO::endl;
+            } else {
+                store.objects[objName][newMember] = value;
+                ShellIO::sout << "Inserted member: " << objName << "." << newMember << "=" << value << ShellIO::endl;
+            }
+            // Ensure object is firmly initialized in objects dict to avoid save errors if new
+            if (store.objects.find(objName) == store.objects.end()) store.objects[objName] = std::map<std::string, std::string>();
+            store.save(varPath);
+            return 0;
         }
         
         std::string arrName = argv[2];

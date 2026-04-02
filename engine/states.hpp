@@ -69,7 +69,7 @@ inline std::unique_ptr<Continuation> StatePrompt::run(ShellContext& ctx) {
 inline std::unique_ptr<Continuation> StateReadInput::run(ShellContext& ctx) {
     // Lazy Initialization of Handler
     if (!handler) {
-        handler = std::make_unique<InputHandler>(ctx.currentDir, ctx.commandHistory, ctx.isAdmin);
+        handler = std::make_unique<InputHandler>(ctx.currentDir, ctx.commandHistory, ctx.isAdmin, ctx.sessionName);
         handler->setCommandValidator([&](const std::string& cmd) -> bool {
             if (cmd.empty()) return true;
             
