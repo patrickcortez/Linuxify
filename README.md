@@ -1,5 +1,9 @@
 # Linuxify
 
+> [!IMPORTANT]
+> This project has been abandoned, due to how complicated it got.
+> The shell is unmaintained, use wisely.
+
 **Linuxify** is a shell environment and development platform for [Windows](https://en.wikipedia.org/wiki/Microsoft_Windows) that offers the familiarity of [Linux](https://en.wikipedia.org/wiki/Linux) in the command-line. **Linuxify** offers a wide range of services/features that a modern *CLI* user may need. Such as:
 
 - **SAAO** : this is **Linuxify's** main core component and its main feature that sets it apart from every 
